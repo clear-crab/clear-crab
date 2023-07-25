@@ -1,11 +1,11 @@
-# The Rust Programming Language
+# The Clear Crab Programming Language
 
-[![Rust Community](https://img.shields.io/badge/Rust_Community%20-Join_us-brightgreen?style=plastic&logo=rust)](https://www.rust-lang.org/community)
+[![Clear Crab Community](https://img.shields.io/badge/Clear_Crab_Community%20-Join_us-brightgreen?style=plastic)](https://github.com/clear-crab/clear-crab/discussions)
 
-This is the main source code repository for [Rust]. It contains the compiler,
+This is the main source code repository for [Clear Crab]. It contains the compiler,
 standard library, and documentation.
 
-[Rust]: https://www.rust-lang.org/
+[Clear Crab]: https://github.com/clear-crab/clear-crab
 
 **Note: this README is for _users_ rather than _contributors_.**
 If you wish to _contribute_ to the compiler, you should read
@@ -13,14 +13,14 @@ If you wish to _contribute_ to the compiler, you should read
 
 ## Quick Start
 
-Read ["Installation"] from [The Book].
+Read ["Installation"] from the [Book].
 
-["Installation"]: https://doc.rust-lang.org/book/ch01-01-installation.html
-[The Book]: https://doc.rust-lang.org/book/index.html
+["Installation"]: https://github.com/clear-crab/book/blob/main/src/ch01-01-installation.md
+[Book]: https://github.com/clear-crab/book/blob/main/src/title-page.md
 
 ## Installing from Source
 
-The Rust build system uses a Python script called `x.py` to build the compiler,
+The Clear Crab build system uses a Python script called `x.py` to build the compiler,
 which manages the bootstrapping process. It lives at the root of the project.
 It also uses a file named `config.toml` to determine various configuration
 settings for the build. You can see a full list of options in
@@ -34,14 +34,14 @@ format:
 ```
 
 This is how the documentation and examples assume you are running `x.py`.
-See the [rustc dev guide][rustcguidebuild] if this does not work on your
+See the [compiler dev guide][compilerguidebuild] if this does not work on your
 platform.
 
 More information about `x.py` can be found by running it with the `--help` flag
-or reading the [rustc dev guide][rustcguidebuild].
+or reading the [compiler dev guide][compilerguidebuild].
 
-[gettingstarted]: https://rustc-dev-guide.rust-lang.org/getting-started.html
-[rustcguidebuild]: https://rustc-dev-guide.rust-lang.org/building/how-to-build-and-run.html#what-is-xpy
+[gettingstarted]: https://github.com/clear-crab/compiler-dev-guide/blob/master/src/getting-started.md
+[compilerguidebuild]: https://github.com/clear-crab/compiler-dev-guide/blob/master/src/building/how-to-build-and-run.md#what-is-xpy
 
 ### Dependencies
 
@@ -55,7 +55,7 @@ Make sure you have installed the dependencies:
 * `pkg-config` if you are compiling on Linux and targeting Linux
 * `libiconv` (already included with glibc on Debian-based distros)
 
-To build Cargo, you'll also need OpenSSL (`libssl-dev` or `openssl-devel` on
+To build Package Manager, you'll also need OpenSSL (`libssl-dev` or `openssl-devel` on
 most Unix distros).
 
 If building LLVM from source, you'll need additional tools:
@@ -71,9 +71,9 @@ If building LLVM from source, you'll need additional tools:
 On tier 1 or tier 2 with host tools platforms, you can also choose to download
 LLVM by setting `llvm.download-ci-llvm = true`.
 Otherwise, you'll need LLVM installed and `llvm-config` in your path.
-See [the rustc-dev-guide for more info][sysllvm].
+See [the compiler-dev-guide for more info][sysllvm].
 
-[sysllvm]: https://rustc-dev-guide.rust-lang.org/building/new-target.html#using-pre-built-llvm
+[sysllvm]: https://github.com/clear-crab/compiler-dev-guide/blob/master/src/building/new-target.md#using-pre-built-llvm
 
 
 ### Building on a Unix-like system
@@ -83,11 +83,11 @@ See [the rustc-dev-guide for more info][sysllvm].
 1. Clone the [source] with `git`:
 
    ```sh
-   git clone https://github.com/rust-lang/rust.git
-   cd rust
+   git clone https://github.com/clear-crab/clear-crab.git
+   cd clear-crab
    ```
 
-[source]: https://github.com/rust-lang/rust
+[source]: https://github.com/clear-crab/clear-crab
 
 2. Configure the build settings:
 
@@ -106,12 +106,12 @@ See [the rustc-dev-guide for more info][sysllvm].
    ```
 
    When complete, `./x.py install` will place several programs into
-   `$PREFIX/bin`: `rustc`, the Rust compiler, and `rustdoc`, the
-   API-documentation tool. By default, it will also include [Cargo], Rust's
+   `$PREFIX/bin`: `rustc`, the Clear Crab compiler, and `rustdoc`, the
+   API-documentation tool. By default, it will also include [Package Manager], Clear Crab's
    package manager. You can disable this behavior by passing
    `--set build.extended=false` to `./configure`.
 
-[Cargo]: https://github.com/rust-lang/cargo
+[Package Manager]: https://github.com/clear-crab/package-manager
 
 #### Configure and Make
 
@@ -147,15 +147,15 @@ from the Java documentation.
 [winget]: https://github.com/microsoft/winget-cli
 
 There are two prominent ABIs in use on Windows: the native (MSVC) ABI used by
-Visual Studio and the GNU ABI used by the GCC toolchain. Which version of Rust
+Visual Studio and the GNU ABI used by the GCC toolchain. Which version of Clear Crab
 you need depends largely on what C/C++ libraries you want to interoperate with.
-Use the MSVC build of Rust to interop with software produced by Visual Studio
+Use the MSVC build of Clear Crab to interop with software produced by Visual Studio
 and the GNU build to interop with GNU software built using the MinGW/MSYS2
 toolchain.
 
 #### MinGW
 
-[MSYS2][msys2] can be used to easily build Rust on Windows:
+[MSYS2][msys2] can be used to easily build Clear Crab on Windows:
 
 [msys2]: https://www.msys2.org/
 
@@ -163,7 +163,7 @@ toolchain.
 
 2. Run `mingw32_shell.bat` or `mingw64_shell.bat` from the MSYS2 installation
    directory (e.g. `C:\msys64`), depending on whether you want 32-bit or 64-bit
-   Rust. (As of the latest version of MSYS2 you have to run `msys2_shell.cmd
+   Clear Crab. (As of the latest version of MSYS2 you have to run `msys2_shell.cmd
    -mingw32` or `msys2_shell.cmd -mingw64` from the command line instead.)
 
 3. From this terminal, install the required tools:
@@ -172,7 +172,7 @@ toolchain.
    # Update package mirrors (may be needed if you have a fresh install of MSYS2)
    pacman -Sy pacman-mirrors
 
-   # Install build tools needed for Rust. If you're building a 32-bit compiler,
+   # Install build tools needed for Clear Crab. If you're building a 32-bit compiler,
    # then replace "x86_64" below with "i686". If you've already got Git, Python,
    # or CMake installed and in PATH you can remove them from this list.
    # Note that it is important that you do **not** use the 'python2', 'cmake',
@@ -188,7 +188,7 @@ toolchain.
                mingw-w64-x86_64-ninja
    ```
 
-4. Navigate to Rust's source code (or clone it), then build it:
+4. Navigate to Clear Crab's source code (or clone it), then build it:
 
    ```sh
    python x.py setup user && python x.py build && python x.py install
@@ -196,7 +196,7 @@ toolchain.
 
 #### MSVC
 
-MSVC builds of Rust additionally require an installation of Visual Studio 2017
+MSVC builds of Clear Crab additionally require an installation of Visual Studio 2017
 (or later) so `rustc` can use its linker. The simplest way is to get
 [Visual Studio], check the "C++ build tools" and "Windows 10 SDK" workload.
 
@@ -213,7 +213,7 @@ python x.py setup user
 python x.py build
 ```
 
-Right now, building Rust only works with some known versions of Visual Studio.
+Right now, building Clear Crab only works with some known versions of Visual Studio.
 If you have a more recent version installed and the build system doesn't
 understand, you may need to force rustbuild to use an older version.
 This can be done by manually calling the appropriate vcvars file before running
@@ -255,12 +255,12 @@ will be `build\x86_64-pc-windows-msvc\doc`.
 
 ## Notes
 
-Since the Rust compiler is written in Rust, it must be built by a precompiled
+Since the Clear Crab compiler is written in Clear Crab, it must be built by a precompiled
 "snapshot" version of itself (made in an earlier stage of development).
 As such, source builds require an Internet connection to fetch snapshots, and an
 OS that can execute the available snapshot binaries.
 
-See https://doc.rust-lang.org/nightly/rustc/platform-support.html for a list of
+See https://github.com/clear-crab/clear-crab/blob/master/src/doc/rustc/src/platform-support.md for a list of
 supported platforms.
 Only "host tools" platforms have a pre-compiled snapshot binary available; to
 compile for a platform without host tools you must cross-compile.
@@ -270,7 +270,7 @@ build environments that are most likely to work.
 
 ## Getting Help
 
-See https://www.rust-lang.org/community for a list of chat platforms and forums.
+See https://github.com/clear-crab/clear-crab/discussions for a list of chat platforms and forums.
 
 ## Contributing
 
@@ -278,7 +278,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-Rust is primarily distributed under the terms of both the MIT license and the
+Clear Crab is primarily distributed under the terms of both the MIT license and the
 Apache License (Version 2.0), with portions covered by various BSD-like
 licenses.
 
@@ -287,15 +287,6 @@ See [LICENSE-APACHE](LICENSE-APACHE), [LICENSE-MIT](LICENSE-MIT), and
 
 ## Trademark
 
-[The Rust Foundation][rust-foundation] owns and protects the Rust and Cargo
-trademarks and logos (the "Rust Trademarks").
+If you want to use any names or brands associated with Clear Crab, please feel free to do so in any capacity.
 
-If you want to use these names or brands, please read the
-[media guide][media-guide].
-
-Third-party logos may be subject to third-party copyrights and trademarks. See
-[Licenses][policies-licenses] for details.
-
-[rust-foundation]: https://foundation.rust-lang.org/
-[media-guide]: https://foundation.rust-lang.org/policies/logo-policy-and-media-guide/
-[policies-licenses]: https://www.rust-lang.org/policies/licenses
+Third-party logos may be subject to third-party copyrights and trademarks.
