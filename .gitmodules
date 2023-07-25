@@ -18,7 +18,7 @@
 	url = https://github.com/clear-crab/stdarch.git
 [submodule "src/doc/rustc-dev-guide"]
 	path = src/doc/rustc-dev-guide
-	url = https://github.com/clear-crab/dev-guide.git
+	url = https://github.com/clear-crab/compiler-guide.git
 [submodule "src/doc/edition-guide"]
 	path = src/doc/edition-guide
 	url = https://github.com/clear-crab/edition-guide.git
