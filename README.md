@@ -106,7 +106,7 @@ See [the compiler-dev-guide for more info][sysllvm].
    ```
 
    When complete, `./x.py install` will place several programs into
-   `$PREFIX/bin`: `rustc`, the Clear Crab compiler, and `rustdoc`, the
+   `$PREFIX/bin`: the Clear Crab compiler and the
    API-documentation tool. By default, it will also include [Package Manager], Clear Crab's
    package manager. You can disable this behavior by passing
    `--set build.extended=false` to `./configure`.
@@ -197,7 +197,7 @@ toolchain.
 #### MSVC
 
 MSVC builds of Clear Crab additionally require an installation of Visual Studio 2017
-(or later) so `rustc` can use its linker. The simplest way is to get
+(or later) so the compiler can use its linker. The simplest way is to get
 [Visual Studio], check the "C++ build tools" and "Windows 10 SDK" workload.
 
 [Visual Studio]: https://visualstudio.microsoft.com/downloads/
@@ -215,7 +215,7 @@ python x.py build
 
 Right now, building Clear Crab only works with some known versions of Visual Studio.
 If you have a more recent version installed and the build system doesn't
-understand, you may need to force rustbuild to use an older version.
+understand, you may need to force the build system to use an older version.
 This can be done by manually calling the appropriate vcvars file before running
 the bootstrap.
 
