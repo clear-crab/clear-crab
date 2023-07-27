@@ -24,7 +24,7 @@
 	url = https://github.com/clear-crab/edition-guide.git
 [submodule "src/llvm-project"]
 	path = src/llvm-project
-	url = https://github.com/clear-crab/llvm-project.git
+	url = https://github.com/clear-crab/compiler-toolchain-tech.git
 	branch = rustc/16.0-2023-06-05
 [submodule "src/doc/embedded-book"]
 	path = src/doc/embedded-book
