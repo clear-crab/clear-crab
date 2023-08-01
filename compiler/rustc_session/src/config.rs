@@ -279,11 +279,11 @@ impl LinkSelfContained {
         // set of all values like `y` or `n` used to be. Therefore, if this flag had previously been
         // set in bulk with its historical values, then manually setting a component clears that
         // `explicitly_set` state.
-        if let Some(component_to_enable) = component.strip_prefix("+") {
+        if let Some(component_to_enable) = component.strip_prefix('+') {
             self.explicitly_set = None;
             self.components.insert(component_to_enable.parse()?);
             Ok(())
-        } else if let Some(component_to_disable) = component.strip_prefix("-") {
+        } else if let Some(component_to_disable) = component.strip_prefix('-') {
             self.explicitly_set = None;
             self.components.remove(component_to_disable.parse()?);
             Ok(())
@@ -834,9 +834,10 @@ impl OutFileName {
     }
 
     pub fn is_tty(&self) -> bool {
+        use std::io::IsTerminal;
         match *self {
             OutFileName::Real(_) => false,
-            OutFileName::Stdout => atty::is(atty::Stream::Stdout),
+            OutFileName::Stdout => std::io::stdout().is_terminal(),
         }
     }
 
@@ -1538,9 +1539,8 @@ pub(super) fn build_target_config(
     );
     let (target, target_warnings) = target_result.unwrap_or_else(|e| {
         handler.early_error(format!(
-            "Error loading target specification: {}. \
-                 Run `rustc --print target-list` for a list of built-in targets",
-            e
+            "Error loading target specification: {e}. \
+                 Run `rustc --print target-list` for a list of built-in targets"
         ))
     });
     for warning in target_warnings.warning_messages() {
@@ -1977,8 +1977,7 @@ pub fn parse_crate_edition(handler: &EarlyErrorHandler, matches: &getopts::Match
         let is_nightly = nightly_options::match_is_nightly_build(matches);
         let msg = if !is_nightly {
             format!(
-                "the crate requires edition {}, but the latest edition supported by this Rust version is {}",
-                edition, LATEST_STABLE_EDITION
+                "the crate requires edition {edition}, but the latest edition supported by this Rust version is {LATEST_STABLE_EDITION}"
             )
         } else {
             format!("edition {edition} is unstable and only available with -Z unstable-options")
@@ -2151,6 +2150,12 @@ fn collect_print_requests(
     prints.extend(matches.opt_strs("print").into_iter().map(|req| {
         let (req, out) = split_out_file_name(&req);
 
+        if out.is_some() && !unstable_opts.unstable_options {
+            handler.early_error(
+                "the `-Z unstable-options` flag must also be passed to \
+                 enable the path print option",
+            );
+        }
         let kind = match PRINT_KINDS.iter().find(|&&(name, _)| name == req) {
             Some((_, PrintKind::TargetSpec)) => {
                 if unstable_opts.unstable_options {
@@ -3117,7 +3122,6 @@ pub(crate) mod dep_tracking {
     use rustc_feature::UnstableFeatures;
     use rustc_span::edition::Edition;
     use rustc_span::RealFileName;
-    use rustc_target::abi::ReferenceNichePolicy;
     use rustc_target::spec::{CodeModel, MergeFunctions, PanicStrategy, RelocModel};
     use rustc_target::spec::{
         RelroLevel, SanitizerSet, SplitDebuginfo, StackProtector, TargetTriple, TlsModel,
@@ -3213,7 +3217,6 @@ pub(crate) mod dep_tracking {
         OomStrategy,
         LanguageIdentifier,
         TraitSolver,
-        ReferenceNichePolicy,
     );
 
     impl<T1, T2> DepTrackingHash for (T1, T2)

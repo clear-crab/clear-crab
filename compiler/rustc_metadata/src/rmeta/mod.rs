@@ -32,7 +32,7 @@ use rustc_span::edition::Edition;
 use rustc_span::hygiene::{ExpnIndex, MacroKind};
 use rustc_span::symbol::{Ident, Symbol};
 use rustc_span::{self, ExpnData, ExpnHash, ExpnId, Span};
-use rustc_target::abi::{FieldIdx, ReferenceNichePolicy, VariantIdx};
+use rustc_target::abi::{FieldIdx, VariantIdx};
 use rustc_target::spec::{PanicStrategy, TargetTriple};
 
 use std::marker::PhantomData;
@@ -51,7 +51,7 @@ mod encoder;
 mod table;
 
 pub(crate) fn rustc_version(cfg_version: &'static str) -> String {
-    format!("rustc {}", cfg_version)
+    format!("rustc {cfg_version}")
 }
 
 /// Metadata encoding version.
@@ -251,7 +251,6 @@ pub(crate) struct CrateRoot {
     stable_crate_id: StableCrateId,
     required_panic_strategy: Option<PanicStrategy>,
     panic_in_drop_strategy: PanicStrategy,
-    reference_niches_policy: ReferenceNichePolicy,
     edition: Edition,
     has_global_allocator: bool,
     has_alloc_error_handler: bool,
@@ -458,6 +457,7 @@ define_tables! {
     trait_impl_trait_tys: Table<DefIndex, LazyValue<FxHashMap<DefId, ty::EarlyBinder<Ty<'static>>>>>,
     doc_link_resolutions: Table<DefIndex, LazyValue<DocLinkResMap>>,
     doc_link_traits_in_scope: Table<DefIndex, LazyArray<DefId>>,
+    assumed_wf_types_for_rpitit: Table<DefIndex, LazyArray<(Ty<'static>, Span)>>,
 }
 
 #[derive(TyEncodable, TyDecodable)]

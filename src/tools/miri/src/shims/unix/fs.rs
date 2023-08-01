@@ -12,7 +12,7 @@ use log::trace;
 
 use rustc_data_structures::fx::FxHashMap;
 use rustc_middle::ty::TyCtxt;
-use rustc_target::abi::{Align, Size, HasDataLayout as _};
+use rustc_target::abi::{Align, Size};
 
 use crate::shims::os_str::bytes_to_os_str;
 use crate::*;
@@ -753,7 +753,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
         // We cap the number of read bytes to the largest value that we are able to fit in both the
         // host's and target's `isize`. This saves us from having to handle overflows later.
         let count = count
-            .min(u64::try_from(this.data_layout().target_isize_max()).unwrap())
+            .min(u64::try_from(this.target_isize_max()).unwrap())
             .min(u64::try_from(isize::MAX).unwrap());
         let communicate = this.machine.communicate();
 
@@ -807,7 +807,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
         // We cap the number of written bytes to the largest value that we are able to fit in both the
         // host's and target's `isize`. This saves us from having to handle overflows later.
         let count = count
-            .min(u64::try_from(this.data_layout().target_isize_max()).unwrap())
+            .min(u64::try_from(this.target_isize_max()).unwrap())
             .min(u64::try_from(isize::MAX).unwrap());
         let communicate = this.machine.communicate();
 
@@ -1141,7 +1141,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
                 ("tv_sec", access_sec.into()),
                 ("tv_nsec", access_nsec.into()),
             ],
-            &this.mplace_field_named(&statxbuf, "stx_atime")?,
+            &this.project_field_named(&statxbuf, "stx_atime")?,
         )?;
         #[rustfmt::skip]
         this.write_int_fields_named(
@@ -1149,7 +1149,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
                 ("tv_sec", created_sec.into()),
                 ("tv_nsec", created_nsec.into()),
             ],
-            &this.mplace_field_named(&statxbuf, "stx_btime")?,
+            &this.project_field_named(&statxbuf, "stx_btime")?,
         )?;
         #[rustfmt::skip]
         this.write_int_fields_named(
@@ -1157,7 +1157,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
                 ("tv_sec", 0.into()),
                 ("tv_nsec", 0.into()),
             ],
-            &this.mplace_field_named(&statxbuf, "stx_ctime")?,
+            &this.project_field_named(&statxbuf, "stx_ctime")?,
         )?;
         #[rustfmt::skip]
         this.write_int_fields_named(
@@ -1165,7 +1165,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
                 ("tv_sec", modified_sec.into()),
                 ("tv_nsec", modified_nsec.into()),
             ],
-            &this.mplace_field_named(&statxbuf, "stx_mtime")?,
+            &this.project_field_named(&statxbuf, "stx_mtime")?,
         )?;
 
         Ok(0)
@@ -1421,7 +1421,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
                 // }
 
                 let entry_place = this.deref_operand_as(entry_op, this.libc_ty_layout("dirent"))?;
-                let name_place = this.mplace_field(&entry_place, 5)?;
+                let name_place = this.project_field(&entry_place, 5)?;
 
                 let file_name = dir_entry.file_name(); // not a Path as there are no separators!
                 let (name_fits, file_name_buf_len) = this.write_os_str_to_c_str(
@@ -1457,13 +1457,13 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
                 )?;
 
                 let result_place = this.deref_operand(result_op)?;
-                this.write_scalar(this.read_scalar(entry_op)?, &result_place.into())?;
+                this.write_scalar(this.read_scalar(entry_op)?, &result_place)?;
 
                 0
             }
             None => {
                 // end of stream: return 0, assign *result=NULL
-                this.write_null(&this.deref_operand(result_op)?.into())?;
+                this.write_null(&this.deref_operand(result_op)?)?;
                 0
             }
             Some(Err(e)) =>

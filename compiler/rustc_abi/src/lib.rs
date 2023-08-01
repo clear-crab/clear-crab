@@ -49,14 +49,6 @@ bitflags! {
     }
 }
 
-/// Which niches (beyond the `null` niche) are available on references.
-#[derive(Default, Copy, Clone, Hash, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "nightly", derive(Encodable, Decodable, HashStable_Generic))]
-pub struct ReferenceNichePolicy {
-    pub size: bool,
-    pub align: bool,
-}
-
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "nightly", derive(Encodable, Decodable, HashStable_Generic))]
 pub enum IntegerType {
@@ -340,7 +332,7 @@ impl TargetDataLayout {
             16 => 1 << 15,
             32 => 1 << 31,
             64 => 1 << 47,
-            bits => panic!("obj_size_bound: unknown pointer bit size {}", bits),
+            bits => panic!("obj_size_bound: unknown pointer bit size {bits}"),
         }
     }
 
@@ -350,35 +342,8 @@ impl TargetDataLayout {
             16 => I16,
             32 => I32,
             64 => I64,
-            bits => panic!("ptr_sized_integer: unknown pointer bit size {}", bits),
+            bits => panic!("ptr_sized_integer: unknown pointer bit size {bits}"),
         }
-    }
-
-    #[inline]
-    pub fn target_usize_max(&self) -> u64 {
-        self.pointer_size.unsigned_int_max().try_into().unwrap()
-    }
-
-    #[inline]
-    pub fn target_isize_min(&self) -> i64 {
-        self.pointer_size.signed_int_min().try_into().unwrap()
-    }
-
-    #[inline]
-    pub fn target_isize_max(&self) -> i64 {
-        self.pointer_size.signed_int_max().try_into().unwrap()
-    }
-
-    /// Returns the (inclusive) range of possible addresses for an allocation with
-    /// the given size and alignment.
-    ///
-    /// Note that this doesn't take into account target-specific limitations.
-    #[inline]
-    pub fn address_range_for(&self, size: Size, align: Align) -> (u64, u64) {
-        let end = Size::from_bytes(self.target_usize_max());
-        let min = align.bytes();
-        let max = (end - size).align_down_to(align).bytes();
-        (min, max)
     }
 
     #[inline]
@@ -434,7 +399,7 @@ impl FromStr for Endian {
         match s {
             "little" => Ok(Self::Little),
             "big" => Ok(Self::Big),
-            _ => Err(format!(r#"unknown endian: "{}""#, s)),
+            _ => Err(format!(r#"unknown endian: "{s}""#)),
         }
     }
 }
@@ -491,7 +456,7 @@ impl Size {
     pub fn bits(self) -> u64 {
         #[cold]
         fn overflow(bytes: u64) -> ! {
-            panic!("Size::bits: {} bytes in bits doesn't fit in u64", bytes)
+            panic!("Size::bits: {bytes} bytes in bits doesn't fit in u64")
         }
 
         self.bytes().checked_mul(8).unwrap_or_else(|| overflow(self.bytes()))
@@ -506,12 +471,6 @@ impl Size {
     pub fn align_to(self, align: Align) -> Size {
         let mask = align.bytes() - 1;
         Size::from_bytes((self.bytes() + mask) & !mask)
-    }
-
-    #[inline]
-    pub fn align_down_to(self, align: Align) -> Size {
-        let mask = align.bytes() - 1;
-        Size::from_bytes(self.bytes() & !mask)
     }
 
     #[inline]
@@ -1008,43 +967,6 @@ impl WrappingRange {
         }
     }
 
-    /// Returns `true` if `range` is contained in `self`.
-    #[inline(always)]
-    pub fn contains_range<I: Into<u128> + Ord>(&self, range: RangeInclusive<I>) -> bool {
-        if range.is_empty() {
-            return true;
-        }
-
-        let (vmin, vmax) = range.into_inner();
-        let (vmin, vmax) = (vmin.into(), vmax.into());
-
-        if self.start <= self.end {
-            self.start <= vmin && vmax <= self.end
-        } else {
-            // The last check is needed to cover the following case:
-            // `vmin ... start, end ... vmax`. In this special case there is no gap
-            // between `start` and `end` so we must return true.
-            self.start <= vmin || vmax <= self.end || self.start == self.end + 1
-        }
-    }
-
-    /// Returns `true` if `range` has an overlap with `self`.
-    #[inline(always)]
-    pub fn overlaps_range<I: Into<u128> + Ord>(&self, range: RangeInclusive<I>) -> bool {
-        if range.is_empty() {
-            return false;
-        }
-
-        let (vmin, vmax) = range.into_inner();
-        let (vmin, vmax) = (vmin.into(), vmax.into());
-
-        if self.start <= self.end {
-            self.start <= vmax && vmin <= self.end
-        } else {
-            self.start <= vmax || vmin <= self.end
-        }
-    }
-
     /// Returns `self` with replaced `start`
     #[inline(always)]
     pub fn with_start(mut self, start: u128) -> Self {
@@ -1062,15 +984,9 @@ impl WrappingRange {
     /// Returns `true` if `size` completely fills the range.
     #[inline]
     pub fn is_full_for(&self, size: Size) -> bool {
-        debug_assert!(self.is_in_range_for(size));
-        self.start == (self.end.wrapping_add(1) & size.unsigned_int_max())
-    }
-
-    /// Returns `true` if the range is valid for `size`.
-    #[inline(always)]
-    pub fn is_in_range_for(&self, size: Size) -> bool {
         let max_value = size.unsigned_int_max();
-        self.start <= max_value && self.end <= max_value
+        debug_assert!(self.start <= max_value && self.end <= max_value);
+        self.start == (self.end.wrapping_add(1) & max_value)
     }
 }
 
@@ -1263,17 +1179,12 @@ impl FieldsShape {
                 unreachable!("FieldsShape::offset: `Primitive`s have no fields")
             }
             FieldsShape::Union(count) => {
-                assert!(
-                    i < count.get(),
-                    "tried to access field {} of union with {} fields",
-                    i,
-                    count
-                );
+                assert!(i < count.get(), "tried to access field {i} of union with {count} fields");
                 Size::ZERO
             }
             FieldsShape::Array { stride, count } => {
                 let i = u64::try_from(i).unwrap();
-                assert!(i < count);
+                assert!(i < count, "tried to access field {i} of array with {count} fields");
                 stride * i
             }
             FieldsShape::Arbitrary { ref offsets, .. } => offsets[FieldIdx::from_usize(i)],
@@ -1378,7 +1289,7 @@ impl Abi {
                 Primitive::Int(_, signed) => signed,
                 _ => false,
             },
-            _ => panic!("`is_signed` on non-scalar ABI {:?}", self),
+            _ => panic!("`is_signed` on non-scalar ABI {self:?}"),
         }
     }
 
@@ -1429,7 +1340,6 @@ impl Abi {
 
     /// Discard validity range information and allow undef.
     pub fn to_union(&self) -> Self {
-        assert!(self.is_sized());
         match *self {
             Abi::Scalar(s) => Abi::Scalar(s.to_union()),
             Abi::ScalarPair(s1, s2) => Abi::ScalarPair(s1.to_union(), s2.to_union()),
@@ -1511,21 +1421,16 @@ impl Niche {
 
     pub fn reserve<C: HasDataLayout>(&self, cx: &C, count: u128) -> Option<(u128, Scalar)> {
         assert!(count > 0);
-        if count > self.available(cx) {
-            return None;
-        }
 
         let Self { value, valid_range: v, .. } = *self;
-        let max_value = value.size(cx).unsigned_int_max();
-        let distance_end_zero = max_value - v.end;
+        let size = value.size(cx);
+        assert!(size.bits() <= 128);
+        let max_value = size.unsigned_int_max();
 
-        // Null-pointer optimization. This is guaranteed by Rust (at least for `Option<_>`),
-        // and offers better codegen opportunities.
-        if count == 1 && matches!(value, Pointer(_)) && !v.contains(0) {
-            // Select which bound to move to minimize the number of lost niches.
-            let valid_range =
-                if v.start - 1 > distance_end_zero { v.with_end(0) } else { v.with_start(0) };
-            return Some((0, Scalar::Initialized { value, valid_range }));
+        let niche = v.end.wrapping_add(1)..v.start;
+        let available = niche.end.wrapping_sub(niche.start) & max_value;
+        if count > available {
+            return None;
         }
 
         // Extend the range of valid values being reserved by moving either `v.start` or `v.end` bound.
@@ -1548,6 +1453,7 @@ impl Niche {
             let end = v.end.wrapping_add(count) & max_value;
             Some((start, Scalar::Initialized { value, valid_range: v.with_end(end) }))
         };
+        let distance_end_zero = max_value - v.end;
         if v.start > v.end {
             // zero is unavailable because wrapping occurs
             move_end(v)

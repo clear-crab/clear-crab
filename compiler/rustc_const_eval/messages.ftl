@@ -244,6 +244,7 @@ const_eval_not_enough_caller_args =
 const_eval_null_box = {$front_matter}: encountered a null box
 const_eval_null_fn_ptr = {$front_matter}: encountered a null function pointer
 const_eval_null_ref = {$front_matter}: encountered a null reference
+const_eval_nullable_ptr_out_of_range = {$front_matter}: encountered a potentially null pointer, but expected something that cannot possibly fail to be {$in_range}
 const_eval_nullary_intrinsic_fail =
     could not evaluate nullary intrinsic
 
@@ -407,8 +408,11 @@ const_eval_undefined_behavior =
 const_eval_undefined_behavior_note =
     The rules on what exactly is undefined behavior aren't clear, so this check might be overzealous. Please open an issue on the rustc repository if you believe it should not be considered undefined behavior.
 
+const_eval_uninhabited_enum_tag = {$front_matter}: encountered an uninhabited enum variant
+const_eval_uninhabited_enum_variant_read =
+    read discriminant of an uninhabited enum variant
 const_eval_uninhabited_enum_variant_written =
-    writing discriminant of an uninhabited enum
+    writing discriminant of an uninhabited enum variant
 const_eval_uninhabited_val = {$front_matter}: encountered a value of uninhabited type `{$ty}`
 const_eval_uninit = {$front_matter}: encountered uninitialized bytes
 const_eval_uninit_bool = {$front_matter}: encountered uninitialized memory, but expected a boolean
@@ -422,8 +426,6 @@ const_eval_uninit_int = {$front_matter}: encountered uninitialized memory, but e
 const_eval_uninit_raw_ptr = {$front_matter}: encountered uninitialized memory, but expected a raw pointer
 const_eval_uninit_ref = {$front_matter}: encountered uninitialized memory, but expected a reference
 const_eval_uninit_str = {$front_matter}: encountered uninitialized data in `str`
-const_eval_uninit_unsized_local =
-    unsized local is used while uninitialized
 const_eval_unreachable = entering unreachable code
 const_eval_unreachable_unwind =
     unwinding past a stack frame that does not allow unwinding

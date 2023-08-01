@@ -23,7 +23,7 @@ use rustc_errors::{Diagnostic, DiagnosticBuilder, DiagnosticMessage, Subdiagnost
 use rustc_fluent_macro::fluent_messages;
 use rustc_hir as hir;
 use rustc_hir::def_id::LocalDefId;
-use rustc_index::bit_set::ChunkedBitSet;
+use rustc_index::bit_set::{BitSet, ChunkedBitSet};
 use rustc_index::{IndexSlice, IndexVec};
 use rustc_infer::infer::{
     InferCtxt, NllRegionVariableOrigin, RegionVariableOrigin, TyCtxtInferExt,
@@ -42,7 +42,6 @@ use rustc_session::lint::builtin::UNUSED_MUT;
 use rustc_span::{Span, Symbol};
 use rustc_target::abi::FieldIdx;
 
-use either::Either;
 use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -1035,12 +1034,16 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         let borrow_set = self.borrow_set.clone();
 
         // Use polonius output if it has been enabled.
-        let polonius_output = self.polonius_output.clone();
-        let borrows_in_scope = if let Some(polonius) = &polonius_output {
+        let mut polonius_output;
+        let borrows_in_scope = if let Some(polonius) = &self.polonius_output {
             let location = self.location_table.start_index(location);
-            Either::Left(polonius.errors_at(location).iter().copied())
+            polonius_output = BitSet::new_empty(borrow_set.len());
+            for &idx in polonius.errors_at(location) {
+                polonius_output.insert(idx);
+            }
+            &polonius_output
         } else {
-            Either::Right(flow_state.borrows.iter())
+            &flow_state.borrows
         };
 
         each_borrow_involving_path(
@@ -1050,7 +1053,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
             location,
             (sd, place_span.0),
             &borrow_set,
-            borrows_in_scope,
+            |borrow_index| borrows_in_scope.contains(borrow_index),
             |this, borrow_index, borrow| match (rw, borrow.kind) {
                 // Obviously an activation is compatible with its own
                 // reservation (or even prior activating uses of same
@@ -1817,8 +1820,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 }
 
                 ProjectionElem::Subslice { .. } => {
-                    panic!("we don't allow assignments to subslices, location: {:?}",
-                           location);
+                    panic!("we don't allow assignments to subslices, location: {location:?}");
                 }
 
                 ProjectionElem::Field(..) => {
@@ -2017,8 +2019,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                     self.infcx.tcx.sess.delay_span_bug(
                         span,
                         format!(
-                            "Accessing `{:?}` with the kind `{:?}` shouldn't be possible",
-                            place, kind,
+                            "Accessing `{place:?}` with the kind `{kind:?}` shouldn't be possible",
                         ),
                     );
                 }
@@ -2306,11 +2307,10 @@ mod error {
 
         pub fn buffer_error(&mut self, t: DiagnosticBuilder<'_, ErrorGuaranteed>) {
             if let None = self.tainted_by_errors {
-                self.tainted_by_errors = Some(
-                    self.tcx
-                        .sess
-                        .delay_span_bug(t.span.clone(), "diagnostic buffered but not emitted"),
-                )
+                self.tainted_by_errors = Some(self.tcx.sess.delay_span_bug(
+                    t.span.clone_ignoring_labels(),
+                    "diagnostic buffered but not emitted",
+                ))
             }
             t.buffer(&mut self.buffered);
         }

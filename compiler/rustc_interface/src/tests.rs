@@ -28,7 +28,6 @@ use rustc_span::edition::{Edition, DEFAULT_EDITION};
 use rustc_span::symbol::sym;
 use rustc_span::FileName;
 use rustc_span::SourceFileHashAlgorithm;
-use rustc_target::abi::ReferenceNichePolicy;
 use rustc_target::spec::{CodeModel, LinkerFlavorCli, MergeFunctions, PanicStrategy, RelocModel};
 use rustc_target::spec::{RelroLevel, SanitizerSet, SplitDebuginfo, StackProtector, TlsModel};
 
@@ -741,6 +740,7 @@ fn test_unstable_options_tracking_hash() {
     untracked!(unstable_options, true);
     untracked!(validate_mir, true);
     untracked!(verbose, true);
+    untracked!(write_long_types_to_disk, false);
     // tidy-alphabetical-end
 
     macro_rules! tracked {
@@ -821,7 +821,6 @@ fn test_unstable_options_tracking_hash() {
     tracked!(profile_emit, Some(PathBuf::from("abc")));
     tracked!(profile_sample_use, Some(PathBuf::from("abc")));
     tracked!(profiler_runtime, "abc".to_string());
-    tracked!(reference_niches, Some(ReferenceNichePolicy { size: true, align: false }));
     tracked!(relax_elf_relocations, Some(true));
     tracked!(relro_level, Some(RelroLevel::Full));
     tracked!(remap_cwd_prefix, Some(PathBuf::from("abc")));

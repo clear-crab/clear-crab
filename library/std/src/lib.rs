@@ -272,6 +272,7 @@
 #![feature(staged_api)]
 #![feature(thread_local)]
 #![feature(try_blocks)]
+#![feature(type_alias_impl_trait)]
 #![feature(utf8_chunks)]
 // tidy-alphabetical-end
 //
@@ -542,7 +543,7 @@ pub mod time;
 // Pull in `std_float` crate  into std. The contents of
 // `std_float` are in a different repository: rust-lang/portable-simd.
 #[path = "../../portable-simd/crates/std_float/src/lib.rs"]
-#[allow(missing_debug_implementations, dead_code, unsafe_op_in_unsafe_fn, unused_unsafe)]
+#[allow(missing_debug_implementations, dead_code, unsafe_op_in_unsafe_fn)]
 #[allow(rustdoc::bare_urls)]
 #[unstable(feature = "portable_simd", issue = "86656")]
 mod std_float;

@@ -47,12 +47,20 @@ pub fn generator_def(did: DefId) -> stable_mir::ty::GeneratorDef {
     with_tables(|t| t.generator_def(did))
 }
 
+pub fn alias_def(did: DefId) -> stable_mir::ty::AliasDef {
+    with_tables(|t| t.alias_def(did))
+}
+
 pub fn param_def(did: DefId) -> stable_mir::ty::ParamDef {
     with_tables(|t| t.param_def(did))
 }
 
 pub fn br_named_def(did: DefId) -> stable_mir::ty::BrNamedDef {
     with_tables(|t| t.br_named_def(did))
+}
+
+pub fn trait_def(did: DefId) -> stable_mir::ty::TraitDef {
+    with_tables(|t| t.trait_def(did))
 }
 
 impl<'tcx> Tables<'tcx> {
@@ -84,12 +92,20 @@ impl<'tcx> Tables<'tcx> {
         stable_mir::ty::GeneratorDef(self.create_def_id(did))
     }
 
+    pub fn alias_def(&mut self, did: DefId) -> stable_mir::ty::AliasDef {
+        stable_mir::ty::AliasDef(self.create_def_id(did))
+    }
+
     pub fn param_def(&mut self, did: DefId) -> stable_mir::ty::ParamDef {
         stable_mir::ty::ParamDef(self.create_def_id(did))
     }
 
     pub fn br_named_def(&mut self, did: DefId) -> stable_mir::ty::BrNamedDef {
         stable_mir::ty::BrNamedDef(self.create_def_id(did))
+    }
+
+    pub fn trait_def(&mut self, did: DefId) -> stable_mir::ty::TraitDef {
+        stable_mir::ty::TraitDef(self.create_def_id(did))
     }
 
     fn create_def_id(&mut self, did: DefId) -> stable_mir::DefId {

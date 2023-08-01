@@ -673,7 +673,6 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                 stable_crate_id: tcx.def_path_hash(LOCAL_CRATE.as_def_id()).stable_crate_id(),
                 required_panic_strategy: tcx.required_panic_strategy(LOCAL_CRATE),
                 panic_in_drop_strategy: tcx.sess.opts.unstable_opts.panic_in_drop,
-                reference_niches_policy: tcx.reference_niches_policy(LOCAL_CRATE),
                 edition: tcx.sess.edition(),
                 has_global_allocator: tcx.has_global_allocator(LOCAL_CRATE),
                 has_alloc_error_handler: tcx.has_alloc_error_handler(LOCAL_CRATE),
@@ -1145,13 +1144,7 @@ fn should_encode_type(tcx: TyCtxt<'_>, def_id: LocalDefId, def_kind: DefKind) ->
             let assoc_item = tcx.associated_item(def_id);
             match assoc_item.container {
                 ty::AssocItemContainer::ImplContainer => true,
-                // Always encode RPITITs, since we need to be able to project
-                // from an RPITIT associated item to an opaque when installing
-                // the default projection predicates in default trait methods
-                // with RPITITs.
-                ty::AssocItemContainer::TraitContainer => {
-                    assoc_item.defaultness(tcx).has_value() || assoc_item.is_impl_trait_in_trait()
-                }
+                ty::AssocItemContainer::TraitContainer => assoc_item.defaultness(tcx).has_value(),
             }
         }
         DefKind::TyParam => {
@@ -1561,6 +1554,12 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         }
         if let Some(rpitit_info) = item.opt_rpitit_info {
             record!(self.tables.opt_rpitit_info[def_id] <- rpitit_info);
+            if matches!(rpitit_info, ty::ImplTraitInTraitData::Trait { .. }) {
+                record_array!(
+                    self.tables.assumed_wf_types_for_rpitit[def_id]
+                        <- self.tcx.assumed_wf_types_for_rpitit(def_id)
+                );
+            }
         }
     }
 
@@ -2245,13 +2244,12 @@ pub fn provide(providers: &mut Providers) {
             tcx.resolutions(())
                 .doc_link_resolutions
                 .get(&def_id)
-                .expect("no resolutions for a doc link")
+                .unwrap_or_else(|| span_bug!(tcx.def_span(def_id), "no resolutions for a doc link"))
         },
         doc_link_traits_in_scope: |tcx, def_id| {
-            tcx.resolutions(())
-                .doc_link_traits_in_scope
-                .get(&def_id)
-                .expect("no traits in scope for a doc link")
+            tcx.resolutions(()).doc_link_traits_in_scope.get(&def_id).unwrap_or_else(|| {
+                span_bug!(tcx.def_span(def_id), "no traits in scope for a doc link")
+            })
         },
         traits: |tcx, LocalCrate| {
             let mut traits = Vec::new();

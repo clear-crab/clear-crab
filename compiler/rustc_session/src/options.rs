@@ -6,7 +6,6 @@ use crate::{lint, EarlyErrorHandler};
 use rustc_data_structures::profiling::TimePassesFormat;
 use rustc_errors::ColorConfig;
 use rustc_errors::{LanguageIdentifier, TerminalUrl};
-use rustc_target::abi::ReferenceNichePolicy;
 use rustc_target::spec::{CodeModel, LinkerFlavorCli, MergeFunctions, PanicStrategy, SanitizerSet};
 use rustc_target::spec::{
     RelocModel, RelroLevel, SplitDebuginfo, StackProtector, TargetTriple, TlsModel,
@@ -331,8 +330,7 @@ fn build_options<O: Default>(
                     match value {
                         None => handler.early_error(
                             format!(
-                                "{0} option `{1}` requires {2} ({3} {1}=<value>)",
-                                outputname, key, type_desc, prefix
+                                "{outputname} option `{key}` requires {type_desc} ({prefix} {key}=<value>)"
                             ),
                         ),
                         Some(value) => handler.early_error(
@@ -422,8 +420,6 @@ mod desc {
     pub const parse_proc_macro_execution_strategy: &str =
         "one of supported execution strategies (`same-thread`, or `cross-thread`)";
     pub const parse_dump_solver_proof_tree: &str = "one of: `always`, `on-request`, `on-error`";
-    pub const parse_opt_reference_niches: &str =
-        "`null`, or a `,` separated combination of `size` or `align`";
 }
 
 mod parse {
@@ -1148,7 +1144,7 @@ mod parse {
         }
 
         // 2. Parse a list of enabled and disabled components.
-        for comp in s.split(",") {
+        for comp in s.split(',') {
             if slot.handle_cli_component(comp).is_err() {
                 return false;
             }
@@ -1254,31 +1250,6 @@ mod parse {
             Some("on-error") => *slot = DumpSolverProofTree::OnError,
             _ => return false,
         };
-        true
-    }
-
-    pub(crate) fn parse_opt_reference_niches(
-        slot: &mut Option<ReferenceNichePolicy>,
-        v: Option<&str>,
-    ) -> bool {
-        let Some(s) = v else {
-            return false;
-        };
-
-        let slot = slot.get_or_insert_default();
-
-        if s == "null" {
-            return true;
-        }
-
-        for opt in s.split(",") {
-            match opt {
-                "size" => slot.size = true,
-                "align" => slot.align = true,
-                _ => return false,
-            }
-        }
-
         true
     }
 }
@@ -1461,8 +1432,6 @@ options! {
     dep_tasks: bool = (false, parse_bool, [UNTRACKED],
         "print tasks that execute and the color their dep node gets (requires debug build) \
         (default: no)"),
-    diagnostic_width: Option<usize> = (None, parse_opt_number, [UNTRACKED],
-        "set the current output width for diagnostic truncation"),
     dont_buffer_diagnostics: bool = (false, parse_bool, [UNTRACKED],
         "emit diagnostics rather than buffering (breaks NLL error downgrading, sorting) \
         (default: no)"),
@@ -1729,8 +1698,6 @@ options! {
         "enable queries of the dependency graph for regression testing (default: no)"),
     randomize_layout: bool = (false, parse_bool, [TRACKED],
         "randomize the layout of types (default: no)"),
-    reference_niches: Option<ReferenceNichePolicy> = (None, parse_opt_reference_niches, [TRACKED],
-        "override the set of discriminant niches that may be exposed by references"),
     relax_elf_relocations: Option<bool> = (None, parse_opt_bool, [TRACKED],
         "whether ELF relocations can be relaxed"),
     relro_level: Option<RelroLevel> = (None, parse_relro_level, [TRACKED],
@@ -1908,10 +1875,13 @@ written to standard error output)"),
         Requires `-Clto[=[fat,yes]]`"),
     wasi_exec_model: Option<WasiExecModel> = (None, parse_wasi_exec_model, [TRACKED],
         "whether to build a wasi command or reactor"),
+    write_long_types_to_disk: bool = (true, parse_bool, [UNTRACKED],
+        "whether long type names should be written to files instead of being printed in errors"),
     // tidy-alphabetical-end
 
     // If you add a new option, please update:
     // - compiler/rustc_interface/src/tests.rs
+    // - src/doc/unstable-book/src/compiler-flags
 }
 
 #[derive(Clone, Hash, PartialEq, Eq, Debug)]

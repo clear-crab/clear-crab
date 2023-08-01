@@ -19,7 +19,9 @@ use rustc_middle::mir::interpret::{
 use rustc_middle::ty;
 use rustc_middle::ty::layout::{LayoutOf, TyAndLayout};
 use rustc_span::symbol::{sym, Symbol};
-use rustc_target::abi::{Abi, FieldIdx, Scalar as ScalarAbi, Size, VariantIdx, Variants};
+use rustc_target::abi::{
+    Abi, FieldIdx, Scalar as ScalarAbi, Size, VariantIdx, Variants, WrappingRange,
+};
 
 use std::hash::Hash;
 
@@ -27,7 +29,7 @@ use std::hash::Hash;
 use super::UndefinedBehaviorInfo::*;
 use super::{
     AllocId, CheckInAllocMsg, GlobalAlloc, ImmTy, Immediate, InterpCx, InterpResult, MPlaceTy,
-    Machine, MemPlaceMeta, OpTy, Pointer, Scalar, ValueVisitor,
+    Machine, MemPlaceMeta, OpTy, Pointer, Projectable, Scalar, ValueVisitor,
 };
 
 macro_rules! throw_validation_failure {
@@ -134,19 +136,19 @@ pub struct RefTracking<T, PATH = ()> {
     pub todo: Vec<(T, PATH)>,
 }
 
-impl<T: Copy + Eq + Hash + std::fmt::Debug, PATH: Default> RefTracking<T, PATH> {
+impl<T: Clone + Eq + Hash + std::fmt::Debug, PATH: Default> RefTracking<T, PATH> {
     pub fn empty() -> Self {
         RefTracking { seen: FxHashSet::default(), todo: vec![] }
     }
     pub fn new(op: T) -> Self {
         let mut ref_tracking_for_consts =
-            RefTracking { seen: FxHashSet::default(), todo: vec![(op, PATH::default())] };
+            RefTracking { seen: FxHashSet::default(), todo: vec![(op.clone(), PATH::default())] };
         ref_tracking_for_consts.seen.insert(op);
         ref_tracking_for_consts
     }
 
     pub fn track(&mut self, op: T, path: impl FnOnce() -> PATH) {
-        if self.seen.insert(op) {
+        if self.seen.insert(op.clone()) {
             trace!("Recursing below ptr {:#?}", op);
             let path = path();
             // Remember to come back to this later.
@@ -162,14 +164,14 @@ fn write_path(out: &mut String, path: &[PathElem]) {
 
     for elem in path.iter() {
         match elem {
-            Field(name) => write!(out, ".{}", name),
+            Field(name) => write!(out, ".{name}"),
             EnumTag => write!(out, ".<enum-tag>"),
-            Variant(name) => write!(out, ".<enum-variant({})>", name),
+            Variant(name) => write!(out, ".<enum-variant({name})>"),
             GeneratorTag => write!(out, ".<generator-tag>"),
             GeneratorState(idx) => write!(out, ".<generator-state({})>", idx.index()),
-            CapturedVar(name) => write!(out, ".<captured-var({})>", name),
-            TupleElem(idx) => write!(out, ".{}", idx),
-            ArrayElem(idx) => write!(out, "[{}]", idx),
+            CapturedVar(name) => write!(out, ".<captured-var({name})>"),
+            TupleElem(idx) => write!(out, ".{idx}"),
+            ArrayElem(idx) => write!(out, "[{idx}]"),
             // `.<deref>` does not match Rust syntax, but it is more readable for long paths -- and
             // some of the other items here also are not Rust syntax. Actually we can't
             // even use the usual syntax because we are just showing the projections,
@@ -460,6 +462,8 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
 
     /// Check if this is a value of primitive type, and if yes check the validity of the value
     /// at that type. Return `true` if the type is indeed primitive.
+    ///
+    /// Note that not all of these have `FieldsShape::Primitive`, e.g. wide references.
     fn try_visit_primitive(
         &mut self,
         value: &OpTy<'tcx, M::Provenance>,
@@ -552,7 +556,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
                     // FIXME: Check if the signature matches
                 } else {
                     // Otherwise (for standalone Miri), we have to still check it to be non-null.
-                    if self.ecx.ptr_scalar_range(value)?.contains(&0) {
+                    if self.ecx.scalar_may_be_null(value)? {
                         throw_validation_failure!(self.path, NullFnPtr);
                     }
                 }
@@ -593,36 +597,46 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
     ) -> InterpResult<'tcx> {
         let size = scalar_layout.size(self.ecx);
         let valid_range = scalar_layout.valid_range(self.ecx);
+        let WrappingRange { start, end } = valid_range;
         let max_value = size.unsigned_int_max();
-        assert!(valid_range.end <= max_value);
-        match scalar.try_to_int() {
-            Ok(int) => {
-                // We have an explicit int: check it against the valid range.
-                let bits = int.assert_bits(size);
-                if valid_range.contains(bits) {
-                    Ok(())
-                } else {
-                    throw_validation_failure!(
-                        self.path,
-                        OutOfRange { value: format!("{bits}"), range: valid_range, max_value }
-                    )
-                }
-            }
+        assert!(end <= max_value);
+        let bits = match scalar.try_to_int() {
+            Ok(int) => int.assert_bits(size),
             Err(_) => {
                 // So this is a pointer then, and casting to an int failed.
                 // Can only happen during CTFE.
-                // We check if the possible addresses are compatible with the valid range.
-                let range = self.ecx.ptr_scalar_range(scalar)?;
-                if valid_range.contains_range(range) {
-                    Ok(())
+                // We support 2 kinds of ranges here: full range, and excluding zero.
+                if start == 1 && end == max_value {
+                    // Only null is the niche. So make sure the ptr is NOT null.
+                    if self.ecx.scalar_may_be_null(scalar)? {
+                        throw_validation_failure!(
+                            self.path,
+                            NullablePtrOutOfRange { range: valid_range, max_value }
+                        )
+                    } else {
+                        return Ok(());
+                    }
+                } else if scalar_layout.is_always_valid(self.ecx) {
+                    // Easy. (This is reachable if `enforce_number_validity` is set.)
+                    return Ok(());
                 } else {
-                    // Reject conservatively, because the pointer *could* have a bad value.
+                    // Conservatively, we reject, because the pointer *could* have a bad
+                    // value.
                     throw_validation_failure!(
                         self.path,
                         PtrOutOfRange { range: valid_range, max_value }
                     )
                 }
             }
+        };
+        // Now compare.
+        if valid_range.contains(bits) {
+            Ok(())
+        } else {
+            throw_validation_failure!(
+                self.path,
+                OutOfRange { value: format!("{bits}"), range: valid_range, max_value }
+            )
         }
     }
 }
@@ -648,10 +662,9 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValueVisitor<'mir, 'tcx, M>
                 InvalidTag(val) => InvalidEnumTag {
                     value: format!("{val:x}"),
                 },
-
+                UninhabitedEnumVariantRead(_) => UninhabitedEnumTag,
                 InvalidUninitBytes(None) => UninitEnumTag,
-            )
-            .1)
+            ))
         })
     }
 
@@ -721,60 +734,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValueVisitor<'mir, 'tcx, M>
             }
         }
 
-        // Recursively walk the value at its type.
-        self.walk_value(op)?;
-
-        // *After* all of this, check the ABI. We need to check the ABI to handle
-        // types like `NonNull` where the `Scalar` info is more restrictive than what
-        // the fields say (`rustc_layout_scalar_valid_range_start`).
-        // But in most cases, this will just propagate what the fields say,
-        // and then we want the error to point at the field -- so, first recurse,
-        // then check ABI.
-        //
-        // FIXME: We could avoid some redundant checks here. For newtypes wrapping
-        // scalars, we do the same check on every "level" (e.g., first we check
-        // MyNewtype and then the scalar in there).
-        match op.layout.abi {
-            Abi::Uninhabited => {
-                let ty = op.layout.ty;
-                throw_validation_failure!(self.path, UninhabitedVal { ty });
-            }
-            Abi::Scalar(scalar_layout) => {
-                if !scalar_layout.is_uninit_valid() {
-                    // There is something to check here.
-                    let scalar = self.read_scalar(op, ExpectedKind::InitScalar)?;
-                    self.visit_scalar(scalar, scalar_layout)?;
-                }
-            }
-            Abi::ScalarPair(a_layout, b_layout) => {
-                // We can only proceed if *both* scalars need to be initialized.
-                // FIXME: find a way to also check ScalarPair when one side can be uninit but
-                // the other must be init.
-                if !a_layout.is_uninit_valid() && !b_layout.is_uninit_valid() {
-                    let (a, b) =
-                        self.read_immediate(op, ExpectedKind::InitScalar)?.to_scalar_pair();
-                    self.visit_scalar(a, a_layout)?;
-                    self.visit_scalar(b, b_layout)?;
-                }
-            }
-            Abi::Vector { .. } => {
-                // No checks here, we assume layout computation gets this right.
-                // (This is harder to check since Miri does not represent these as `Immediate`. We
-                // also cannot use field projections since this might be a newtype around a vector.)
-            }
-            Abi::Aggregate { .. } => {
-                // Nothing to do.
-            }
-        }
-
-        Ok(())
-    }
-
-    fn visit_aggregate(
-        &mut self,
-        op: &OpTy<'tcx, M::Provenance>,
-        fields: impl Iterator<Item = InterpResult<'tcx, Self::V>>,
-    ) -> InterpResult<'tcx> {
+        // Recursively walk the value at its type. Apply optimizations for some large types.
         match op.layout.ty.kind() {
             ty::Str => {
                 let mplace = op.assert_mem_place(); // strings are unsized and hence never immediate
@@ -862,12 +822,58 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValueVisitor<'mir, 'tcx, M>
             // ZST type, so either validation fails for all elements or none.
             ty::Array(tys, ..) | ty::Slice(tys) if self.ecx.layout_of(*tys)?.is_zst() => {
                 // Validate just the first element (if any).
-                self.walk_aggregate(op, fields.take(1))?
+                if op.len(self.ecx)? > 0 {
+                    self.visit_field(op, 0, &self.ecx.project_index(op, 0)?)?;
+                }
             }
             _ => {
-                self.walk_aggregate(op, fields)? // default handler
+                self.walk_value(op)?; // default handler
             }
         }
+
+        // *After* all of this, check the ABI. We need to check the ABI to handle
+        // types like `NonNull` where the `Scalar` info is more restrictive than what
+        // the fields say (`rustc_layout_scalar_valid_range_start`).
+        // But in most cases, this will just propagate what the fields say,
+        // and then we want the error to point at the field -- so, first recurse,
+        // then check ABI.
+        //
+        // FIXME: We could avoid some redundant checks here. For newtypes wrapping
+        // scalars, we do the same check on every "level" (e.g., first we check
+        // MyNewtype and then the scalar in there).
+        match op.layout.abi {
+            Abi::Uninhabited => {
+                let ty = op.layout.ty;
+                throw_validation_failure!(self.path, UninhabitedVal { ty });
+            }
+            Abi::Scalar(scalar_layout) => {
+                if !scalar_layout.is_uninit_valid() {
+                    // There is something to check here.
+                    let scalar = self.read_scalar(op, ExpectedKind::InitScalar)?;
+                    self.visit_scalar(scalar, scalar_layout)?;
+                }
+            }
+            Abi::ScalarPair(a_layout, b_layout) => {
+                // We can only proceed if *both* scalars need to be initialized.
+                // FIXME: find a way to also check ScalarPair when one side can be uninit but
+                // the other must be init.
+                if !a_layout.is_uninit_valid() && !b_layout.is_uninit_valid() {
+                    let (a, b) =
+                        self.read_immediate(op, ExpectedKind::InitScalar)?.to_scalar_pair();
+                    self.visit_scalar(a, a_layout)?;
+                    self.visit_scalar(b, b_layout)?;
+                }
+            }
+            Abi::Vector { .. } => {
+                // No checks here, we assume layout computation gets this right.
+                // (This is harder to check since Miri does not represent these as `Immediate`. We
+                // also cannot use field projections since this might be a newtype around a vector.)
+            }
+            Abi::Aggregate { .. } => {
+                // Nothing to do.
+            }
+        }
+
         Ok(())
     }
 }

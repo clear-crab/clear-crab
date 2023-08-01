@@ -801,9 +801,6 @@ LLVMRustOptimize(
       OptimizerLastEPCallbacks.push_back(
         [SanitizerOptions](ModulePassManager &MPM, OptimizationLevel Level) {
           auto CompileKernel = SanitizerOptions->SanitizeKernelAddress;
-#if LLVM_VERSION_LT(15, 0)
-          MPM.addPass(RequireAnalysisPass<ASanGlobalsMetadataAnalysis, Module>());
-#endif
           AddressSanitizerOptions opts = AddressSanitizerOptions{
             CompileKernel,
             SanitizerOptions->SanitizeAddressRecover
@@ -1365,6 +1362,11 @@ LLVMRustPrepareThinLTOImport(const LLVMRustThinLTOData *Data, LLVMModuleRef M,
     auto *WasmCustomSections = (*MOrErr)->getNamedMetadata("wasm.custom_sections");
     if (WasmCustomSections)
       WasmCustomSections->eraseFromParent();
+
+    // `llvm.ident` named metadata also gets duplicated.
+    auto *llvmIdent = (*MOrErr)->getNamedMetadata("llvm.ident");
+    if (llvmIdent)
+      llvmIdent->eraseFromParent();
 
     return MOrErr;
   };

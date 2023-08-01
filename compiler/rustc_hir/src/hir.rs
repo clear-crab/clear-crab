@@ -3013,8 +3013,7 @@ pub struct FieldDef<'hir> {
 impl FieldDef<'_> {
     // Still necessary in couple of places
     pub fn is_positional(&self) -> bool {
-        let first = self.ident.as_str().as_bytes()[0];
-        (b'0'..=b'9').contains(&first)
+        self.ident.as_str().as_bytes()[0].is_ascii_digit()
     }
 }
 
@@ -3131,9 +3130,9 @@ impl<'hir> Item<'hir> {
     }
     /// Expect an [`ItemKind::Const`] or panic.
     #[track_caller]
-    pub fn expect_const(&self) -> (&'hir Ty<'hir>, BodyId) {
-        let ItemKind::Const(ty, body) = self.kind else { self.expect_failed("a constant") };
-        (ty, body)
+    pub fn expect_const(&self) -> (&'hir Ty<'hir>, &'hir Generics<'hir>, BodyId) {
+        let ItemKind::Const(ty, gen, body) = self.kind else { self.expect_failed("a constant") };
+        (ty, gen, body)
     }
     /// Expect an [`ItemKind::Fn`] or panic.
     #[track_caller]
@@ -3320,7 +3319,7 @@ pub enum ItemKind<'hir> {
     /// A `static` item.
     Static(&'hir Ty<'hir>, Mutability, BodyId),
     /// A `const` item.
-    Const(&'hir Ty<'hir>, BodyId),
+    Const(&'hir Ty<'hir>, &'hir Generics<'hir>, BodyId),
     /// A function declaration.
     Fn(FnSig<'hir>, &'hir Generics<'hir>, BodyId),
     /// A MBE macro definition (`macro_rules!` or `macro`).
@@ -3373,6 +3372,7 @@ impl ItemKind<'_> {
         Some(match *self {
             ItemKind::Fn(_, ref generics, _)
             | ItemKind::TyAlias(_, ref generics)
+            | ItemKind::Const(_, ref generics, _)
             | ItemKind::OpaqueTy(OpaqueTy { ref generics, .. })
             | ItemKind::Enum(_, ref generics)
             | ItemKind::Struct(_, ref generics)
@@ -3568,7 +3568,9 @@ impl<'hir> OwnerNode<'hir> {
         match self {
             OwnerNode::Item(Item {
                 kind:
-                    ItemKind::Static(_, _, body) | ItemKind::Const(_, body) | ItemKind::Fn(_, _, body),
+                    ItemKind::Static(_, _, body)
+                    | ItemKind::Const(_, _, body)
+                    | ItemKind::Fn(_, _, body),
                 ..
             })
             | OwnerNode::TraitItem(TraitItem {
@@ -3771,9 +3773,9 @@ impl<'hir> Node<'hir> {
     pub fn ty(self) -> Option<&'hir Ty<'hir>> {
         match self {
             Node::Item(it) => match it.kind {
-                ItemKind::TyAlias(ty, _) | ItemKind::Static(ty, _, _) | ItemKind::Const(ty, _) => {
-                    Some(ty)
-                }
+                ItemKind::TyAlias(ty, _)
+                | ItemKind::Static(ty, _, _)
+                | ItemKind::Const(ty, _, _) => Some(ty),
                 _ => None,
             },
             Node::TraitItem(it) => match it.kind {
@@ -3801,7 +3803,9 @@ impl<'hir> Node<'hir> {
         match self {
             Node::Item(Item {
                 kind:
-                    ItemKind::Static(_, _, body) | ItemKind::Const(_, body) | ItemKind::Fn(_, _, body),
+                    ItemKind::Static(_, _, body)
+                    | ItemKind::Const(_, _, body)
+                    | ItemKind::Fn(_, _, body),
                 ..
             })
             | Node::TraitItem(TraitItem {
