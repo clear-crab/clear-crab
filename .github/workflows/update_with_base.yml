@@ -1,0 +1,57 @@
+name: Update with base
+
+on:
+  schedule:
+    - cron: '0 18 * * SAT'
+  workflow_dispatch:
+
+env:
+  REMOTE_NAME: update
+  REMOTE_URL: https://github.com/rust-lang/rust.git
+  REMOTE_BRANCH: master
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.UPDATE_TOKEN }}
+      
+      - name: Init Git
+        run: |
+          git config --global user.email "actions@github.com"
+          git config --global user.name "GitHub Actions"
+
+      - name: Main workflow
+        id: main
+        run: |
+          echo "Adding remote called ${{ env.REMOTE_NAME }}"
+          git remote add ${{ env.REMOTE_NAME }} ${{ env.REMOTE_URL }}
+          
+          echo "Fetching ${{ env.REMOTE_NAME }}"
+          git fetch ${{ env.REMOTE_NAME }}
+          
+          echo "Checking ${{ env.REMOTE_BRANCH }} branch on ${{ env.REMOTE_NAME }} for new commits"
+          if [ $(git rev-list --count ${{ env.REMOTE_NAME }}/${{ env.REMOTE_BRANCH }} ^HEAD) -eq 0 ]; then
+            echo "There are no new commits"
+            
+            echo "abort=1" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "Found new commits"
+          
+          echo "Merging from ${{ env.REMOTE_NAME }}/${{ env.REMOTE_BRANCH }}"
+          git merge --ff ${{ env.REMOTE_NAME }}/${{ env.REMOTE_BRANCH }}
+          
+          echo "Pushing changes"
+          git push
+
+          echo "abort=0" >> $GITHUB_OUTPUT
+          
