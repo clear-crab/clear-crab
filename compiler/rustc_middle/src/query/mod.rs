@@ -885,6 +885,13 @@ rustc_queries! {
         desc { |tcx| "computing the implied bounds of `{}`", tcx.def_path_str(key) }
     }
 
+    /// We need to store the assumed_wf_types for an RPITIT so that impls of foreign
+    /// traits with return-position impl trait in traits can inherit the right wf types.
+    query assumed_wf_types_for_rpitit(key: DefId) -> &'tcx [(Ty<'tcx>, Span)] {
+        desc { |tcx| "computing the implied bounds of `{}`", tcx.def_path_str(key) }
+        separate_provide_extern
+    }
+
     /// Computes the signature of the function.
     query fn_sig(key: DefId) -> ty::EarlyBinder<ty::PolyFnSig<'tcx>> {
         desc { |tcx| "computing function signature of `{}`", tcx.def_path_str(key) }
@@ -1277,7 +1284,7 @@ rustc_queries! {
     query vtable_allocation(key: (Ty<'tcx>, Option<ty::PolyExistentialTraitRef<'tcx>>)) -> mir::interpret::AllocId {
         desc { |tcx| "vtable const allocation for <{} as {}>",
             key.0,
-            key.1.map(|trait_ref| format!("{}", trait_ref)).unwrap_or("_".to_owned())
+            key.1.map(|trait_ref| format!("{trait_ref}")).unwrap_or("_".to_owned())
         }
     }
 
@@ -1394,18 +1401,6 @@ rustc_queries! {
         desc { "computing layout of `{}`", key.value }
     }
 
-    /// Computes the naive layout approximation of a type. Note that this implicitly
-    /// executes in "reveal all" mode, and will normalize the input type.
-    ///
-    /// Unlike `layout_of`, this doesn't look past references (beyond the `Pointee::Metadata`
-    /// projection), and as such can be called on generic types like `Option<&T>`.
-    query naive_layout_of(
-        key: ty::ParamEnvAnd<'tcx, Ty<'tcx>>
-    ) -> Result<ty::layout::TyAndNaiveLayout<'tcx>, &'tcx ty::layout::LayoutError<'tcx>> {
-        depth_limit
-        desc { "computing layout (naive) of `{}`", key.value }
-    }
-
     /// Compute a `FnAbi` suitable for indirect calls, i.e. to `fn` pointers.
     ///
     /// NB: this doesn't handle virtual calls - those should use `fn_abi_of_instance`
@@ -1479,11 +1474,6 @@ rustc_queries! {
     query panic_in_drop_strategy(_: CrateNum) -> PanicStrategy {
         fatal_cycle
         desc { "getting a crate's configured panic-in-drop strategy" }
-        separate_provide_extern
-    }
-    query reference_niches_policy(_: CrateNum) -> abi::ReferenceNichePolicy {
-        fatal_cycle
-        desc { "getting a crate's policy for size and alignment niches of references" }
         separate_provide_extern
     }
     query is_no_builtins(_: CrateNum) -> bool {
@@ -2081,9 +2071,9 @@ rustc_queries! {
         }
     }
 
-    query is_impossible_method(key: (DefId, DefId)) -> bool {
+    query is_impossible_associated_item(key: (DefId, DefId)) -> bool {
         desc { |tcx|
-            "checking if `{}` is impossible to call within `{}`",
+            "checking if `{}` is impossible to reference within `{}`",
             tcx.def_path_str(key.1),
             tcx.def_path_str(key.0),
         }

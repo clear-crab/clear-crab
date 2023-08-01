@@ -279,12 +279,12 @@ pub trait Emitter: Translate {
                 let msg = if substitution.is_empty() || sugg.style.hide_inline() {
                     // This substitution is only removal OR we explicitly don't want to show the
                     // code inline (`hide_inline`). Therefore, we don't show the substitution.
-                    format!("help: {}", &msg)
+                    format!("help: {msg}")
                 } else {
                     // Show the default suggestion text with the substitution
                     format!(
                         "help: {}{}: `{}`",
-                        &msg,
+                        msg,
                         if self.source_map().is_some_and(|sm| is_case_difference(
                             sm,
                             substitution,
@@ -2145,7 +2145,7 @@ impl EmitterWriter {
                         &mut self.dst,
                         self.short_message,
                     ) {
-                        panic!("failed to emit error: {}", e)
+                        panic!("failed to emit error: {e}")
                     }
                 }
                 if !self.short_message {
@@ -2161,7 +2161,7 @@ impl EmitterWriter {
                             true,
                             None,
                         ) {
-                            panic!("failed to emit error: {}", err);
+                            panic!("failed to emit error: {err}");
                         }
                     }
                     for sugg in suggestions {
@@ -2180,7 +2180,7 @@ impl EmitterWriter {
                                     true,
                                     None,
                                 ) {
-                                    panic!("failed to emit error: {}", e);
+                                    panic!("failed to emit error: {e}");
                                 }
                             }
                             SuggestionStyle::HideCodeInline
@@ -2193,22 +2193,22 @@ impl EmitterWriter {
                                     &Level::Help,
                                     max_line_num_len,
                                 ) {
-                                    panic!("failed to emit error: {}", e);
+                                    panic!("failed to emit error: {e}");
                                 }
                             }
                         }
                     }
                 }
             }
-            Err(e) => panic!("failed to emit error: {}", e),
+            Err(e) => panic!("failed to emit error: {e}"),
         }
 
         let mut dst = self.dst.writable();
         match writeln!(dst) {
-            Err(e) => panic!("failed to emit error: {}", e),
+            Err(e) => panic!("failed to emit error: {e}"),
             _ => {
                 if let Err(e) = dst.flush() {
-                    panic!("failed to emit error: {}", e)
+                    panic!("failed to emit error: {e}")
                 }
             }
         }

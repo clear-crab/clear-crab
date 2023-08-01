@@ -1,34 +1,45 @@
 [submodule "src/doc/nomicon"]
 	path = src/doc/nomicon
 	url = https://github.com/clear-crab/unsafe-guide.git
+	shallow = true
 [submodule "src/tools/cargo"]
 	path = src/tools/cargo
 	url = https://github.com/clear-crab/package-manager.git
+	shallow = true
 [submodule "src/doc/reference"]
 	path = src/doc/reference
 	url = https://github.com/clear-crab/reference.git
+	shallow = true
 [submodule "src/doc/book"]
 	path = src/doc/book
 	url = https://github.com/clear-crab/book.git
+	shallow = true
 [submodule "src/doc/rust-by-example"]
 	path = src/doc/rust-by-example
 	url = https://github.com/clear-crab/examples.git
+	shallow = true
 [submodule "library/stdarch"]
 	path = library/stdarch
 	url = https://github.com/clear-crab/simd-vendor-intrinsics.git
+	shallow = true
 [submodule "src/doc/rustc-dev-guide"]
 	path = src/doc/rustc-dev-guide
 	url = https://github.com/clear-crab/compiler-dev-guide.git
+	shallow = true
 [submodule "src/doc/edition-guide"]
 	path = src/doc/edition-guide
 	url = https://github.com/clear-crab/edition-guide.git
+	shallow = true
 [submodule "src/llvm-project"]
 	path = src/llvm-project
 	url = https://github.com/clear-crab/compiler-toolchain-tech.git
 	branch = rustc/16.0-2023-06-05
+	shallow = true
 [submodule "src/doc/embedded-book"]
 	path = src/doc/embedded-book
 	url = https://github.com/clear-crab/embedded-book.git
+	shallow = true
 [submodule "library/backtrace"]
 	path = library/backtrace
 	url = https://github.com/clear-crab/backtrace.git
+	shallow = true

@@ -511,7 +511,8 @@ impl<'a> ReportErrorExt for UndefinedBehaviorInfo<'a> {
             InvalidUninitBytes(Some(_)) => const_eval_invalid_uninit_bytes,
             DeadLocal => const_eval_dead_local,
             ScalarSizeMismatch(_) => const_eval_scalar_size_mismatch,
-            UninhabitedEnumVariantWritten => const_eval_uninhabited_enum_variant_written,
+            UninhabitedEnumVariantWritten(_) => const_eval_uninhabited_enum_variant_written,
+            UninhabitedEnumVariantRead(_) => const_eval_uninhabited_enum_variant_read,
             Validation(e) => e.diagnostic_message(),
             Custom(x) => (x.msg)(),
         }
@@ -535,7 +536,8 @@ impl<'a> ReportErrorExt for UndefinedBehaviorInfo<'a> {
             | InvalidMeta(InvalidMetaKind::TooBig)
             | InvalidUninitBytes(None)
             | DeadLocal
-            | UninhabitedEnumVariantWritten => {}
+            | UninhabitedEnumVariantWritten(_)
+            | UninhabitedEnumVariantRead(_) => {}
             BoundsCheckFailed { len, index } => {
                 builder.set_arg("len", len);
                 builder.set_arg("index", index);
@@ -617,11 +619,13 @@ impl<'tcx> ReportErrorExt for ValidationErrorInfo<'tcx> {
             MutableRefInConst => const_eval_mutable_ref_in_const,
             NullFnPtr => const_eval_null_fn_ptr,
             NeverVal => const_eval_never_val,
+            NullablePtrOutOfRange { .. } => const_eval_nullable_ptr_out_of_range,
             PtrOutOfRange { .. } => const_eval_ptr_out_of_range,
             OutOfRange { .. } => const_eval_out_of_range,
             UnsafeCell => const_eval_unsafe_cell,
             UninhabitedVal { .. } => const_eval_uninhabited_val,
             InvalidEnumTag { .. } => const_eval_invalid_enum_tag,
+            UninhabitedEnumTag => const_eval_uninhabited_enum_tag,
             UninitEnumTag => const_eval_uninit_enum_tag,
             UninitStr => const_eval_uninit_str,
             Uninit { expected: ExpectedKind::Bool } => const_eval_uninit_bool,
@@ -731,7 +735,9 @@ impl<'tcx> ReportErrorExt for ValidationErrorInfo<'tcx> {
             | InvalidFnPtr { value } => {
                 err.set_arg("value", value);
             }
-            PtrOutOfRange { range, max_value } => add_range_arg(range, max_value, handler, err),
+            NullablePtrOutOfRange { range, max_value } | PtrOutOfRange { range, max_value } => {
+                add_range_arg(range, max_value, handler, err)
+            }
             OutOfRange { range, max_value, value } => {
                 err.set_arg("value", value);
                 add_range_arg(range, max_value, handler, err);
@@ -757,7 +763,8 @@ impl<'tcx> ReportErrorExt for ValidationErrorInfo<'tcx> {
             | InvalidMetaSliceTooLarge { .. }
             | InvalidMetaTooLarge { .. }
             | DanglingPtrUseAfterFree { .. }
-            | DanglingPtrOutOfBounds { .. } => {}
+            | DanglingPtrOutOfBounds { .. }
+            | UninhabitedEnumTag => {}
         }
     }
 }
@@ -832,7 +839,9 @@ impl<'tcx> ReportErrorExt for InvalidProgramInfo<'tcx> {
                 rustc_middle::error::middle_adjust_for_foreign_abi_error
             }
             InvalidProgramInfo::SizeOfUnsizedType(_) => const_eval_size_of_unsized,
-            InvalidProgramInfo::UninitUnsizedLocal => const_eval_uninit_unsized_local,
+            InvalidProgramInfo::ConstPropNonsense => {
+                panic!("We had const-prop nonsense, this should never be printed")
+            }
         }
     }
     fn add_args<G: EmissionGuarantee>(
@@ -843,7 +852,7 @@ impl<'tcx> ReportErrorExt for InvalidProgramInfo<'tcx> {
         match self {
             InvalidProgramInfo::TooGeneric
             | InvalidProgramInfo::AlreadyReported(_)
-            | InvalidProgramInfo::UninitUnsizedLocal => {}
+            | InvalidProgramInfo::ConstPropNonsense => {}
             InvalidProgramInfo::Layout(e) => {
                 let diag: DiagnosticBuilder<'_, ()> = e.into_diagnostic().into_diagnostic(handler);
                 for (name, val) in diag.args() {
