@@ -250,7 +250,7 @@ impl<'a> DecorateLint<'a, ()> for BuiltinUngatedAsyncFnTrackCaller<'_> {
         rustc_session::parse::add_feature_diagnostics(
             diag,
             &self.parse_sess,
-            sym::closure_track_caller,
+            sym::async_fn_track_caller,
         );
         diag
     }
@@ -371,10 +371,6 @@ pub enum BuiltinEllipsisInclusiveRangePatternsLint {
 }
 
 #[derive(LintDiagnostic)]
-#[diag(lint_builtin_unnameable_test_items)]
-pub struct BuiltinUnnameableTestItems;
-
-#[derive(LintDiagnostic)]
 #[diag(lint_builtin_keyword_idents)]
 pub struct BuiltinKeywordIdents {
     pub kw: Ident,
@@ -405,9 +401,18 @@ pub struct BuiltinExplicitOutlivesSuggestion {
 pub struct BuiltinIncompleteFeatures {
     pub name: Symbol,
     #[subdiagnostic]
-    pub note: Option<BuiltinIncompleteFeaturesNote>,
+    pub note: Option<BuiltinFeatureIssueNote>,
     #[subdiagnostic]
     pub help: Option<BuiltinIncompleteFeaturesHelp>,
+}
+
+#[derive(LintDiagnostic)]
+#[diag(lint_builtin_internal_features)]
+#[note]
+pub struct BuiltinInternalFeatures {
+    pub name: Symbol,
+    #[subdiagnostic]
+    pub note: Option<BuiltinFeatureIssueNote>,
 }
 
 #[derive(Subdiagnostic)]
@@ -416,7 +421,7 @@ pub struct BuiltinIncompleteFeaturesHelp;
 
 #[derive(Subdiagnostic)]
 #[note(lint_note)]
-pub struct BuiltinIncompleteFeaturesNote {
+pub struct BuiltinFeatureIssueNote {
     pub n: NonZeroU32,
 }
 
@@ -613,11 +618,23 @@ pub struct ExpectationNote {
     pub rationale: Symbol,
 }
 
-// fn_null_check.rs
+// ptr_nulls.rs
 #[derive(LintDiagnostic)]
-#[diag(lint_fn_null_check)]
-#[help]
-pub struct FnNullCheckDiag;
+pub enum PtrNullChecksDiag<'a> {
+    #[diag(lint_ptr_null_checks_fn_ptr)]
+    #[help(lint_help)]
+    FnPtr {
+        orig_ty: Ty<'a>,
+        #[label]
+        label: Span,
+    },
+    #[diag(lint_ptr_null_checks_ref)]
+    Ref {
+        orig_ty: Ty<'a>,
+        #[label]
+        label: Span,
+    },
+}
 
 // for_loops_over_fallibles.rs
 #[derive(LintDiagnostic)]
@@ -745,8 +762,18 @@ pub enum InvalidFromUtf8Diag {
 
 // reference_casting.rs
 #[derive(LintDiagnostic)]
-#[diag(lint_invalid_reference_casting)]
-pub struct InvalidReferenceCastingDiag;
+pub enum InvalidReferenceCastingDiag {
+    #[diag(lint_invalid_reference_casting_borrow_as_mut)]
+    BorrowAsMut {
+        #[label]
+        orig_cast: Option<Span>,
+    },
+    #[diag(lint_invalid_reference_casting_assign_to_ref)]
+    AssignToRef {
+        #[label]
+        orig_cast: Option<Span>,
+    },
+}
 
 // hidden_unicode_codepoints.rs
 #[derive(LintDiagnostic)]
@@ -1056,8 +1083,10 @@ pub struct IdentifierUncommonCodepoints;
 pub struct ConfusableIdentifierPair {
     pub existing_sym: Symbol,
     pub sym: Symbol,
-    #[label]
+    #[label(lint_other_use)]
     pub label: Span,
+    #[label(lint_current_use)]
+    pub main_label: Span,
 }
 
 #[derive(LintDiagnostic)]

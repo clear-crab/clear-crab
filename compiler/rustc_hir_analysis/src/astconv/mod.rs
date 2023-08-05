@@ -713,7 +713,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         );
 
         debug!(?poly_trait_ref, ?assoc_bindings);
-        bounds.push_trait_bound(tcx, poly_trait_ref, span, constness, polarity);
+        bounds.push_trait_bound(tcx, poly_trait_ref, span, polarity);
 
         let mut dup_bindings = FxHashMap::default();
         for binding in &assoc_bindings {
@@ -1462,7 +1462,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                     let traits: Vec<_> =
                         self.probe_traits_that_match_assoc_ty(qself_ty, assoc_ident);
 
-                    // Don't print `TyErr` to the user.
+                    // Don't print `ty::Error` to the user.
                     self.report_ambiguous_associated_type(
                         span,
                         &[qself_ty.to_string()],

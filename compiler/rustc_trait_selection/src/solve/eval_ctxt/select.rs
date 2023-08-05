@@ -14,7 +14,6 @@ use rustc_span::DUMMY_SP;
 use crate::solve::assembly::{Candidate, CandidateSource};
 use crate::solve::eval_ctxt::{EvalCtxt, GenerateProofTree};
 use crate::solve::inspect::ProofTreeBuilder;
-use crate::solve::search_graph::OverflowHandler;
 use crate::traits::StructurallyNormalizeExt;
 use crate::traits::TraitEngineExt;
 
@@ -143,7 +142,7 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
         // the cycle anyways one step later.
         EvalCtxt::enter_canonical(
             self.tcx(),
-            self.search_graph(),
+            self.search_graph,
             canonical_input,
             // FIXME: This is wrong, idk if we even want to track stuff here.
             &mut ProofTreeBuilder::new_noop(),
@@ -235,7 +234,10 @@ fn rematch_unsize<'tcx>(
         goal.param_env,
         &mut nested,
     );
+
     match (a_ty.kind(), b_ty.kind()) {
+        // Don't try to coerce `?0` to `dyn Trait`
+        (ty::Infer(ty::TyVar(_)), _) | (_, ty::Infer(ty::TyVar(_))) => Ok(None),
         // Stall any ambiguous upcasting goals, since we can't rematch those
         (ty::Dynamic(_, _, ty::Dyn), ty::Dynamic(_, _, ty::Dyn)) => match certainty {
             Certainty::Yes => Ok(Some(ImplSource::Builtin(source, nested))),
@@ -266,7 +268,7 @@ fn rematch_unsize<'tcx>(
                 infcx.tcx,
                 ObligationCause::dummy(),
                 goal.param_env,
-                ty::Binder::dummy(ty::OutlivesPredicate(a_ty, region)),
+                ty::OutlivesPredicate(a_ty, region),
             ));
 
             Ok(Some(ImplSource::Builtin(source, nested)))

@@ -751,9 +751,19 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 )
                 .must_apply_modulo_regions()
         {
+            let msg = if let ty::Adt(def, _) = ty.kind()
+                && [
+                    tcx.get_diagnostic_item(sym::Arc),
+                    tcx.get_diagnostic_item(sym::Rc),
+                ].contains(&Some(def.did()))
+            {
+                "clone the value to increment its reference count"
+            } else {
+                "consider cloning the value if the performance cost is acceptable"
+            };
             err.span_suggestion_verbose(
                 span.shrink_to_hi(),
-                "consider cloning the value if the performance cost is acceptable",
+                msg,
                 suggestion,
                 Applicability::MachineApplicable,
             );
@@ -2133,13 +2143,14 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                         self.current -= 1;
                     }
                     fn visit_expr(&mut self, expr: &hir::Expr<'tcx>) {
-                        if self.span == expr.span {
+                        if self.span == expr.span.source_callsite() {
                             self.found = self.current;
                         }
                         walk_expr(self, expr);
                     }
                 }
                 let source_info = self.body.source_info(location);
+                let proper_span = proper_span.source_callsite();
                 if let Some(scope) = self.body.source_scopes.get(source_info.scope)
                     && let ClearCrossCrate::Set(scope_data) = &scope.local_data
                     && let Some(node) = self.infcx.tcx.hir().find(scope_data.lint_root)

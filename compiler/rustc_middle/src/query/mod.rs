@@ -706,7 +706,7 @@ rustc_queries! {
         separate_provide_extern
     }
 
-    query adt_sized_constraint(key: DefId) -> &'tcx [Ty<'tcx>] {
+    query adt_sized_constraint(key: DefId) -> ty::EarlyBinder<&'tcx ty::List<Ty<'tcx>>> {
         desc { |tcx| "computing `Sized` constraints for `{}`", tcx.def_path_str(key) }
     }
 
@@ -749,7 +749,7 @@ rustc_queries! {
         separate_provide_extern
     }
 
-    /// Gets a map with the variance of every item; use `item_variance` instead.
+    /// Gets a map with the variance of every item; use `variances_of` instead.
     query crate_variances(_: ()) -> &'tcx ty::CrateVariancesMap<'tcx> {
         arena_cache
         desc { "computing the variances for items in this crate" }
@@ -1594,6 +1594,11 @@ rustc_queries! {
         arena_cache
         desc { "looking up the foreign modules of a linked crate" }
         separate_provide_extern
+    }
+
+    /// Lint against `extern fn` declarations having incompatible types.
+    query clashing_extern_declarations(_: ()) {
+        desc { "checking `extern fn` declarations are compatible" }
     }
 
     /// Identifies the entry-point (e.g., the `main` function) for a given

@@ -15,6 +15,7 @@
 #![feature(box_patterns)]
 #![feature(error_reporter)]
 #![allow(incomplete_features)]
+#![cfg_attr(not(bootstrap), allow(internal_features))]
 
 #[macro_use]
 extern crate rustc_macros;
@@ -556,18 +557,7 @@ impl Handler {
         sm: Option<Lrc<SourceMap>>,
         fallback_bundle: LazyFallbackBundle,
     ) -> Self {
-        let emitter = Box::new(EmitterWriter::stderr(
-            ColorConfig::Auto,
-            sm,
-            None,
-            fallback_bundle,
-            false,
-            false,
-            None,
-            false,
-            false,
-            TerminalUrl::No,
-        ));
+        let emitter = Box::new(EmitterWriter::stderr(ColorConfig::Auto, fallback_bundle).sm(sm));
         Self::with_emitter(emitter)
     }
     pub fn disable_warnings(mut self) -> Self {

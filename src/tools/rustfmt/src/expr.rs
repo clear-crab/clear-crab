@@ -256,7 +256,7 @@ pub(crate) fn format_expr(
             shape,
             SeparatorPlace::Back,
         ),
-        ast::ExprKind::Index(ref expr, ref index) => {
+        ast::ExprKind::Index(ref expr, ref index, _) => {
             rewrite_index(&**expr, &**index, context, shape)
         }
         ast::ExprKind::Repeat(ref expr, ref repeats) => rewrite_pair(
@@ -1342,7 +1342,7 @@ pub(crate) fn is_simple_expr(expr: &ast::Expr) -> bool {
         | ast::ExprKind::Field(ref expr, _)
         | ast::ExprKind::Try(ref expr)
         | ast::ExprKind::Unary(_, ref expr) => is_simple_expr(expr),
-        ast::ExprKind::Index(ref lhs, ref rhs) => is_simple_expr(lhs) && is_simple_expr(rhs),
+        ast::ExprKind::Index(ref lhs, ref rhs, _) => is_simple_expr(lhs) && is_simple_expr(rhs),
         ast::ExprKind::Repeat(ref lhs, ref rhs) => {
             is_simple_expr(lhs) && is_simple_expr(&*rhs.value)
         }
@@ -1382,12 +1382,8 @@ pub(crate) fn can_be_overflowed_expr(
                 || (context.use_block_indent() && args_len == 1)
         }
         ast::ExprKind::MacCall(ref mac) => {
-            match (
-                rustc_ast::ast::MacDelimiter::from_token(mac.args.delim.to_token()),
-                context.config.overflow_delimited_expr(),
-            ) {
-                (Some(ast::MacDelimiter::Bracket), true)
-                | (Some(ast::MacDelimiter::Brace), true) => true,
+            match (mac.args.delim, context.config.overflow_delimited_expr()) {
+                (Delimiter::Bracket, true) | (Delimiter::Brace, true) => true,
                 _ => context.use_block_indent() && args_len == 1,
             }
         }

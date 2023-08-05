@@ -23,6 +23,8 @@ parse_async_block_in_2015 = `async` blocks are only allowed in Rust 2018 or late
 parse_async_fn_in_2015 = `async fn` is not permitted in Rust 2015
     .label = to use `async fn`, switch to Rust 2018 or later
 
+parse_async_move_block_in_2015 = `async move` blocks are only allowed in Rust 2018 or later
+
 parse_async_move_order_incorrect = the order of `move` and `async` is incorrect
     .suggestion = try switching the order
 
@@ -270,6 +272,8 @@ parse_found_expr_would_be_stmt = expected expression, found `{$token}`
 parse_function_body_equals_expr = function body cannot be `= expression;`
     .suggestion = surround the expression with `{"{"}` and `{"}"}` instead of `=` and `;`
 
+parse_generic_args_in_pat_require_turbofish_syntax = generic args in patterns require the turbofish syntax
+
 parse_generic_parameters_without_angle_brackets = generic parameters without surrounding angle brackets
     .suggestion = surround the type parameters with angle brackets
 
@@ -456,6 +460,12 @@ parse_lone_slash = invalid trailing slash in literal
 parse_loop_else = `{$loop_kind}...else` loops are not supported
     .note = consider moving this `else` clause to a separate `if` statement and use a `bool` variable to control if it should run
     .loop_keyword = `else` is attached to this loop
+
+parse_macro_expands_to_adt_field = macros cannot expand to {$adt_ty} fields
+
+parse_macro_expands_to_enum_variant = macros cannot expand to enum variants
+
+parse_macro_expands_to_match_arm = macros cannot expand to match arms
 
 parse_macro_invocation_visibility = can't qualify macro invocation with `pub`
     .suggestion = remove the visibility

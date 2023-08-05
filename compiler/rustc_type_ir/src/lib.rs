@@ -6,6 +6,7 @@
 #![feature(unwrap_infallible)]
 #![deny(rustc::untranslatable_diagnostic)]
 #![deny(rustc::diagnostic_outside_of_impl)]
+#![cfg_attr(not(bootstrap), allow(internal_features))]
 
 #[macro_use]
 extern crate bitflags;
@@ -214,6 +215,11 @@ bitflags! {
         const HAS_RE_PLACEHOLDER          = 1 << 7;
         /// Does this have `ConstKind::Placeholder`?
         const HAS_CT_PLACEHOLDER          = 1 << 8;
+
+        /// Does this have placeholders?
+        const HAS_PLACEHOLDER           = TypeFlags::HAS_TY_PLACEHOLDER.bits
+                                          | TypeFlags::HAS_RE_PLACEHOLDER.bits
+                                          | TypeFlags::HAS_CT_PLACEHOLDER.bits;
 
         /// `true` if there are "names" of regions and so forth
         /// that are local to a particular fn/inferctxt

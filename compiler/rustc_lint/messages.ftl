@@ -72,6 +72,9 @@ lint_builtin_incomplete_features = the feature `{$name}` is incomplete and may n
     .note = see issue #{$n} <https://github.com/rust-lang/rust/issues/{$n}> for more information
     .help = consider using `min_{$name}` instead, which is more stable and complete
 
+lint_builtin_internal_features = the feature `{$name}` is internal to the compiler or standard library
+    .note = using it is strongly discouraged
+
 lint_builtin_keyword_idents = `{$kw}` is a keyword in the {$next} edition
     .suggestion = you can use a raw identifier to stay compatible
 
@@ -127,8 +130,6 @@ lint_builtin_unexpected_cli_config_name = unexpected `{$name}` as condition name
 lint_builtin_unexpected_cli_config_value = unexpected condition value `{$value}` for condition name `{$name}`
     .help = was set with `--cfg` but isn't in the `--check-cfg` expected values
 
-lint_builtin_unnameable_test_items = cannot test inner items
-
 lint_builtin_unpermitted_type_init_label = this code causes undefined behavior when executed
 lint_builtin_unpermitted_type_init_label_suggestion = help: use `MaybeUninit<T>` instead, and only call `assume_init` after initialization is done
 
@@ -166,8 +167,9 @@ lint_check_name_warning = {$msg}
 
 lint_command_line_source = `forbid` lint level was set on command line
 
-lint_confusable_identifier_pair = identifier pair considered confusable between `{$existing_sym}` and `{$sym}`
-    .label = this is where the previous identifier occurred
+lint_confusable_identifier_pair = found both `{$existing_sym}` and `{$sym}` as identifiers, which look alike
+    .current_use = this identifier can be confused with `{$existing_sym}`
+    .other_use = other identifier used here
 
 lint_cstring_ptr = getting the inner pointer of a temporary `CString`
     .as_ptr_label = this pointer will be invalid
@@ -212,9 +214,6 @@ lint_enum_intrinsics_mem_variant =
 lint_expectation = this lint expectation is unfulfilled
     .note = the `unfulfilled_lint_expectations` lint can't be expected and will always produce this message
     .rationale = {$rationale}
-
-lint_fn_null_check = function pointers are not nullable, so checking them for null will always return false
-    .help = wrap the function pointer inside an `Option` and use `Option::is_none` to check for null pointer value
 
 lint_for_loops_over_fallibles =
     for loop over {$article} `{$ty}`. This is more readably written as an `if let` statement
@@ -318,7 +317,11 @@ lint_invalid_nan_comparisons_eq_ne = incorrect NaN comparison, NaN cannot be dir
 
 lint_invalid_nan_comparisons_lt_le_gt_ge = incorrect NaN comparison, NaN is not orderable
 
-lint_invalid_reference_casting = casting `&T` to `&mut T` is undefined behavior, even if the reference is unused, consider instead using an `UnsafeCell`
+lint_invalid_reference_casting_assign_to_ref = assigning to `&T` is undefined behavior, consider using an `UnsafeCell`
+    .label = casting happend here
+
+lint_invalid_reference_casting_borrow_as_mut = casting `&T` to `&mut T` is undefined behavior, even if the reference is unused, consider instead using an `UnsafeCell`
+    .label = casting happend here
 
 lint_lintpass_by_hand = implementing `LintPass` by hand
     .help = try using `declare_lint_pass!` or `impl_lint_pass!` instead
@@ -449,6 +452,13 @@ lint_path_statement_drop = path statement drops value
     .suggestion = use `drop` to clarify the intent
 
 lint_path_statement_no_effect = path statement with no effect
+
+lint_ptr_null_checks_fn_ptr = function pointers are not nullable, so checking them for null will always return false
+    .help = wrap the function pointer inside an `Option` and use `Option::is_none` to check for null pointer value
+    .label = expression has type `{$orig_ty}`
+
+lint_ptr_null_checks_ref = references are not nullable, so checking them for null will always return false
+    .label = expression has type `{$orig_ty}`
 
 lint_query_instability = using `{$query}` can result in unstable query results
     .note = if you believe this case to be fine, allow this lint and add a comment explaining your rationale

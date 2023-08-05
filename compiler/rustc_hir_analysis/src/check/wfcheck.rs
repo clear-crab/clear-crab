@@ -194,7 +194,7 @@ fn check_item<'tcx>(tcx: TyCtxt<'tcx>, item: &'tcx hir::Item<'tcx>) {
             // We match on both `ty::ImplPolarity` and `ast::ImplPolarity` just to get the `!` span.
             match (tcx.impl_polarity(def_id), impl_.polarity) {
                 (ty::ImplPolarity::Positive, _) => {
-                    check_impl(tcx, item, impl_.self_ty, &impl_.of_trait, impl_.constness);
+                    check_impl(tcx, item, impl_.self_ty, &impl_.of_trait);
                 }
                 (ty::ImplPolarity::Negative, ast::ImplPolarity::Negative(span)) => {
                     // FIXME(#27579): what amount of WF checking do we need for neg impls?
@@ -245,13 +245,14 @@ fn check_item<'tcx>(tcx: TyCtxt<'tcx>, item: &'tcx hir::Item<'tcx>) {
         }
         // `ForeignItem`s are handled separately.
         hir::ItemKind::ForeignMod { .. } => {}
-        hir::ItemKind::TyAlias(hir_ty, ..) => {
+        hir::ItemKind::TyAlias(hir_ty, ast_generics) => {
             if tcx.features().lazy_type_alias
                 || tcx.type_of(item.owner_id).skip_binder().has_opaque_types()
             {
                 // Bounds of lazy type aliases and of eager ones that contain opaque types are respected.
                 // E.g: `type X = impl Trait;`, `type X = (impl Trait, Y);`.
                 check_item_type(tcx, def_id, hir_ty.span, UnsizedHandling::Allow);
+                check_variances_for_type_defn(tcx, item, ast_generics);
             }
         }
         _ => {}
@@ -555,8 +556,8 @@ fn gather_gat_bounds<'tcx, T: TypeFoldable<TyCtxt<'tcx>>>(
     for (region_a, region_a_idx) in &regions {
         // Ignore `'static` lifetimes for the purpose of this lint: it's
         // because we know it outlives everything and so doesn't give meaningful
-        // clues
-        if let ty::ReStatic = **region_a {
+        // clues. Also ignore `ReError`, to avoid knock-down errors.
+        if let ty::ReStatic | ty::ReError(_) = **region_a {
             continue;
         }
         // For each region argument (e.g., `'a` in our example), check for a
@@ -599,8 +600,9 @@ fn gather_gat_bounds<'tcx, T: TypeFoldable<TyCtxt<'tcx>>>(
         // on the GAT itself.
         for (region_b, region_b_idx) in &regions {
             // Again, skip `'static` because it outlives everything. Also, we trivially
-            // know that a region outlives itself.
-            if ty::ReStatic == **region_b || region_a == region_b {
+            // know that a region outlives itself. Also ignore `ReError`, to avoid
+            // knock-down errors.
+            if matches!(**region_b, ty::ReStatic | ty::ReError(_)) || region_a == region_b {
                 continue;
             }
             if region_known_to_outlive(
@@ -1190,7 +1192,6 @@ fn check_impl<'tcx>(
     item: &'tcx hir::Item<'tcx>,
     ast_self_ty: &hir::Ty<'_>,
     ast_trait_ref: &Option<hir::TraitRef<'_>>,
-    constness: hir::Constness,
 ) {
     enter_wf_checking_ctxt(tcx, item.span, item.owner_id.def_id, |wfcx| {
         match ast_trait_ref {
@@ -1204,14 +1205,8 @@ fn check_impl<'tcx>(
                     Some(WellFormedLoc::Ty(item.hir_id().expect_owner().def_id)),
                     trait_ref,
                 );
-                let trait_pred = ty::TraitPredicate {
-                    trait_ref,
-                    constness: match constness {
-                        hir::Constness::Const => ty::BoundConstness::ConstIfConst,
-                        hir::Constness::NotConst => ty::BoundConstness::NotConst,
-                    },
-                    polarity: ty::ImplPolarity::Positive,
-                };
+                let trait_pred =
+                    ty::TraitPredicate { trait_ref, polarity: ty::ImplPolarity::Positive };
                 let mut obligations = traits::wf::trait_obligations(
                     wfcx.infcx,
                     wfcx.param_env,
@@ -1706,10 +1701,27 @@ fn check_variances_for_type_defn<'tcx>(
     hir_generics: &hir::Generics<'_>,
 ) {
     let identity_args = ty::GenericArgs::identity_for_item(tcx, item.owner_id);
-    for field in tcx.adt_def(item.owner_id).all_fields() {
-        if field.ty(tcx, identity_args).references_error() {
-            return;
+
+    match item.kind {
+        ItemKind::Enum(..) | ItemKind::Struct(..) | ItemKind::Union(..) => {
+            for field in tcx.adt_def(item.owner_id).all_fields() {
+                if field.ty(tcx, identity_args).references_error() {
+                    return;
+                }
+            }
         }
+        ItemKind::TyAlias(..) => {
+            let ty = tcx.type_of(item.owner_id).instantiate_identity();
+
+            if tcx.features().lazy_type_alias || ty.has_opaque_types() {
+                if ty.references_error() {
+                    return;
+                }
+            } else {
+                bug!();
+            }
+        }
+        _ => bug!(),
     }
 
     let ty_predicates = tcx.predicates_of(item.owner_id);
