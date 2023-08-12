@@ -59,8 +59,7 @@ use rustc_serialize::opaque::{FileEncodeResult, FileEncoder};
 use rustc_session::config::CrateType;
 use rustc_session::cstore::{CrateStoreDyn, Untracked};
 use rustc_session::lint::Lint;
-use rustc_session::Limit;
-use rustc_session::Session;
+use rustc_session::{Limit, MetadataKind, Session};
 use rustc_span::def_id::{DefPathHash, StableCrateId};
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
 use rustc_span::{Span, DUMMY_SP};
@@ -527,6 +526,13 @@ pub struct GlobalCtxt<'tcx> {
     interners: CtxtInterners<'tcx>,
 
     pub sess: &'tcx Session,
+    crate_types: Vec<CrateType>,
+    /// The `stable_crate_id` is constructed out of the crate name and all the
+    /// `-C metadata` arguments passed to the compiler. Its value forms a unique
+    /// global identifier for the crate. It is used to allow multiple crates
+    /// with the same name to coexist. See the
+    /// `rustc_symbol_mangling` crate for more information.
+    stable_crate_id: StableCrateId,
 
     /// This only ever stores a `LintStore` but we don't want a dependency on that type here.
     ///
@@ -687,6 +693,8 @@ impl<'tcx> TyCtxt<'tcx> {
     /// has a valid reference to the context, to allow formatting values that need it.
     pub fn create_global_ctxt(
         s: &'tcx Session,
+        crate_types: Vec<CrateType>,
+        stable_crate_id: StableCrateId,
         lint_store: Lrc<dyn Any + sync::DynSend + sync::DynSync>,
         arena: &'tcx WorkerLocal<Arena<'tcx>>,
         hir_arena: &'tcx WorkerLocal<hir::Arena<'tcx>>,
@@ -705,6 +713,8 @@ impl<'tcx> TyCtxt<'tcx> {
 
         GlobalCtxt {
             sess: s,
+            crate_types,
+            stable_crate_id,
             lint_store,
             arena,
             hir_arena,
@@ -801,9 +811,46 @@ impl<'tcx> TyCtxt<'tcx> {
     }
 
     #[inline]
+    pub fn crate_types(self) -> &'tcx [CrateType] {
+        &self.crate_types
+    }
+
+    pub fn metadata_kind(self) -> MetadataKind {
+        self.crate_types()
+            .iter()
+            .map(|ty| match *ty {
+                CrateType::Executable | CrateType::Staticlib | CrateType::Cdylib => {
+                    MetadataKind::None
+                }
+                CrateType::Rlib => MetadataKind::Uncompressed,
+                CrateType::Dylib | CrateType::ProcMacro => MetadataKind::Compressed,
+            })
+            .max()
+            .unwrap_or(MetadataKind::None)
+    }
+
+    pub fn needs_metadata(self) -> bool {
+        self.metadata_kind() != MetadataKind::None
+    }
+
+    pub fn needs_crate_hash(self) -> bool {
+        // Why is the crate hash needed for these configurations?
+        // - debug_assertions: for the "fingerprint the result" check in
+        //   `rustc_query_system::query::plumbing::execute_job`.
+        // - incremental: for query lookups.
+        // - needs_metadata: for putting into crate metadata.
+        // - instrument_coverage: for putting into coverage data (see
+        //   `hash_mir_source`).
+        cfg!(debug_assertions)
+            || self.sess.opts.incremental.is_some()
+            || self.needs_metadata()
+            || self.sess.instrument_coverage()
+    }
+
+    #[inline]
     pub fn stable_crate_id(self, crate_num: CrateNum) -> StableCrateId {
         if crate_num == LOCAL_CRATE {
-            self.sess.local_stable_crate_id()
+            self.stable_crate_id
         } else {
             self.cstore_untracked().stable_crate_id(crate_num)
         }
@@ -813,7 +860,7 @@ impl<'tcx> TyCtxt<'tcx> {
     /// that the crate in question has already been loaded by the CrateStore.
     #[inline]
     pub fn stable_crate_id_to_crate_num(self, stable_crate_id: StableCrateId) -> CrateNum {
-        if stable_crate_id == self.sess.local_stable_crate_id() {
+        if stable_crate_id == self.stable_crate_id(LOCAL_CRATE) {
             LOCAL_CRATE
         } else {
             self.cstore_untracked().stable_crate_id_to_crate_num(stable_crate_id)
@@ -830,7 +877,7 @@ impl<'tcx> TyCtxt<'tcx> {
 
         // If this is a DefPathHash from the local crate, we can look up the
         // DefId in the tcx's `Definitions`.
-        if stable_crate_id == self.sess.local_stable_crate_id() {
+        if stable_crate_id == self.stable_crate_id(LOCAL_CRATE) {
             self.untracked.definitions.read().local_def_path_hash_to_def_id(hash, err).to_def_id()
         } else {
             // If this is a DefPathHash from an upstream crate, let the CrateStore map
@@ -847,7 +894,7 @@ impl<'tcx> TyCtxt<'tcx> {
         // statements within the query system and we'd run into endless
         // recursion otherwise.
         let (crate_name, stable_crate_id) = if def_id.is_local() {
-            (self.crate_name(LOCAL_CRATE), self.sess.local_stable_crate_id())
+            (self.crate_name(LOCAL_CRATE), self.stable_crate_id(LOCAL_CRATE))
         } else {
             let cstore = &*self.cstore_untracked();
             (cstore.crate_name(def_id.krate), cstore.stable_crate_id(def_id.krate))
@@ -986,7 +1033,7 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn local_crate_exports_generics(self) -> bool {
         debug_assert!(self.sess.opts.share_generics());
 
-        self.sess.crate_types().iter().any(|crate_type| {
+        self.crate_types().iter().any(|crate_type| {
             match crate_type {
                 CrateType::Executable
                 | CrateType::Staticlib
@@ -1062,7 +1109,7 @@ impl<'tcx> TyCtxt<'tcx> {
         if let Some(hir::FnDecl { output: hir::FnRetTy::Return(hir_output), .. }) = self.hir().fn_decl_by_hir_id(hir_id)
             && let hir::TyKind::Path(hir::QPath::Resolved(
                 None,
-                hir::Path { res: hir::def::Res::Def(DefKind::TyAlias, def_id), .. }, )) = hir_output.kind
+                hir::Path { res: hir::def::Res::Def(DefKind::TyAlias { .. }, def_id), .. }, )) = hir_output.kind
             && let Some(local_id) = def_id.as_local()
             && let Some(alias_ty) = self.hir().get_by_def_id(local_id).alias_ty() // it is type alias
             && let Some(alias_generics) = self.hir().get_by_def_id(local_id).generics()
@@ -1931,6 +1978,84 @@ impl<'tcx> TyCtxt<'tcx> {
         )
     }
 
+    /// Given the def-id of an early-bound lifetime on an RPIT corresponding to
+    /// a duplicated captured lifetime, map it back to the early- or late-bound
+    /// lifetime of the function from which it originally as captured. If it is
+    /// a late-bound lifetime, this will represent the liberated (`ReFree`) lifetime
+    /// of the signature.
+    // FIXME(RPITIT): if we ever synthesize new lifetimes for RPITITs and not just
+    // re-use the generics of the opaque, this function will need to be tweaked slightly.
+    pub fn map_rpit_lifetime_to_fn_lifetime(
+        self,
+        mut rpit_lifetime_param_def_id: LocalDefId,
+    ) -> ty::Region<'tcx> {
+        debug_assert!(
+            matches!(self.def_kind(rpit_lifetime_param_def_id), DefKind::LifetimeParam),
+            "{rpit_lifetime_param_def_id:?} is a {}",
+            self.def_descr(rpit_lifetime_param_def_id.to_def_id())
+        );
+
+        loop {
+            let parent = self.local_parent(rpit_lifetime_param_def_id);
+            let hir::OpaqueTy { lifetime_mapping, .. } =
+                self.hir().get_by_def_id(parent).expect_item().expect_opaque_ty();
+
+            let Some((lifetime, _)) = lifetime_mapping
+                .iter()
+                .find(|(_, duplicated_param)| *duplicated_param == rpit_lifetime_param_def_id)
+            else {
+                bug!("duplicated lifetime param should be present");
+            };
+
+            match self.named_bound_var(lifetime.hir_id) {
+                Some(resolve_bound_vars::ResolvedArg::EarlyBound(ebv)) => {
+                    let new_parent = self.parent(ebv);
+
+                    // If we map to another opaque, then it should be a parent
+                    // of the opaque we mapped from. Continue mapping.
+                    if matches!(self.def_kind(new_parent), DefKind::OpaqueTy) {
+                        debug_assert_eq!(self.parent(parent.to_def_id()), new_parent);
+                        rpit_lifetime_param_def_id = ebv.expect_local();
+                        continue;
+                    }
+
+                    let generics = self.generics_of(new_parent);
+                    return ty::Region::new_early_bound(
+                        self,
+                        ty::EarlyBoundRegion {
+                            def_id: ebv,
+                            index: generics
+                                .param_def_id_to_index(self, ebv)
+                                .expect("early-bound var should be present in fn generics"),
+                            name: self.hir().name(self.local_def_id_to_hir_id(ebv.expect_local())),
+                        },
+                    );
+                }
+                Some(resolve_bound_vars::ResolvedArg::LateBound(_, _, lbv)) => {
+                    let new_parent = self.parent(lbv);
+                    return ty::Region::new_free(
+                        self,
+                        new_parent,
+                        ty::BoundRegionKind::BrNamed(
+                            lbv,
+                            self.hir().name(self.local_def_id_to_hir_id(lbv.expect_local())),
+                        ),
+                    );
+                }
+                Some(resolve_bound_vars::ResolvedArg::Error(guar)) => {
+                    return ty::Region::new_error(self, guar);
+                }
+                _ => {
+                    return ty::Region::new_error_with_message(
+                        self,
+                        lifetime.ident.span,
+                        "cannot resolve lifetime",
+                    );
+                }
+            }
+        }
+    }
+
     /// Whether the `def_id` counts as const fn in the current crate, considering all active
     /// feature gates
     pub fn is_const_fn(self, def_id: DefId) -> bool {
@@ -1963,9 +2088,9 @@ impl<'tcx> TyCtxt<'tcx> {
         matches!(
             node,
             hir::Node::Item(hir::Item {
-                kind: hir::ItemKind::Impl(hir::Impl { constness: hir::Constness::Const, .. }),
+                kind: hir::ItemKind::Impl(hir::Impl { generics, .. }),
                 ..
-            })
+            }) if generics.params.iter().any(|p| self.has_attr(p.def_id, sym::rustc_host))
         )
     }
 

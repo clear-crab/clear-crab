@@ -231,7 +231,7 @@ rustc_queries! {
             action = {
                 use rustc_hir::def::DefKind;
                 match tcx.def_kind(key) {
-                    DefKind::TyAlias => "expanding type alias",
+                    DefKind::TyAlias { .. } => "expanding type alias",
                     DefKind::TraitAlias => "expanding trait alias",
                     _ => "computing type of",
                 }
@@ -396,11 +396,6 @@ rustc_queries! {
     query lint_expectations(_: ()) -> &'tcx Vec<(LintExpectationId, LintExpectation)> {
         arena_cache
         desc { "computing `#[expect]`ed lints in this crate" }
-    }
-
-    query parent_module_from_def_id(key: LocalDefId) -> LocalDefId {
-        eval_always
-        desc { |tcx| "getting the parent module of `{}`", tcx.def_path_str(key) }
     }
 
     query expn_that_defined(key: DefId) -> rustc_span::ExpnId {

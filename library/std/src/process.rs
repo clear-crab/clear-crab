@@ -280,6 +280,7 @@ impl Write for ChildStdin {
         io::Write::is_write_vectored(&&*self)
     }
 
+    #[inline]
     fn flush(&mut self) -> io::Result<()> {
         (&*self).flush()
     }
@@ -299,6 +300,7 @@ impl Write for &ChildStdin {
         self.inner.is_write_vectored()
     }
 
+    #[inline]
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
@@ -1528,7 +1530,7 @@ impl From<fs::File> for Stdio {
 // vs `_exit`.  Naming of Unix system calls is not standardised across Unices, so terminology is a
 // matter of convention and tradition.  For clarity we usually speak of `exit`, even when we might
 // mean an underlying system call such as `_exit`.
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug, Default)]
 #[stable(feature = "process", since = "1.0.0")]
 pub struct ExitStatus(imp::ExitStatus);
 

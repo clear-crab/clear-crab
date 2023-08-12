@@ -532,6 +532,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                         if let Err(guar) = ty.error_reported() {
                             return ty::Const::new_error(tcx, guar, ty).into();
                         }
+                        // FIXME(effects) see if we should special case effect params here
                         if !infer_args && has_default {
                             tcx.const_param_default(param.def_id)
                                 .instantiate(tcx, args.unwrap())
@@ -659,7 +660,6 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         &self,
         trait_ref: &hir::TraitRef<'_>,
         self_ty: Ty<'tcx>,
-        constness: ty::BoundConstness,
     ) -> ty::TraitRef<'tcx> {
         self.prohibit_generics(trait_ref.path.segments.split_last().unwrap().1.iter(), |_| {});
 
@@ -669,7 +669,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             self_ty,
             trait_ref.path.segments.last().unwrap(),
             true,
-            constness,
+            ty::BoundConstness::NotConst,
         )
     }
 
@@ -849,6 +849,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         self_ty: Ty<'tcx>,
         trait_segment: &hir::PathSegment<'_>,
         is_impl: bool,
+        // FIXME(effects) move all host param things in astconv to hir lowering
         constness: ty::BoundConstness,
     ) -> ty::TraitRef<'tcx> {
         let (generic_args, _) = self.create_args_for_ast_trait_ref(
@@ -907,19 +908,21 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         did: DefId,
         item_segment: &hir::PathSegment<'_>,
     ) -> Ty<'tcx> {
+        let tcx = self.tcx();
         let args = self.ast_path_args_for_ty(span, did, item_segment);
-        let ty = self.tcx().at(span).type_of(did);
+        let ty = tcx.at(span).type_of(did);
 
-        if matches!(self.tcx().def_kind(did), DefKind::TyAlias)
-            && (ty.skip_binder().has_opaque_types() || self.tcx().features().lazy_type_alias)
+        if let DefKind::TyAlias { lazy } = tcx.def_kind(did)
+            && (lazy || ty.skip_binder().has_opaque_types())
         {
             // Type aliases referring to types that contain opaque types (but aren't just directly
-            // referencing a single opaque type) get encoded as a type alias that normalization will
+            // referencing a single opaque type) as well as those defined in crates that have the
+            // feature `lazy_type_alias` enabled get encoded as a type alias that normalization will
             // then actually instantiate the where bounds of.
-            let alias_ty = self.tcx().mk_alias_ty(did, args);
-            Ty::new_alias(self.tcx(), ty::Weak, alias_ty)
+            let alias_ty = tcx.mk_alias_ty(did, args);
+            Ty::new_alias(tcx, ty::Weak, alias_ty)
         } else {
-            ty.instantiate(self.tcx(), args)
+            ty.instantiate(tcx, args)
         }
     }
 
@@ -2158,7 +2161,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             }
             Res::Def(
                 DefKind::Enum
-                | DefKind::TyAlias
+                | DefKind::TyAlias { .. }
                 | DefKind::Struct
                 | DefKind::Union
                 | DefKind::ForeignTy,
@@ -2712,11 +2715,8 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         };
         let i = hir.get_parent(fn_hir_id).expect_item().expect_impl();
 
-        let trait_ref = self.instantiate_mono_trait_ref(
-            i.of_trait.as_ref()?,
-            self.ast_ty_to_ty(i.self_ty),
-            ty::BoundConstness::NotConst,
-        );
+        let trait_ref =
+            self.instantiate_mono_trait_ref(i.of_trait.as_ref()?, self.ast_ty_to_ty(i.self_ty));
 
         let assoc = tcx.associated_items(trait_ref.def_id).find_by_name_and_kind(
             tcx,

@@ -364,7 +364,7 @@ pub trait PrettyPrinter<'tcx>:
                 self.write_str(get_local_name(&self, symbol, parent, parent_key).as_str())?;
                 self.write_str("::")?;
             } else if let DefKind::Struct | DefKind::Union | DefKind::Enum | DefKind::Trait
-                | DefKind::TyAlias | DefKind::Fn | DefKind::Const | DefKind::Static(_) = kind
+                | DefKind::TyAlias { .. } | DefKind::Fn | DefKind::Const | DefKind::Static(_) = kind
             {
             } else {
                 // If not covered above, like for example items out of `impl` blocks, fallback.
@@ -766,7 +766,7 @@ pub trait PrettyPrinter<'tcx>:
 
                 let parent = self.tcx().parent(def_id);
                 match self.tcx().def_kind(parent) {
-                    DefKind::TyAlias | DefKind::AssocTy => {
+                    DefKind::TyAlias { .. } | DefKind::AssocTy => {
                         // NOTE: I know we should check for NO_QUERIES here, but it's alright.
                         // `type_of` on a type alias or assoc type should never cause a cycle.
                         if let ty::Alias(ty::Opaque, ty::AliasTy { def_id: d, .. }) =
@@ -2841,6 +2841,11 @@ define_print_and_forward_display! {
 
     ty::TraitPredicate<'tcx> {
         p!(print(self.trait_ref.self_ty()), ": ");
+        if let Some(idx) = cx.tcx().generics_of(self.trait_ref.def_id).host_effect_index {
+            if self.trait_ref.args.const_at(idx) != cx.tcx().consts.true_ {
+                p!("~const ");
+            }
+        }
         // FIXME(effects) print `~const` here
         if let ty::ImplPolarity::Negative = self.polarity {
             p!("!");
@@ -2870,11 +2875,7 @@ define_print_and_forward_display! {
     }
 
     ty::ClosureKind {
-        match *self {
-            ty::ClosureKind::Fn => p!("Fn"),
-            ty::ClosureKind::FnMut => p!("FnMut"),
-            ty::ClosureKind::FnOnce => p!("FnOnce"),
-        }
+        p!(write("{}", self.as_str()))
     }
 
     ty::Predicate<'tcx> {
@@ -2983,7 +2984,7 @@ fn for_each_def(tcx: TyCtxt<'_>, mut collect_fn: impl for<'b> FnMut(&'b Ident, N
 
             match child.res {
                 def::Res::Def(DefKind::AssocTy, _) => {}
-                def::Res::Def(DefKind::TyAlias, _) => {}
+                def::Res::Def(DefKind::TyAlias { .. }, _) => {}
                 def::Res::Def(defkind, def_id) => {
                     if let Some(ns) = defkind.ns() {
                         collect_fn(&child.ident, ns, def_id);

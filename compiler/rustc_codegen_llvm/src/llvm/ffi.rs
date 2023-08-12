@@ -475,6 +475,8 @@ pub enum OptStage {
 pub struct SanitizerOptions {
     pub sanitize_address: bool,
     pub sanitize_address_recover: bool,
+    pub sanitize_cfi: bool,
+    pub sanitize_kcfi: bool,
     pub sanitize_memory: bool,
     pub sanitize_memory_recover: bool,
     pub sanitize_memory_track_origins: c_int,
@@ -894,6 +896,7 @@ extern "C" {
     pub fn LLVMRustGlobalAddMetadata<'a>(Val: &'a Value, KindID: c_uint, Metadata: &'a Metadata);
     pub fn LLVMValueAsMetadata(Node: &Value) -> &Metadata;
     pub fn LLVMIsAFunction(Val: &Value) -> Option<&Value>;
+    pub fn LLVMRustIsNonGVFunctionPointerTy(Val: &Value) -> bool;
 
     // Operations on constants of any type
     pub fn LLVMConstNull(Ty: &Type) -> &Value;
@@ -1704,6 +1707,8 @@ extern "C" {
     pub fn LLVMRustCoverageWriteFilenamesSectionToBuffer(
         Filenames: *const *const c_char,
         FilenamesLen: size_t,
+        Lengths: *const size_t,
+        LengthsLen: size_t,
         BufferOut: &RustString,
     );
 
@@ -1718,7 +1723,11 @@ extern "C" {
         BufferOut: &RustString,
     );
 
-    pub fn LLVMRustCoverageCreatePGOFuncNameVar(F: &Value, FuncName: *const c_char) -> &Value;
+    pub fn LLVMRustCoverageCreatePGOFuncNameVar(
+        F: &Value,
+        FuncName: *const c_char,
+        FuncNameLen: size_t,
+    ) -> &Value;
     pub fn LLVMRustCoverageHashByteArray(Bytes: *const c_char, NumBytes: size_t) -> u64;
 
     #[allow(improper_ctypes)]
@@ -2138,6 +2147,7 @@ extern "C" {
         TM: &'a TargetMachine,
         OptLevel: PassBuilderOptLevel,
         OptStage: OptStage,
+        IsLinkerPluginLTO: bool,
         NoPrepopulatePasses: bool,
         VerifyIR: bool,
         UseThinLTOBuffers: bool,
@@ -2332,6 +2342,7 @@ extern "C" {
         remark_passes: *const *const c_char,
         remark_passes_len: usize,
         remark_file: *const c_char,
+        pgo_available: bool,
     );
 
     #[allow(improper_ctypes)]

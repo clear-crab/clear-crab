@@ -1429,20 +1429,18 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
 
                         // Issue #109436, we need to add parentheses properly for method calls
                         // for example, `foo.into()` should be `(&foo).into()`
-                        if let Ok(snippet) = self.tcx.sess.source_map().span_to_snippet(
-                            self.tcx.sess.source_map().span_look_ahead(span, Some("."), Some(50)),
-                        ) {
-                            if snippet == "." {
-                                err.multipart_suggestion_verbose(
-                                    sugg_msg,
-                                    vec![
-                                        (span.shrink_to_lo(), format!("({sugg_prefix}")),
-                                        (span.shrink_to_hi(), ")".to_string()),
-                                    ],
-                                    Applicability::MaybeIncorrect,
-                                );
-                                return true;
-                            }
+                        if let Some(_) =
+                            self.tcx.sess.source_map().span_look_ahead(span, ".", Some(50))
+                        {
+                            err.multipart_suggestion_verbose(
+                                sugg_msg,
+                                vec![
+                                    (span.shrink_to_lo(), format!("({sugg_prefix}")),
+                                    (span.shrink_to_hi(), ")".to_string()),
+                                ],
+                                Applicability::MaybeIncorrect,
+                            );
+                            return true;
                         }
 
                         // Issue #104961, we need to add parentheses properly for compound expressions
@@ -2745,6 +2743,12 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             }
             ObligationCauseCode::BindingObligation(item_def_id, span)
             | ObligationCauseCode::ExprBindingObligation(item_def_id, span, ..) => {
+                if self.tcx.is_diagnostic_item(sym::Send, item_def_id)
+                    || self.tcx.lang_items().sync_trait() == Some(item_def_id)
+                {
+                    return;
+                }
+
                 let item_name = tcx.def_path_str(item_def_id);
                 let short_item_name = with_forced_trimmed_paths!(tcx.def_path_str(item_def_id));
                 let mut multispan = MultiSpan::from(span);

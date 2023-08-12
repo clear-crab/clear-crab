@@ -72,43 +72,16 @@ fn count_nodes(krate: &ast::Crate) -> usize {
     counter.count
 }
 
-pub fn register_plugins<'a>(
-    sess: &'a Session,
-    metadata_loader: &'a dyn MetadataLoader,
-    register_lints: impl Fn(&Session, &mut LintStore),
+pub(crate) fn create_lint_store(
+    sess: &Session,
+    metadata_loader: &dyn MetadataLoader,
+    register_lints: Option<impl Fn(&Session, &mut LintStore)>,
     pre_configured_attrs: &[ast::Attribute],
-    crate_name: Symbol,
-) -> Result<LintStore> {
-    // these need to be set "early" so that expansion sees `quote` if enabled.
-    let features = rustc_expand::config::features(sess, pre_configured_attrs);
-    sess.init_features(features);
-
-    let crate_types = util::collect_crate_types(sess, pre_configured_attrs);
-    sess.init_crate_types(crate_types);
-
-    let stable_crate_id = StableCrateId::new(
-        crate_name,
-        sess.crate_types().contains(&CrateType::Executable),
-        sess.opts.cg.metadata.clone(),
-        sess.cfg_version,
-    );
-    sess.stable_crate_id.set(stable_crate_id).expect("not yet initialized");
-    rustc_incremental::prepare_session_directory(sess, crate_name, stable_crate_id)?;
-
-    if sess.opts.incremental.is_some() {
-        sess.time("incr_comp_garbage_collect_session_directories", || {
-            if let Err(e) = rustc_incremental::garbage_collect_session_directories(sess) {
-                warn!(
-                    "Error while trying to garbage collect incremental \
-                     compilation cache directory: {}",
-                    e
-                );
-            }
-        });
-    }
-
+) -> LintStore {
     let mut lint_store = rustc_lint::new_lint_store(sess.enable_internal_lints());
-    register_lints(sess, &mut lint_store);
+    if let Some(register_lints) = register_lints {
+        register_lints(sess, &mut lint_store);
+    }
 
     let registrars = sess.time("plugin_loading", || {
         plugin::load::load_plugins(sess, metadata_loader, pre_configured_attrs)
@@ -120,7 +93,7 @@ pub fn register_plugins<'a>(
         }
     });
 
-    Ok(lint_store)
+    lint_store
 }
 
 fn pre_expansion_lint<'a>(
@@ -275,7 +248,7 @@ fn configure_and_expand(
         rustc_ast_passes::ast_validation::check_crate(sess, &krate, resolver.lint_buffer())
     });
 
-    let crate_types = sess.crate_types();
+    let crate_types = tcx.crate_types();
     let is_executable_crate = crate_types.contains(&CrateType::Executable);
     let is_proc_macro_crate = crate_types.contains(&CrateType::ProcMacro);
 
@@ -367,11 +340,12 @@ fn early_lint_checks(tcx: TyCtxt<'_>, (): ()) {
 
 // Returns all the paths that correspond to generated files.
 fn generated_output_paths(
-    sess: &Session,
+    tcx: TyCtxt<'_>,
     outputs: &OutputFilenames,
     exact_name: bool,
     crate_name: Symbol,
 ) -> Vec<PathBuf> {
+    let sess = tcx.sess;
     let mut out_filenames = Vec::new();
     for output_type in sess.opts.output_types.keys() {
         let out_filename = outputs.path(*output_type);
@@ -380,7 +354,7 @@ fn generated_output_paths(
             // If the filename has been overridden using `-o`, it will not be modified
             // by appending `.rlib`, `.exe`, etc., so we can skip this transformation.
             OutputType::Exe if !exact_name => {
-                for crate_type in sess.crate_types().iter() {
+                for crate_type in tcx.crate_types().iter() {
                     let p = filename_for_input(sess, *crate_type, crate_name, outputs);
                     out_filenames.push(p.as_path().to_path_buf());
                 }
@@ -613,7 +587,7 @@ fn output_filenames(tcx: TyCtxt<'_>, (): ()) -> Arc<OutputFilenames> {
     let outputs = util::build_output_filenames(&krate.attrs, sess);
 
     let output_paths =
-        generated_output_paths(sess, &outputs, sess.io.output_file.is_some(), crate_name);
+        generated_output_paths(tcx, &outputs, sess.io.output_file.is_some(), crate_name);
 
     // Ensure the source file isn't accidentally overwritten during compilation.
     if let Some(ref input_path) = sess.io.input.opt_path() {
@@ -691,6 +665,8 @@ pub static DEFAULT_EXTERN_QUERY_PROVIDERS: LazyLock<ExternProviders> = LazyLock:
 
 pub fn create_global_ctxt<'tcx>(
     compiler: &'tcx Compiler,
+    crate_types: Vec<CrateType>,
+    stable_crate_id: StableCrateId,
     lint_store: Lrc<LintStore>,
     dep_graph: DepGraph,
     untracked: Untracked,
@@ -723,6 +699,8 @@ pub fn create_global_ctxt<'tcx>(
         gcx_cell.get_or_init(move || {
             TyCtxt::create_global_ctxt(
                 sess,
+                crate_types,
+                stable_crate_id,
                 lint_store,
                 arena,
                 hir_arena,

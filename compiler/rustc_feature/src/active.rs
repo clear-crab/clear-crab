@@ -156,8 +156,6 @@ declare_features! (
     // -------------------------------------------------------------------------
     // no-tracking-issue-start
 
-    /// Allows using the `thiscall` ABI.
-    (active, abi_thiscall, "1.19.0", None, None),
     /// Allows using the `unadjusted` ABI; perma-unstable.
     (active, abi_unadjusted, "1.16.0", None, None),
     /// Allows using the `vectorcall` ABI.
@@ -315,6 +313,8 @@ declare_features! (
     (active, abi_msp430_interrupt, "1.16.0", Some(38487), None),
     /// Allows `extern "ptx-*" fn()`.
     (active, abi_ptx, "1.15.0", Some(38788), None),
+    /// Allows `extern "riscv-interrupt-m" fn()` and `extern "riscv-interrupt-s" fn()`.
+    (active, abi_riscv_interrupt, "CURRENT_RUSTC_VERSION", Some(111889), None),
     /// Allows `extern "x86-interrupt" fn()`.
     (active, abi_x86_interrupt, "1.17.0", Some(40180), None),
     /// Allows additional const parameter types, such as `&'static str` or user defined types

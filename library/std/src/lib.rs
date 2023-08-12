@@ -288,6 +288,7 @@
 #![feature(exact_size_is_empty)]
 #![feature(exclusive_wrapper)]
 #![feature(extend_one)]
+#![feature(float_gamma)]
 #![feature(float_minimum_maximum)]
 #![feature(float_next_up_down)]
 #![feature(hasher_prefixfree_extras)]
@@ -298,6 +299,7 @@
 #![feature(maybe_uninit_slice)]
 #![feature(maybe_uninit_uninit_array)]
 #![feature(maybe_uninit_write_slice)]
+#![feature(offset_of)]
 #![feature(panic_can_unwind)]
 #![feature(panic_info_message)]
 #![feature(panic_internals)]
@@ -395,9 +397,15 @@ extern crate libc;
 #[allow(unused_extern_crates)]
 extern crate unwind;
 
+// FIXME: #94122 this extern crate definition only exist here to stop
+// miniz_oxide docs leaking into std docs. Find better way to do it.
+// Remove exclusion from tidy platform check when this removed.
 #[doc(masked)]
 #[allow(unused_extern_crates)]
-#[cfg(feature = "miniz_oxide")]
+#[cfg(all(
+    not(all(windows, target_env = "msvc", not(target_vendor = "uwp"))),
+    feature = "miniz_oxide"
+))]
 extern crate miniz_oxide;
 
 // During testing, this crate is not actually the "real" std library, but rather

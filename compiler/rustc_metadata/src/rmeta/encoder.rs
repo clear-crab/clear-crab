@@ -819,7 +819,7 @@ fn should_encode_span(def_kind: DefKind) -> bool {
         | DefKind::Enum
         | DefKind::Variant
         | DefKind::Trait
-        | DefKind::TyAlias
+        | DefKind::TyAlias { .. }
         | DefKind::ForeignTy
         | DefKind::TraitAlias
         | DefKind::AssocTy
@@ -854,7 +854,7 @@ fn should_encode_attrs(def_kind: DefKind) -> bool {
         | DefKind::Enum
         | DefKind::Variant
         | DefKind::Trait
-        | DefKind::TyAlias
+        | DefKind::TyAlias { .. }
         | DefKind::ForeignTy
         | DefKind::TraitAlias
         | DefKind::AssocTy
@@ -895,7 +895,7 @@ fn should_encode_expn_that_defined(def_kind: DefKind) -> bool {
         | DefKind::Variant
         | DefKind::Trait
         | DefKind::Impl { .. } => true,
-        DefKind::TyAlias
+        DefKind::TyAlias { .. }
         | DefKind::ForeignTy
         | DefKind::TraitAlias
         | DefKind::AssocTy
@@ -930,7 +930,7 @@ fn should_encode_visibility(def_kind: DefKind) -> bool {
         | DefKind::Enum
         | DefKind::Variant
         | DefKind::Trait
-        | DefKind::TyAlias
+        | DefKind::TyAlias { .. }
         | DefKind::ForeignTy
         | DefKind::TraitAlias
         | DefKind::AssocTy
@@ -974,7 +974,7 @@ fn should_encode_stability(def_kind: DefKind) -> bool {
         | DefKind::Const
         | DefKind::Fn
         | DefKind::ForeignMod
-        | DefKind::TyAlias
+        | DefKind::TyAlias { .. }
         | DefKind::OpaqueTy
         | DefKind::Enum
         | DefKind::Union
@@ -1067,9 +1067,8 @@ fn should_encode_variances<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, def_kind: Def
         | DefKind::Closure
         | DefKind::Generator
         | DefKind::ExternCrate => false,
-        DefKind::TyAlias => {
-            tcx.features().lazy_type_alias
-                || tcx.type_of(def_id).instantiate_identity().has_opaque_types()
+        DefKind::TyAlias { lazy } => {
+            lazy || tcx.type_of(def_id).instantiate_identity().has_opaque_types()
         }
     }
 }
@@ -1081,7 +1080,7 @@ fn should_encode_generics(def_kind: DefKind) -> bool {
         | DefKind::Enum
         | DefKind::Variant
         | DefKind::Trait
-        | DefKind::TyAlias
+        | DefKind::TyAlias { .. }
         | DefKind::ForeignTy
         | DefKind::TraitAlias
         | DefKind::AssocTy
@@ -1121,7 +1120,7 @@ fn should_encode_type(tcx: TyCtxt<'_>, def_id: LocalDefId, def_kind: DefKind) ->
         | DefKind::Fn
         | DefKind::Const
         | DefKind::Static(..)
-        | DefKind::TyAlias
+        | DefKind::TyAlias { .. }
         | DefKind::ForeignTy
         | DefKind::Impl { .. }
         | DefKind::AssocFn
@@ -1181,7 +1180,7 @@ fn should_encode_fn_sig(def_kind: DefKind) -> bool {
         | DefKind::Const
         | DefKind::Static(..)
         | DefKind::Ctor(..)
-        | DefKind::TyAlias
+        | DefKind::TyAlias { .. }
         | DefKind::OpaqueTy
         | DefKind::ForeignTy
         | DefKind::Impl { .. }
@@ -1222,7 +1221,7 @@ fn should_encode_constness(def_kind: DefKind) -> bool {
         | DefKind::AssocConst
         | DefKind::AnonConst
         | DefKind::Static(..)
-        | DefKind::TyAlias
+        | DefKind::TyAlias { .. }
         | DefKind::OpaqueTy
         | DefKind::Impl { of_trait: false }
         | DefKind::ForeignTy
@@ -1255,7 +1254,7 @@ fn should_encode_const(def_kind: DefKind) -> bool {
         | DefKind::Field
         | DefKind::Fn
         | DefKind::Static(..)
-        | DefKind::TyAlias
+        | DefKind::TyAlias { .. }
         | DefKind::OpaqueTy
         | DefKind::ForeignTy
         | DefKind::Impl { .. }
@@ -1742,7 +1741,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
     }
 
     fn encode_proc_macros(&mut self) -> Option<ProcMacroData> {
-        let is_proc_macro = self.tcx.sess.crate_types().contains(&CrateType::ProcMacro);
+        let is_proc_macro = self.tcx.crate_types().contains(&CrateType::ProcMacro);
         if is_proc_macro {
             let tcx = self.tcx;
             let hir = tcx.hir();
@@ -2205,7 +2204,7 @@ fn encode_metadata_impl(tcx: TyCtxt<'_>, path: &Path) {
         source_file_cache,
         interpret_allocs: Default::default(),
         required_source_files,
-        is_proc_macro: tcx.sess.crate_types().contains(&CrateType::ProcMacro),
+        is_proc_macro: tcx.crate_types().contains(&CrateType::ProcMacro),
         hygiene_ctxt: &hygiene_ctxt,
         symbol_table: Default::default(),
     };

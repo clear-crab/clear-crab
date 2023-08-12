@@ -75,7 +75,7 @@ mod errors;
 mod ffi_unwind_calls;
 mod function_item_references;
 mod generator;
-mod inline;
+pub mod inline;
 mod instsimplify;
 mod large_enums;
 mod lower_intrinsics;
@@ -338,7 +338,14 @@ fn inner_mir_for_ctfe(tcx: TyCtxt<'_>, def: LocalDefId) -> Body<'_> {
         return shim::build_adt_ctor(tcx, def.to_def_id());
     }
 
-    let body = tcx.mir_drops_elaborated_and_const_checked(def).borrow().clone();
+    let body = tcx.mir_drops_elaborated_and_const_checked(def);
+    let body = match tcx.hir().body_const_context(def) {
+        // consts and statics do not have `optimized_mir`, so we can steal the body instead of
+        // cloning it.
+        Some(hir::ConstContext::Const | hir::ConstContext::Static(_)) => body.steal(),
+        Some(hir::ConstContext::ConstFn) => body.borrow().clone(),
+        None => bug!("`mir_for_ctfe` called on non-const {def:?}"),
+    };
 
     let mut body = remap_mir_for_const_eval_select(tcx, body, hir::Constness::Const);
     pm::run_passes(tcx, &mut body, &[&ctfe_limit::CtfeLimit], None);
@@ -417,10 +424,16 @@ fn mir_drops_elaborated_and_const_checked(tcx: TyCtxt<'_>, def: LocalDefId) -> &
 
     run_analysis_to_runtime_passes(tcx, &mut body);
 
+    // Now that drop elaboration has been performed, we can check for
+    // unconditional drop recursion.
+    rustc_mir_build::lints::check_drop_recursion(tcx, &body);
+
     tcx.alloc_steal_mir(body)
 }
 
-fn run_analysis_to_runtime_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
+// Made public such that `mir_drops_elaborated_and_const_checked` can be overridden
+// by custom rustc drivers, running all the steps by themselves.
+pub fn run_analysis_to_runtime_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
     assert!(body.phase == MirPhase::Analysis(AnalysisPhase::Initial));
     let did = body.source.def_id();
 

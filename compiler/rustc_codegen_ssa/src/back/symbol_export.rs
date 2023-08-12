@@ -19,7 +19,7 @@ use rustc_session::config::{CrateType, OomStrategy};
 use rustc_target::spec::SanitizerSet;
 
 pub fn threshold(tcx: TyCtxt<'_>) -> SymbolExportLevel {
-    crates_export_threshold(&tcx.sess.crate_types())
+    crates_export_threshold(tcx.crate_types())
 }
 
 fn crate_export_threshold(crate_type: CrateType) -> SymbolExportLevel {
@@ -233,15 +233,6 @@ fn exported_symbols_provider_local(
             ));
         }
 
-        symbols.push((
-            ExportedSymbol::NoDefId(SymbolName::new(tcx, OomStrategy::SYMBOL)),
-            SymbolExportInfo {
-                level: SymbolExportLevel::Rust,
-                kind: SymbolExportKind::Text,
-                used: false,
-            },
-        ));
-
         let exported_symbol =
             ExportedSymbol::NoDefId(SymbolName::new(tcx, NO_ALLOC_SHIM_IS_UNSTABLE));
         symbols.push((
@@ -299,8 +290,8 @@ fn exported_symbols_provider_local(
         }));
     }
 
-    if tcx.sess.crate_types().contains(&CrateType::Dylib)
-        || tcx.sess.crate_types().contains(&CrateType::ProcMacro)
+    if tcx.crate_types().contains(&CrateType::Dylib)
+        || tcx.crate_types().contains(&CrateType::ProcMacro)
     {
         let symbol_name = metadata_symbol_name(tcx);
         let exported_symbol = ExportedSymbol::NoDefId(SymbolName::new(tcx, &symbol_name));

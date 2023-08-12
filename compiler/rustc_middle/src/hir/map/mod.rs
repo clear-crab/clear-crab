@@ -196,7 +196,9 @@ impl<'hir> Map<'hir> {
                 ItemKind::Macro(_, macro_kind) => DefKind::Macro(macro_kind),
                 ItemKind::Mod(..) => DefKind::Mod,
                 ItemKind::OpaqueTy(..) => DefKind::OpaqueTy,
-                ItemKind::TyAlias(..) => DefKind::TyAlias,
+                ItemKind::TyAlias(..) => {
+                    DefKind::TyAlias { lazy: self.tcx.features().lazy_type_alias }
+                }
                 ItemKind::Enum(..) => DefKind::Enum,
                 ItemKind::Struct(..) => DefKind::Struct,
                 ItemKind::Union(..) => DefKind::Union,
@@ -735,17 +737,6 @@ impl<'hir> Map<'hir> {
         }
     }
 
-    /// Returns the `OwnerId` of `id`'s nearest module parent, or `id` itself if no
-    /// module parent is in this map.
-    pub(super) fn get_module_parent_node(self, hir_id: HirId) -> OwnerId {
-        for (def_id, node) in self.parent_owner_iter(hir_id) {
-            if let OwnerNode::Item(&Item { kind: ItemKind::Mod(_), .. }) = node {
-                return def_id;
-            }
-        }
-        CRATE_OWNER_ID
-    }
-
     /// When on an if expression, a match arm tail expression or a match arm, give back
     /// the enclosing `if` or `match` expression.
     ///
@@ -1219,7 +1210,7 @@ pub(super) fn crate_hash(tcx: TyCtxt<'_>, _: LocalCrate) -> Svh {
             owner_spans.hash_stable(&mut hcx, &mut stable_hasher);
         }
         tcx.sess.opts.dep_tracking_hash(true).hash_stable(&mut hcx, &mut stable_hasher);
-        tcx.sess.local_stable_crate_id().hash_stable(&mut hcx, &mut stable_hasher);
+        tcx.stable_crate_id(LOCAL_CRATE).hash_stable(&mut hcx, &mut stable_hasher);
         // Hash visibility information since it does not appear in HIR.
         resolutions.visibilities.hash_stable(&mut hcx, &mut stable_hasher);
         resolutions.has_pub_restricted.hash_stable(&mut hcx, &mut stable_hasher);

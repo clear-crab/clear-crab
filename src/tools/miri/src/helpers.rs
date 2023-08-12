@@ -1,6 +1,5 @@
 pub mod convert;
 
-use std::any::Any;
 use std::cmp;
 use std::iter;
 use std::num::NonZeroUsize;
@@ -24,24 +23,6 @@ use rustc_target::spec::abi::Abi;
 use rand::RngCore;
 
 use crate::*;
-
-/// A trait to work around not having trait object upcasting:
-/// Add `AsAny` as supertrait and your trait objects can be turned into `&dyn Any` on which you can
-/// then call `downcast`.
-pub trait AsAny: Any {
-    fn as_any(&self) -> &dyn Any;
-    fn as_any_mut(&mut self) -> &mut dyn Any;
-}
-impl<T: Any> AsAny for T {
-    #[inline(always)]
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    #[inline(always)]
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-}
 
 // This mapping should match `decode_error_kind` in
 // <https://github.com/rust-lang/rust/blob/master/library/std/src/sys/unix/mod.rs>.
@@ -337,7 +318,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
     /// Call a function: Push the stack frame and pass the arguments.
     /// For now, arguments must be scalars (so that the caller does not have to know the layout).
     ///
-    /// If you do not provie a return place, a dangling zero-sized place will be created
+    /// If you do not provide a return place, a dangling zero-sized place will be created
     /// for your convenience.
     fn call_function(
         &mut self,
