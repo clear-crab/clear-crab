@@ -98,32 +98,69 @@ impl<'tcx> LateLintPass<'tcx> for InvalidReferenceCasting {
 fn is_cast_from_const_to_mut<'tcx>(cx: &LateContext<'tcx>, e: &'tcx Expr<'tcx>) -> bool {
     let e = e.peel_blocks();
 
-    // <expr> as *mut ...
-    let e = if let ExprKind::Cast(e, t) = e.kind
-        && let ty::RawPtr(TypeAndMut { mutbl: Mutability::Mut, .. }) = cx.typeck_results().node_type(t.hir_id).kind() {
-        e
-    // <expr>.cast_mut()
-    } else if let ExprKind::MethodCall(_, expr, [], _) = e.kind
-        && let Some(def_id) = cx.typeck_results().type_dependent_def_id(e.hir_id)
-        && cx.tcx.is_diagnostic_item(sym::ptr_cast_mut, def_id) {
-        expr
-    } else {
-        return false;
-    };
+    fn from_casts<'tcx>(cx: &LateContext<'tcx>, e: &'tcx Expr<'tcx>) -> Option<&'tcx Expr<'tcx>> {
+        // <expr> as *mut ...
+        let mut e = if let ExprKind::Cast(e, t) = e.kind
+            && let ty::RawPtr(TypeAndMut { mutbl: Mutability::Mut, .. }) = cx.typeck_results().node_type(t.hir_id).kind() {
+            e
+        // <expr>.cast_mut()
+        } else if let ExprKind::MethodCall(_, expr, [], _) = e.kind
+            && let Some(def_id) = cx.typeck_results().type_dependent_def_id(e.hir_id)
+            && cx.tcx.is_diagnostic_item(sym::ptr_cast_mut, def_id) {
+            expr
+        } else {
+            return None;
+        };
 
-    let e = e.peel_blocks();
+        let mut had_at_least_one_cast = false;
+        loop {
+            e = e.peel_blocks();
+            // <expr> as *mut/const ... or <expr> as <uint>
+            e = if let ExprKind::Cast(expr, t) = e.kind
+                && matches!(cx.typeck_results().node_type(t.hir_id).kind(), ty::RawPtr(_) | ty::Uint(_))  {
+                had_at_least_one_cast = true;
+                expr
+            // <expr>.cast(), <expr>.cast_mut() or <expr>.cast_const()
+            } else if let ExprKind::MethodCall(_, expr, [], _) = e.kind
+                && let Some(def_id) = cx.typeck_results().type_dependent_def_id(e.hir_id)
+                && matches!(
+                    cx.tcx.get_diagnostic_name(def_id),
+                    Some(sym::ptr_cast | sym::const_ptr_cast | sym::ptr_cast_mut | sym::ptr_cast_const)
+                )
+            {
+                had_at_least_one_cast = true;
+                expr
+            // ptr::from_ref(<expr>)
+            } else if let ExprKind::Call(path, [arg]) = e.kind
+                && let ExprKind::Path(ref qpath) = path.kind
+                && let Some(def_id) = cx.qpath_res(qpath, path.hir_id).opt_def_id()
+                && cx.tcx.is_diagnostic_item(sym::ptr_from_ref, def_id) {
+                return Some(arg);
+            } else if had_at_least_one_cast {
+                return Some(e);
+            } else {
+                return None;
+            };
+        }
+    }
 
-    // <expr> as *const ...
-    let e = if let ExprKind::Cast(e, t) = e.kind
-        && let ty::RawPtr(TypeAndMut { mutbl: Mutability::Not, .. }) = cx.typeck_results().node_type(t.hir_id).kind() {
-        e
-    // ptr::from_ref(<expr>)
-    } else if let ExprKind::Call(path, [arg]) = e.kind
-        && let ExprKind::Path(ref qpath) = path.kind
-        && let Some(def_id) = cx.qpath_res(qpath, path.hir_id).opt_def_id()
-        && cx.tcx.is_diagnostic_item(sym::ptr_from_ref, def_id) {
-        arg
-    } else {
+    fn from_transmute<'tcx>(
+        cx: &LateContext<'tcx>,
+        e: &'tcx Expr<'tcx>,
+    ) -> Option<&'tcx Expr<'tcx>> {
+        // mem::transmute::<_, *mut _>(<expr>)
+        if let ExprKind::Call(path, [arg]) = e.kind
+            && let ExprKind::Path(ref qpath) = path.kind
+            && let Some(def_id) = cx.qpath_res(qpath, path.hir_id).opt_def_id()
+            && cx.tcx.is_diagnostic_item(sym::transmute, def_id)
+            && let ty::RawPtr(TypeAndMut { mutbl: Mutability::Mut, .. }) = cx.typeck_results().node_type(e.hir_id).kind() {
+            Some(arg)
+        } else {
+            None
+        }
+    }
+
+    let Some(e) = from_casts(cx, e).or_else(|| from_transmute(cx, e)) else {
         return false;
     };
 

@@ -53,7 +53,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             || self.suggest_no_capture_closure(err, expected, expr_ty)
             || self.suggest_boxing_when_appropriate(err, expr.span, expr.hir_id, expected, expr_ty)
             || self.suggest_block_to_brackets_peeling_refs(err, expr, expr_ty, expected)
-            || self.suggest_copied_cloned_or_as_ref(err, expr, expr_ty, expected, expected_ty_expr)
+            || self.suggest_copied_cloned_or_as_ref(err, expr, expr_ty, expected)
             || self.suggest_clone_for_ref(err, expr, expr_ty, expected)
             || self.suggest_into(err, expr, expr_ty, expected)
             || self.suggest_floating_point_literal(err, expr, expected)
@@ -83,6 +83,13 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         }
 
         self.annotate_expected_due_to_let_ty(err, expr, error);
+
+        // FIXME(#73154): For now, we do leak check when coercing function
+        // pointers in typeck, instead of only during borrowck. This can lead
+        // to these `RegionsInsufficientlyPolymorphic` errors that aren't helpful.
+        if matches!(error, Some(TypeError::RegionsInsufficientlyPolymorphic(..))) {
+            return;
+        }
 
         if self.is_destruct_assignment_desugaring(expr) {
             return;
@@ -263,22 +270,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let expr_ty = self.resolve_vars_if_possible(checked_ty);
         let mut err = self.err_ctxt().report_mismatched_types(&cause, expected, expr_ty, e);
 
-        let is_insufficiently_polymorphic =
-            matches!(e, TypeError::RegionsInsufficientlyPolymorphic(..));
-
-        // FIXME(#73154): For now, we do leak check when coercing function
-        // pointers in typeck, instead of only during borrowck. This can lead
-        // to these `RegionsInsufficientlyPolymorphic` errors that aren't helpful.
-        if !is_insufficiently_polymorphic {
-            self.emit_coerce_suggestions(
-                &mut err,
-                expr,
-                expr_ty,
-                expected,
-                expected_ty_expr,
-                Some(e),
-            );
-        }
+        self.emit_coerce_suggestions(&mut err, expr, expr_ty, expected, expected_ty_expr, Some(e));
 
         (expected, Some(err))
     }
