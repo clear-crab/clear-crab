@@ -971,9 +971,22 @@ impl<'mir, 'tcx> Machine<'mir, 'tcx> for MiriMachine<'mir, 'tcx> {
         ecx.assert_panic(msg, unwind)
     }
 
-    #[inline(always)]
-    fn abort(_ecx: &mut MiriInterpCx<'mir, 'tcx>, msg: String) -> InterpResult<'tcx, !> {
-        throw_machine_stop!(TerminationInfo::Abort(msg))
+    fn panic_nounwind(ecx: &mut InterpCx<'mir, 'tcx, Self>, msg: &str) -> InterpResult<'tcx> {
+        ecx.start_panic_nounwind(msg)
+    }
+
+    fn unwind_terminate(ecx: &mut InterpCx<'mir, 'tcx, Self>, reason: mir::UnwindTerminateReason) -> InterpResult<'tcx> {
+        // Call the lang item.
+        let panic = ecx.tcx.lang_items().get(reason.lang_item()).unwrap();
+        let panic = ty::Instance::mono(ecx.tcx.tcx, panic);
+        ecx.call_function(
+            panic,
+            Abi::Rust,
+            &[],
+            None,
+            StackPopCleanup::Goto { ret: None, unwind: mir::UnwindAction::Unreachable },
+        )?;
+        Ok(())
     }
 
     #[inline(always)]
@@ -1391,5 +1404,23 @@ impl<'mir, 'tcx> Machine<'mir, 'tcx> for MiriMachine<'mir, 'tcx> {
             profiler.finish_recording_interval_event(timing.unwrap());
         }
         res
+    }
+
+    fn after_local_allocated(
+        ecx: &mut InterpCx<'mir, 'tcx, Self>,
+        frame: usize,
+        local: mir::Local,
+        mplace: &MPlaceTy<'tcx, Provenance>
+    ) -> InterpResult<'tcx> {
+        let Some(Provenance::Concrete { alloc_id, .. }) = mplace.ptr.provenance else {
+            panic!("after_local_allocated should only be called on fresh allocations");
+        };
+        let local_decl = &ecx.active_thread_stack()[frame].body.local_decls[local];
+        let span = local_decl.source_info.span;
+        ecx.machine
+            .allocation_spans
+            .borrow_mut()
+            .insert(alloc_id, (span, None));
+        Ok(())
     }
 }

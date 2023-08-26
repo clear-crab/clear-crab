@@ -362,8 +362,13 @@ impl<'b, 'tcx> ElaborateDropsCtxt<'b, 'tcx> {
                                     UnwindAction::Unreachable => {
                                         Unwind::To(self.patch.unreachable_cleanup_block())
                                     }
-                                    UnwindAction::Terminate => {
-                                        Unwind::To(self.patch.terminate_block())
+                                    UnwindAction::Terminate(reason) => {
+                                        debug_assert_ne!(
+                                            reason,
+                                            UnwindTerminateReason::InCleanup,
+                                            "we are not in a cleanup block, InCleanup reason should be impossible"
+                                        );
+                                        Unwind::To(self.patch.terminate_block(reason))
                                     }
                                 }
                             };
@@ -470,7 +475,7 @@ impl<'b, 'tcx> ElaborateDropsCtxt<'b, 'tcx> {
                             // drop elaboration should handle that by itself
                             continue;
                         }
-                        TerminatorKind::Resume => {
+                        TerminatorKind::UnwindResume => {
                             // It is possible for `Resume` to be patched
                             // (in particular it can be patched to be replaced with
                             // a Goto; see `MirPatch::new`).
@@ -496,7 +501,8 @@ impl<'b, 'tcx> ElaborateDropsCtxt<'b, 'tcx> {
             if let TerminatorKind::Call {
                 destination,
                 target: Some(_),
-                unwind: UnwindAction::Continue | UnwindAction::Unreachable | UnwindAction::Terminate,
+                unwind:
+                    UnwindAction::Continue | UnwindAction::Unreachable | UnwindAction::Terminate(_),
                 ..
             } = data.terminator().kind
             {

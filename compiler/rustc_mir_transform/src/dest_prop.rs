@@ -647,8 +647,8 @@ impl WriteInfo {
                 }
             }
             TerminatorKind::Goto { .. }
-            | TerminatorKind::Resume
-            | TerminatorKind::Terminate
+            | TerminatorKind::UnwindResume
+            | TerminatorKind::UnwindTerminate(_)
             | TerminatorKind::Return
             | TerminatorKind::Unreachable { .. } => (),
             TerminatorKind::Drop { .. } => {

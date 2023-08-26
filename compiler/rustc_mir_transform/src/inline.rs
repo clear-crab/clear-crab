@@ -839,7 +839,7 @@ impl<'tcx> Visitor<'tcx> for CostChecker<'_, 'tcx> {
                     self.cost += LANDINGPAD_PENALTY;
                 }
             }
-            TerminatorKind::Resume => self.cost += RESUME_PENALTY,
+            TerminatorKind::UnwindResume => self.cost += RESUME_PENALTY,
             TerminatorKind::InlineAsm { unwind, .. } => {
                 self.cost += INSTR_COST;
                 if let UnwindAction::Cleanup(_) = unwind {
@@ -906,12 +906,12 @@ impl Integrator<'_, '_> {
                 UnwindAction::Cleanup(_) | UnwindAction::Continue => {
                     bug!("cleanup on cleanup block");
                 }
-                UnwindAction::Unreachable | UnwindAction::Terminate => return unwind,
+                UnwindAction::Unreachable | UnwindAction::Terminate(_) => return unwind,
             }
         }
 
         match unwind {
-            UnwindAction::Unreachable | UnwindAction::Terminate => unwind,
+            UnwindAction::Unreachable | UnwindAction::Terminate(_) => unwind,
             UnwindAction::Cleanup(target) => UnwindAction::Cleanup(self.map_block(target)),
             // Add an unwind edge to the original call's cleanup block
             UnwindAction::Continue => self.cleanup_block,
@@ -1017,15 +1017,15 @@ impl<'tcx> MutVisitor<'tcx> for Integrator<'_, 'tcx> {
                     TerminatorKind::Unreachable
                 }
             }
-            TerminatorKind::Resume => {
+            TerminatorKind::UnwindResume => {
                 terminator.kind = match self.cleanup_block {
                     UnwindAction::Cleanup(tgt) => TerminatorKind::Goto { target: tgt },
-                    UnwindAction::Continue => TerminatorKind::Resume,
+                    UnwindAction::Continue => TerminatorKind::UnwindResume,
                     UnwindAction::Unreachable => TerminatorKind::Unreachable,
-                    UnwindAction::Terminate => TerminatorKind::Terminate,
+                    UnwindAction::Terminate(reason) => TerminatorKind::UnwindTerminate(reason),
                 };
             }
-            TerminatorKind::Terminate => {}
+            TerminatorKind::UnwindTerminate(_) => {}
             TerminatorKind::Unreachable => {}
             TerminatorKind::FalseEdge { ref mut real_target, ref mut imaginary_target } => {
                 *real_target = self.map_block(*real_target);

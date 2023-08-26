@@ -10,14 +10,15 @@ use rustc_middle::mir::{
     traversal, BasicBlock, BinOp, Body, BorrowKind, CastKind, CopyNonOverlapping, Local, Location,
     MirPass, MirPhase, NonDivergingIntrinsic, NullOp, Operand, Place, PlaceElem, PlaceRef,
     ProjectionElem, RetagKind, RuntimePhase, Rvalue, SourceScope, Statement, StatementKind,
-    Terminator, TerminatorKind, UnOp, UnwindAction, VarDebugInfo, VarDebugInfoContents,
-    START_BLOCK,
+    Terminator, TerminatorKind, UnOp, UnwindAction, UnwindTerminateReason, VarDebugInfo,
+    VarDebugInfoContents, START_BLOCK,
 };
 use rustc_middle::ty::{self, InstanceDef, ParamEnv, Ty, TyCtxt, TypeVisitableExt};
 use rustc_mir_dataflow::impls::MaybeStorageLive;
 use rustc_mir_dataflow::storage::always_storage_live_locals;
 use rustc_mir_dataflow::{Analysis, ResultsCursor};
 use rustc_target::abi::{Size, FIRST_VARIANT};
+use rustc_target::spec::abi::Abi;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum EdgeKind {
@@ -58,6 +59,25 @@ impl<'tcx> MirPass<'tcx> for Validator {
             .iterate_to_fixpoint()
             .into_results_cursor(body);
 
+        let can_unwind = if mir_phase <= MirPhase::Runtime(RuntimePhase::Initial) {
+            // In this case `AbortUnwindingCalls` haven't yet been executed.
+            true
+        } else if !tcx.def_kind(def_id).is_fn_like() {
+            true
+        } else {
+            let body_ty = tcx.type_of(def_id).skip_binder();
+            let body_abi = match body_ty.kind() {
+                ty::FnDef(..) => body_ty.fn_sig(tcx).abi(),
+                ty::Closure(..) => Abi::RustCall,
+                ty::Generator(..) => Abi::Rust,
+                _ => {
+                    span_bug!(body.span, "unexpected body ty: {:?} phase {:?}", body_ty, mir_phase)
+                }
+            };
+
+            ty::layout::fn_can_unwind(tcx, Some(def_id), body_abi)
+        };
+
         let mut cfg_checker = CfgChecker {
             when: &self.when,
             body,
@@ -68,6 +88,7 @@ impl<'tcx> MirPass<'tcx> for Validator {
             storage_liveness,
             place_cache: FxHashSet::default(),
             value_cache: FxHashSet::default(),
+            can_unwind,
         };
         cfg_checker.visit_body(body);
         cfg_checker.check_cleanup_control_flow();
@@ -99,6 +120,9 @@ struct CfgChecker<'a, 'tcx> {
     storage_liveness: ResultsCursor<'a, 'tcx, MaybeStorageLive<'static>>,
     place_cache: FxHashSet<PlaceRef<'tcx>>,
     value_cache: FxHashSet<u128>,
+    // If `false`, then the MIR must not contain `UnwindAction::Continue` or
+    // `TerminatorKind::Resume`.
+    can_unwind: bool,
 }
 
 impl<'a, 'tcx> CfgChecker<'a, 'tcx> {
@@ -237,16 +261,29 @@ impl<'a, 'tcx> CfgChecker<'a, 'tcx> {
         match unwind {
             UnwindAction::Cleanup(unwind) => {
                 if is_cleanup {
-                    self.fail(location, "unwind on cleanup block");
+                    self.fail(location, "`UnwindAction::Cleanup` in cleanup block");
                 }
                 self.check_edge(location, unwind, EdgeKind::Unwind);
             }
             UnwindAction::Continue => {
                 if is_cleanup {
-                    self.fail(location, "unwind on cleanup block");
+                    self.fail(location, "`UnwindAction::Continue` in cleanup block");
+                }
+
+                if !self.can_unwind {
+                    self.fail(location, "`UnwindAction::Continue` in no-unwind function");
                 }
             }
-            UnwindAction::Unreachable | UnwindAction::Terminate => (),
+            UnwindAction::Terminate(UnwindTerminateReason::InCleanup) => {
+                if !is_cleanup {
+                    self.fail(
+                        location,
+                        "`UnwindAction::Terminate(InCleanup)` in a non-cleanup block",
+                    );
+                }
+            }
+            // These are allowed everywhere.
+            UnwindAction::Unreachable | UnwindAction::Terminate(UnwindTerminateReason::Abi) => (),
         }
     }
 }
@@ -464,13 +501,19 @@ impl<'a, 'tcx> Visitor<'tcx> for CfgChecker<'a, 'tcx> {
                     );
                 }
             }
-            TerminatorKind::Resume | TerminatorKind::Terminate => {
+            TerminatorKind::UnwindResume => {
                 let bb = location.block;
                 if !self.body.basic_blocks[bb].is_cleanup {
-                    self.fail(
-                        location,
-                        "Cannot `Resume` or `Terminate` from non-cleanup basic block",
-                    )
+                    self.fail(location, "Cannot `UnwindResume` from non-cleanup basic block")
+                }
+                if !self.can_unwind {
+                    self.fail(location, "Cannot `UnwindResume` in a function that cannot unwind")
+                }
+            }
+            TerminatorKind::UnwindTerminate(_) => {
+                let bb = location.block;
+                if !self.body.basic_blocks[bb].is_cleanup {
+                    self.fail(location, "Cannot `UnwindTerminate` from non-cleanup basic block")
                 }
             }
             TerminatorKind::Return => {
@@ -665,7 +708,7 @@ impl<'a, 'tcx> Visitor<'tcx> for TypeChecker<'a, 'tcx> {
                                 return;
                             };
 
-                            f_ty.ty
+                            ty::EarlyBinder::bind(f_ty.ty).instantiate(self.tcx, args)
                         } else {
                             let Some(&f_ty) = args.as_generator().prefix_tys().get(f.index())
                             else {
@@ -1198,8 +1241,8 @@ impl<'a, 'tcx> Visitor<'tcx> for TypeChecker<'a, 'tcx> {
             | TerminatorKind::FalseUnwind { .. }
             | TerminatorKind::InlineAsm { .. }
             | TerminatorKind::GeneratorDrop
-            | TerminatorKind::Resume
-            | TerminatorKind::Terminate
+            | TerminatorKind::UnwindResume
+            | TerminatorKind::UnwindTerminate(_)
             | TerminatorKind::Return
             | TerminatorKind::Unreachable => {}
         }
