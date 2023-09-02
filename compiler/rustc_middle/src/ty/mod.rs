@@ -162,8 +162,6 @@ pub struct ResolverOutputs {
 #[derive(Debug)]
 pub struct ResolverGlobalCtxt {
     pub visibilities: FxHashMap<LocalDefId, Visibility>,
-    /// This field is used to decide whether we should make `PRIVATE_IN_PUBLIC` a hard error.
-    pub has_pub_restricted: bool,
     /// Item with a given `LocalDefId` was defined during macro expansion with ID `ExpnId`.
     pub expn_that_defined: FxHashMap<LocalDefId, ExpnId>,
     pub effective_visibilities: EffectiveVisibilities,
@@ -238,7 +236,7 @@ pub struct ImplHeader<'tcx> {
     pub impl_def_id: DefId,
     pub self_ty: Ty<'tcx>,
     pub trait_ref: Option<TraitRef<'tcx>>,
-    pub predicates: Vec<(Predicate<'tcx>, Span)>,
+    pub predicates: Vec<Predicate<'tcx>>,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, TypeFoldable, TypeVisitable)]

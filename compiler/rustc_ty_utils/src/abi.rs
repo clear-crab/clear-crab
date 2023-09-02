@@ -172,7 +172,10 @@ fn conv_from_spec_abi(tcx: TyCtxt<'_>, abi: SpecAbi) -> Conv {
     use rustc_target::spec::abi::Abi::*;
     match tcx.sess.target.adjust_abi(abi) {
         RustIntrinsic | PlatformIntrinsic | Rust | RustCall => Conv::Rust,
-        RustCold => Conv::RustCold,
+
+        // This is intentionally not using `Conv::Cold`, as that has to preserve
+        // even SIMD registers, which is generally not a good trade-off.
+        RustCold => Conv::PreserveMost,
 
         // It's the ABI's job to select this, not ours.
         System { .. } => bug!("system abi should be selected elsewhere"),
@@ -589,13 +592,13 @@ fn make_thin_self_ptr<'tcx>(
             for i in 0..fat_pointer_layout.fields.count() {
                 let field_layout = fat_pointer_layout.field(cx, i);
 
-                if !field_layout.is_zst() {
+                if !field_layout.is_1zst() {
                     fat_pointer_layout = field_layout;
                     continue 'descend_newtypes;
                 }
             }
 
-            bug!("receiver has no non-zero-sized fields {:?}", fat_pointer_layout);
+            bug!("receiver has no non-1-ZST fields {:?}", fat_pointer_layout);
         }
 
         fat_pointer_layout.ty

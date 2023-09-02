@@ -61,6 +61,8 @@ mod aix_base;
 mod android_base;
 mod apple_base;
 pub use apple_base::deployment_target as current_apple_deployment_target;
+pub use apple_base::platform as current_apple_platform;
+pub use apple_base::sdk_version as current_apple_sdk_version;
 mod avr_gnu_base;
 pub use avr_gnu_base::ef_avr_arch;
 mod bpf_base;
@@ -2216,7 +2218,7 @@ impl Default for TargetOptions {
             mcount: "mcount".into(),
             llvm_mcount_intrinsic: None,
             llvm_abiname: "".into(),
-            relax_elf_relocations: true,
+            relax_elf_relocations: false,
             llvm_args: cvs![],
             use_ctors_section: false,
             eh_frame_header: true,
@@ -2275,6 +2277,13 @@ impl Target {
             Abi::Fastcall { .. } if self.arch == "x86" => abi,
             Abi::Vectorcall { .. } if ["x86", "x86_64"].contains(&&self.arch[..]) => abi,
             Abi::Fastcall { unwind } | Abi::Vectorcall { unwind } => Abi::C { unwind },
+
+            // The Windows x64 calling convention we use for `extern "Rust"`
+            // <https://learn.microsoft.com/en-us/cpp/build/x64-software-conventions#register-volatility-and-preservation>
+            // expects the callee to save `xmm6` through `xmm15`, but `PreserveMost`
+            // (that we use by default for `extern "rust-cold"`) doesn't save any of those.
+            // So to avoid bloating callers, just use the Rust convention here.
+            Abi::RustCold if self.is_like_windows && self.arch == "x86_64" => Abi::Rust,
 
             abi => abi,
         }
