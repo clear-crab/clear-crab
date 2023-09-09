@@ -302,8 +302,10 @@ impl StepDescription {
         }
     }
 
-    fn maybe_run(&self, builder: &Builder<'_>, pathsets: Vec<PathSet>) {
-        if pathsets.iter().any(|set| self.is_excluded(builder, set)) {
+    fn maybe_run(&self, builder: &Builder<'_>, mut pathsets: Vec<PathSet>) {
+        pathsets.retain(|set| !self.is_excluded(builder, set));
+
+        if pathsets.is_empty() {
             return;
         }
 
@@ -703,7 +705,8 @@ impl<'a> Builder<'a> {
                 llvm::Lld,
                 llvm::CrtBeginEnd,
                 tool::RustdocGUITest,
-                tool::OptimizedDist
+                tool::OptimizedDist,
+                tool::CoverageDump,
             ),
             Kind::Check | Kind::Clippy | Kind::Fix => describe!(
                 check::Std,
@@ -725,6 +728,7 @@ impl<'a> Builder<'a> {
                 test::Tidy,
                 test::Ui,
                 test::RunPassValgrind,
+                test::CoverageMap,
                 test::RunCoverage,
                 test::MirOpt,
                 test::Codegen,

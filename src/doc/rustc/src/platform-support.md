@@ -63,8 +63,9 @@ Tools](#tier-1-with-host-tools).
 ## Tier 2 with Host Tools
 
 Tier 2 targets can be thought of as "guaranteed to build". The Rust project
-builds official binary releases for each tier 2 target, and automated builds
-ensure that each tier 2 target builds after each change. Automated tests are
+builds official binary releases of the standard library (or, in some cases,
+only the `core` library) for each tier 2 target, and automated builds
+ensure that each tier 2 target can be used as build target after each change. Automated tests are
 not always run so it's not guaranteed to produce a working build, but tier 2
 targets often work to quite a good degree and patches are always welcome!
 
@@ -103,11 +104,12 @@ target | notes
 `x86_64-unknown-linux-musl` | 64-bit Linux with MUSL
 [`x86_64-unknown-netbsd`](platform-support/netbsd.md) | NetBSD/amd64
 
-## Tier 2
+## Tier 2 without Host Tools
 
 Tier 2 targets can be thought of as "guaranteed to build". The Rust project
-builds official binary releases for each tier 2 target, and automated builds
-ensure that each tier 2 target builds after each change. Automated tests are
+builds official binary releases of the standard library (or, in some cases,
+only the `core` library) for each tier 2 target, and automated builds
+ensure that each tier 2 target can be used as build target after each change. Automated tests are
 not always run so it's not guaranteed to produce a working build, but tier 2
 targets often work to quite a good degree and patches are always welcome! For
 the full requirements, see [Tier 2 target
@@ -179,6 +181,7 @@ target | std | notes
 `wasm32-unknown-emscripten` | ✓ | WebAssembly via Emscripten
 `wasm32-unknown-unknown` | ✓ | WebAssembly
 `wasm32-wasi` | ✓ | WebAssembly with WASI
+[`wasm32-wasi-preview1-threads`](platform-support/wasm32-wasi-preview1-threads.md) | ✓ |  | WebAssembly with WASI Preview 1 and threads
 `x86_64-apple-ios` | ✓ | 64-bit x86 iOS
 [`x86_64-fortanix-unknown-sgx`](platform-support/x86_64-fortanix-unknown-sgx.md) | ✓ | [Fortanix ABI] for 64-bit Intel SGX
 `x86_64-fuchsia` | ✓ | Alias for `x86_64-unknown-fuchsia`
@@ -321,7 +324,6 @@ target | std | host | notes
 `thumbv7a-pc-windows-msvc` | ? |  |
 `thumbv7a-uwp-windows-msvc` | ✓ |  |
 `thumbv7neon-unknown-linux-musleabihf` | ? |  | Thumb2-mode ARMv7-A Linux with NEON, MUSL
-[`wasm32-wasi-preview1-threads`](platform-support/wasm32-wasi-preview1-threads.md) | ✓ |  | WebAssembly with WASI Preview 1 and threads
 [`wasm64-unknown-unknown`](platform-support/wasm64-unknown-unknown.md) | ? |  | WebAssembly
 `x86_64-apple-ios-macabi` | ✓ |  | Apple Catalyst on x86_64
 [`x86_64-apple-tvos`](platform-support/apple-tvos.md) | ? | | x86 64-bit tvOS

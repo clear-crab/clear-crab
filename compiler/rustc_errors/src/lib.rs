@@ -44,7 +44,7 @@ use rustc_fluent_macro::fluent_messages;
 pub use rustc_lint_defs::{pluralize, Applicability};
 use rustc_span::source_map::SourceMap;
 pub use rustc_span::ErrorGuaranteed;
-use rustc_span::{Loc, Span};
+use rustc_span::{Loc, Span, DUMMY_SP};
 
 use std::borrow::Cow;
 use std::error::Report;
@@ -273,7 +273,7 @@ impl CodeSuggestion {
                 assert!(!lines.lines.is_empty() || bounding_span.is_dummy());
 
                 // We can't splice anything if the source is unavailable.
-                if !sm.ensure_source_file_source_present(lines.file.clone()) {
+                if !sm.ensure_source_file_source_present(&lines.file) {
                     return None;
                 }
 
@@ -1390,7 +1390,7 @@ impl HandlerInner {
                 debug!(?self.emitted_diagnostics);
                 let already_emitted_sub = |sub: &mut SubDiagnostic| {
                     debug!(?sub);
-                    if sub.level != Level::OnceNote {
+                    if sub.level != Level::OnceNote && sub.level != Level::OnceHelp {
                         return false;
                     }
                     let mut hasher = StableHasher::new();
@@ -1754,7 +1754,7 @@ impl DelayedDiagnostic {
             BacktraceStatus::Captured => {
                 let inner = &self.inner;
                 self.inner.subdiagnostic(DelayedAtWithNewline {
-                    span: inner.span.primary_span().unwrap(),
+                    span: inner.span.primary_span().unwrap_or(DUMMY_SP),
                     emitted_at: inner.emitted_at.clone(),
                     note: self.note,
                 });
@@ -1764,7 +1764,7 @@ impl DelayedDiagnostic {
             _ => {
                 let inner = &self.inner;
                 self.inner.subdiagnostic(DelayedAtWithoutNewline {
-                    span: inner.span.primary_span().unwrap(),
+                    span: inner.span.primary_span().unwrap_or(DUMMY_SP),
                     emitted_at: inner.emitted_at.clone(),
                     note: self.note,
                 });
@@ -1792,6 +1792,8 @@ pub enum Level {
     /// A note that is only emitted once.
     OnceNote,
     Help,
+    /// A help that is only emitted once.
+    OnceHelp,
     FailureNote,
     Allow,
     Expect(LintExpectationId),
@@ -1816,7 +1818,7 @@ impl Level {
             Note | OnceNote => {
                 spec.set_fg(Some(Color::Green)).set_intense(true);
             }
-            Help => {
+            Help | OnceHelp => {
                 spec.set_fg(Some(Color::Cyan)).set_intense(true);
             }
             FailureNote => {}
@@ -1831,7 +1833,7 @@ impl Level {
             Fatal | Error { .. } => "error",
             Warning(_) => "warning",
             Note | OnceNote => "note",
-            Help => "help",
+            Help | OnceHelp => "help",
             FailureNote => "failure-note",
             Allow => panic!("Shouldn't call on allowed error"),
             Expect(_) => panic!("Shouldn't call on expected error"),
