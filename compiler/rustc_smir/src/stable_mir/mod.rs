@@ -89,6 +89,10 @@ impl CrateItem {
     pub fn body(&self) -> mir::Body {
         with(|cx| cx.mir_body(self.0))
     }
+
+    pub fn span(&self) -> Span {
+        with(|cx| cx.span_of_an_item(self.0))
+    }
 }
 
 /// Return the function where execution starts if the current
@@ -145,6 +149,7 @@ pub trait Context {
     fn trait_impl(&mut self, trait_impl: &ImplDef) -> ImplTrait;
     fn generics_of(&mut self, def_id: DefId) -> Generics;
     fn predicates_of(&mut self, def_id: DefId) -> GenericPredicates;
+    fn explicit_predicates_of(&mut self, def_id: DefId) -> GenericPredicates;
     /// Get information about the local crate.
     fn local_crate(&self) -> Crate;
     /// Retrieve a list of all external crates.
@@ -155,6 +160,9 @@ pub trait Context {
 
     /// Prints the name of given `DefId`
     fn name_of_def_id(&self, def_id: DefId) -> String;
+
+    /// `Span` of an item
+    fn span_of_an_item(&mut self, def_id: DefId) -> Span;
 
     /// Obtain the representation of a type.
     fn ty_kind(&mut self, ty: Ty) -> TyKind;

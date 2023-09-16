@@ -110,6 +110,8 @@
 //
 // Library features:
 // tidy-alphabetical-start
+#![cfg_attr(bootstrap, feature(no_coverage))] // rust-lang/rust#84605
+#![cfg_attr(not(bootstrap), feature(coverage_attribute))] // rust-lang/rust#84605
 #![feature(char_indices_offset)]
 #![feature(const_align_of_val)]
 #![feature(const_align_of_val_raw)]
@@ -164,7 +166,6 @@
 #![feature(const_slice_split_at_mut)]
 #![feature(const_str_from_utf8_unchecked_mut)]
 #![feature(const_swap)]
-#![feature(const_transmute_copy)]
 #![feature(const_try)]
 #![feature(const_type_id)]
 #![feature(const_type_name)]
@@ -235,7 +236,6 @@
 #![feature(negative_impls)]
 #![feature(never_type)]
 #![feature(no_core)]
-#![feature(no_coverage)] // rust-lang/rust#84605
 #![feature(platform_intrinsics)]
 #![feature(prelude_import)]
 #![feature(repr_simd)]

@@ -16,8 +16,8 @@ use rustc_driver::{Callbacks, Compilation, RunCompiler};
 use rustc_interface::{interface, Queries};
 use rustc_middle::mir::interpret::AllocId;
 use rustc_middle::ty::TyCtxt;
-use rustc_session::EarlyErrorHandler;
 pub use rustc_span::def_id::{CrateNum, DefId};
+use rustc_span::Span;
 
 fn with_tables<R>(mut f: impl FnMut(&mut Tables<'_>) -> R) -> R {
     let mut ret = None;
@@ -160,6 +160,17 @@ impl<'tcx> Tables<'tcx> {
         self.alloc_ids.push(aid);
         stable_mir::AllocId(id)
     }
+
+    pub(crate) fn create_span(&mut self, span: Span) -> stable_mir::ty::Span {
+        for (i, &sp) in self.spans.iter().enumerate() {
+            if sp == span {
+                return stable_mir::ty::Span(i);
+            }
+        }
+        let id = self.spans.len();
+        self.spans.push(span);
+        stable_mir::ty::Span(id)
+    }
 }
 
 pub fn crate_num(item: &stable_mir::Crate) -> CrateNum {
@@ -167,7 +178,10 @@ pub fn crate_num(item: &stable_mir::Crate) -> CrateNum {
 }
 
 pub fn run(tcx: TyCtxt<'_>, f: impl FnOnce()) {
-    crate::stable_mir::run(Tables { tcx, def_ids: vec![], alloc_ids: vec![], types: vec![] }, f);
+    crate::stable_mir::run(
+        Tables { tcx, def_ids: vec![], alloc_ids: vec![], spans: vec![], types: vec![] },
+        f,
+    );
 }
 
 /// A type that provides internal information but that can still be used for debug purpose.
@@ -233,7 +247,6 @@ where
     /// continue the compilation afterwards (defaults to `Compilation::Continue`)
     fn after_analysis<'tcx>(
         &mut self,
-        _handler: &EarlyErrorHandler,
         _compiler: &interface::Compiler,
         queries: &'tcx Queries<'tcx>,
     ) -> Compilation {

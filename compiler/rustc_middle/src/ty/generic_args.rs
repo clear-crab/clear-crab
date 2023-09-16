@@ -379,12 +379,17 @@ impl<'tcx> GenericArgs<'tcx> {
         self.iter().filter_map(|k| k.as_const())
     }
 
+    /// Returns generic arguments that are not lifetimes or host effect params.
     #[inline]
     pub fn non_erasable_generics(
         &'tcx self,
+        tcx: TyCtxt<'tcx>,
+        def_id: DefId,
     ) -> impl DoubleEndedIterator<Item = GenericArgKind<'tcx>> + 'tcx {
-        self.iter().filter_map(|k| match k.unpack() {
-            GenericArgKind::Lifetime(_) => None,
+        let generics = tcx.generics_of(def_id);
+        self.iter().enumerate().filter_map(|(i, k)| match k.unpack() {
+            _ if Some(i) == generics.host_effect_index => None,
+            ty::GenericArgKind::Lifetime(_) => None,
             generic => Some(generic),
         })
     }
@@ -449,6 +454,11 @@ impl<'tcx> GenericArgs<'tcx> {
 
     pub fn host_effect_param(&'tcx self) -> Option<ty::Const<'tcx>> {
         self.consts().rfind(|x| matches!(x.kind(), ty::ConstKind::Param(p) if p.name == sym::host))
+    }
+
+    pub fn print_as_list(&self) -> String {
+        let v = self.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+        format!("[{}]", v.join(", "))
     }
 }
 

@@ -1086,7 +1086,7 @@ impl Options {
     /// Returns `true` if there will be an output file generated.
     pub fn will_create_output_file(&self) -> bool {
         !self.unstable_opts.parse_only && // The file is just being parsed
-            !self.unstable_opts.ls // The file is just being queried
+            self.unstable_opts.ls.is_empty() // The file is just being queried
     }
 
     #[inline]
@@ -1102,12 +1102,6 @@ impl Options {
 
     pub fn get_symbol_mangling_version(&self) -> SymbolManglingVersion {
         self.cg.symbol_mangling_version.unwrap_or(SymbolManglingVersion::Legacy)
-    }
-
-    #[allow(rustc::bad_opt_access)]
-    pub fn incremental_relative_spans(&self) -> bool {
-        self.unstable_opts.incremental_relative_spans
-            || (self.unstable_features.is_nightly_build() && self.incremental.is_some())
     }
 }
 
@@ -2982,6 +2976,7 @@ pub mod nightly_options {
     ) {
         let has_z_unstable_option = matches.opt_strs("Z").iter().any(|x| *x == "unstable-options");
         let really_allows_unstable_options = match_is_nightly_build(matches);
+        let mut nightly_options_on_stable = 0;
 
         for opt in flags.iter() {
             if opt.stability == OptionStability::Stable {
@@ -3002,19 +2997,26 @@ pub mod nightly_options {
             }
             match opt.stability {
                 OptionStability::Unstable => {
+                    nightly_options_on_stable += 1;
                     let msg = format!(
                         "the option `{}` is only accepted on the nightly compiler",
                         opt.name
                     );
                     let _ = handler.early_error_no_abort(msg);
-                    handler.early_note("selecting a toolchain with `+toolchain` arguments require a rustup proxy; see <https://rust-lang.github.io/rustup/concepts/index.html>");
-                    handler.early_help(
-                        "consider switching to a nightly toolchain: `rustup default nightly`",
-                    );
-                    handler.early_note("for more information about Rust's stability policy, see <https://doc.rust-lang.org/book/appendix-07-nightly-rust.html#unstable-features>");
                 }
                 OptionStability::Stable => {}
             }
+        }
+        if nightly_options_on_stable > 0 {
+            handler
+                .early_help("consider switching to a nightly toolchain: `rustup default nightly`");
+            handler.early_note("selecting a toolchain with `+toolchain` arguments require a rustup proxy; see <https://rust-lang.github.io/rustup/concepts/index.html>");
+            handler.early_note("for more information about Rust's stability policy, see <https://doc.rust-lang.org/book/appendix-07-nightly-rust.html#unstable-features>");
+            handler.early_error(format!(
+                "{} nightly option{} were parsed",
+                nightly_options_on_stable,
+                if nightly_options_on_stable > 1 { "s" } else { "" }
+            ));
         }
     }
 }

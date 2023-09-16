@@ -237,6 +237,7 @@ fn sidebar_type_alias<'a>(
 ) -> Vec<LinkBlock<'a>> {
     let mut items = vec![];
     if let Some(inner_type) = &t.inner_type {
+        items.push(LinkBlock::forced(Link::new("aliased-type", "Aliased type")));
         match inner_type {
             clean::TypeAliasInnerType::Enum { variants, is_non_exhaustive: _ } => {
                 let mut variants = variants
@@ -278,11 +279,12 @@ fn sidebar_assoc_items<'a>(
     links: &mut Vec<LinkBlock<'a>>,
 ) {
     let did = it.item_id.expect_def_id();
-    let cache = cx.cache();
+    let v = cx.shared.all_impls_for_item(it, it.item_id.expect_def_id());
+    let v = v.as_slice();
 
     let mut assoc_consts = Vec::new();
     let mut methods = Vec::new();
-    if let Some(v) = cache.impls.get(&did) {
+    if !v.is_empty() {
         let mut used_links = FxHashSet::default();
         let mut id_map = IdMap::new();
 
@@ -318,7 +320,7 @@ fn sidebar_assoc_items<'a>(
                     cx,
                     &mut deref_methods,
                     impl_,
-                    v,
+                    v.iter().copied(),
                     &mut derefs,
                     &mut used_links,
                 );
@@ -348,7 +350,7 @@ fn sidebar_deref_methods<'a>(
     cx: &'a Context<'_>,
     out: &mut Vec<LinkBlock<'a>>,
     impl_: &Impl,
-    v: &[Impl],
+    v: impl Iterator<Item = &'a Impl>,
     derefs: &mut DefIdSet,
     used_links: &mut FxHashSet<String>,
 ) {
@@ -373,7 +375,7 @@ fn sidebar_deref_methods<'a>(
             // Avoid infinite cycles
             return;
         }
-        let deref_mut = v.iter().any(|i| i.trait_did() == cx.tcx().lang_items().deref_mut_trait());
+        let deref_mut = { v }.any(|i| i.trait_did() == cx.tcx().lang_items().deref_mut_trait());
         let inner_impl = target
             .def_id(c)
             .or_else(|| {
@@ -424,7 +426,7 @@ fn sidebar_deref_methods<'a>(
                 cx,
                 out,
                 target_deref_impl,
-                target_impls,
+                target_impls.iter(),
                 derefs,
                 used_links,
             );

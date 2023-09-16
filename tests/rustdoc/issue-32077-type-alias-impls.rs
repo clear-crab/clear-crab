@@ -19,6 +19,8 @@ impl<T> Foo for GenericStruct<T> {}
 impl Bar for GenericStruct<u32> {}
 
 // @has 'foo/type.TypedefStruct.html'
+// We check that "Aliased type" is also present as a title in the sidebar.
+// @has - '//*[@class="sidebar-elems"]//h3/a[@href="#aliased-type"]' 'Aliased type'
 // We check that we have the implementation of the type alias itself.
 // @has - '//*[@id="impl-TypedefStruct"]/h3' 'impl TypedefStruct'
 // @has - '//*[@id="method.on_alias"]/h4' 'pub fn on_alias()'
@@ -29,6 +31,11 @@ impl Bar for GenericStruct<u32> {}
 // @!has - '//h3' 'impl Bar for GenericStruct<u32> {}'
 // Same goes for the `Deref` impl.
 // @!has - '//h2' 'Methods from Deref<Target = u32>'
+// @count - '//nav[@class="sidebar"]//a' 'on_alias' 1
+// @count - '//nav[@class="sidebar"]//a' 'on_gen' 1
+// @count - '//nav[@class="sidebar"]//a' 'Foo' 1
+// @!has - '//nav[@class="sidebar"]//a' 'Bar'
+// @!has - '//nav[@class="sidebar"]//a' 'on_u32'
 pub type TypedefStruct = GenericStruct<u8>;
 
 impl TypedefStruct {

@@ -21,6 +21,7 @@
 
 // FIXME: switch to something more ergonomic here, once available.
 // (Currently there is no way to opt into sysroot crates without `extern crate`.)
+extern crate pulldown_cmark;
 extern crate rustc_arena;
 extern crate rustc_ast;
 extern crate rustc_ast_pretty;
@@ -37,6 +38,7 @@ extern crate rustc_lexer;
 extern crate rustc_lint;
 extern crate rustc_middle;
 extern crate rustc_parse;
+extern crate rustc_resolve;
 extern crate rustc_session;
 extern crate rustc_span;
 extern crate rustc_target;
@@ -154,7 +156,6 @@ mod implicit_saturating_add;
 mod implicit_saturating_sub;
 mod implied_bounds_in_impls;
 mod inconsistent_struct_constructor;
-mod incorrect_impls;
 mod index_refutable_slice;
 mod indexing_slicing;
 mod infinite_iter;
@@ -210,6 +211,7 @@ mod misc;
 mod misc_early;
 mod mismatching_type_param_order;
 mod missing_assert_message;
+mod missing_asserts_for_indexing;
 mod missing_const_for_fn;
 mod missing_doc;
 mod missing_enforced_import_rename;
@@ -243,6 +245,7 @@ mod neg_multiply;
 mod new_without_default;
 mod no_effect;
 mod no_mangle_with_rust_abi;
+mod non_canonical_impls;
 mod non_copy_const;
 mod non_expressive_names;
 mod non_octal_unix_permissions;
@@ -695,7 +698,8 @@ pub fn register_plugins(store: &mut rustc_lint::LintStore, sess: &Session, conf:
     });
     store.register_late_pass(|_| Box::<shadow::Shadow>::default());
     store.register_late_pass(|_| Box::new(unit_types::UnitTypes));
-    store.register_late_pass(move |_| Box::new(loops::Loops::new(msrv())));
+    let enforce_iter_loop_reborrow = conf.enforce_iter_loop_reborrow;
+    store.register_late_pass(move |_| Box::new(loops::Loops::new(msrv(), enforce_iter_loop_reborrow)));
     store.register_late_pass(|_| Box::<main_recursion::MainRecursion>::default());
     store.register_late_pass(|_| Box::new(lifetimes::Lifetimes));
     store.register_late_pass(|_| Box::new(entry::HashMapPass));
@@ -1068,7 +1072,7 @@ pub fn register_plugins(store: &mut rustc_lint::LintStore, sess: &Session, conf:
             avoid_breaking_exported_api,
         ))
     });
-    store.register_late_pass(|_| Box::new(incorrect_impls::IncorrectImpls));
+    store.register_late_pass(|_| Box::new(non_canonical_impls::NonCanonicalImpls));
     store.register_late_pass(move |_| {
         Box::new(single_call_fn::SingleCallFn {
             avoid_breaking_exported_api,
@@ -1099,6 +1103,7 @@ pub fn register_plugins(store: &mut rustc_lint::LintStore, sess: &Session, conf:
     store.register_late_pass(|_| Box::new(ignored_unit_patterns::IgnoredUnitPatterns));
     store.register_late_pass(|_| Box::<reserve_after_initialization::ReserveAfterInitialization>::default());
     store.register_late_pass(|_| Box::new(implied_bounds_in_impls::ImpliedBoundsInImpls));
+    store.register_late_pass(|_| Box::new(missing_asserts_for_indexing::MissingAssertsForIndexing));
     // add lints here, do not remove this comment, it's used in `new_lint`
 }
 

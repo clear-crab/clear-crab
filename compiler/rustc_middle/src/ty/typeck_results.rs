@@ -165,7 +165,7 @@ pub struct TypeckResults<'tcx> {
     /// reading places that are mentioned in a closure (because of _ patterns). However,
     /// to ensure the places are initialized, we introduce fake reads.
     /// Consider these two examples:
-    /// ``` (discriminant matching with only wildcard arm)
+    /// ```ignore (discriminant matching with only wildcard arm)
     /// let x: u8;
     /// let c = || match x { _ => () };
     /// ```
@@ -173,7 +173,7 @@ pub struct TypeckResults<'tcx> {
     /// want to capture it. However, we do still want an error here, because `x` should have
     /// to be initialized at the point where c is created. Therefore, we add a "fake read"
     /// instead.
-    /// ``` (destructured assignments)
+    /// ```ignore (destructured assignments)
     /// let c = || {
     ///     let (t1, t2) = t;
     /// }
@@ -721,4 +721,15 @@ pub enum UserType<'tcx> {
     /// The canonical type is the result of `type_of(def_id)` with the
     /// given substitutions applied.
     TypeOf(DefId, UserArgs<'tcx>),
+}
+
+impl<'tcx> std::fmt::Display for UserType<'tcx> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ty(arg0) => {
+                ty::print::with_no_trimmed_paths!(write!(f, "Ty({})", arg0))
+            }
+            Self::TypeOf(arg0, arg1) => write!(f, "TypeOf({:?}, {:?})", arg0, arg1),
+        }
+    }
 }

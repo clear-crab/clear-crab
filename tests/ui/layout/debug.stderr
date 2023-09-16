@@ -162,7 +162,7 @@ error: layout_of(U) = Layout {
 LL | union U { f1: (i32, i32), f3: i32 }
    | ^^^^^^^
 
-error: layout_of(std::result::Result<i32, i32>) = Layout {
+error: layout_of(Result<i32, i32>) = Layout {
            size: Size(8 bytes),
            align: AbiAndPrefAlign {
                abi: Align(4 bytes),
@@ -522,7 +522,7 @@ error: layout_of(P5) = Layout {
 LL | union P5 { zst: [u16; 0], byte: u8 }
    | ^^^^^^^^
 
-error: layout_of(std::mem::MaybeUninit<u8>) = Layout {
+error: layout_of(MaybeUninit<u8>) = Layout {
            size: Size(1 bytes),
            align: AbiAndPrefAlign {
                abi: Align(1 bytes),
@@ -557,11 +557,21 @@ error: `#[rustc_layout]` can only be applied to `struct`/`enum`/`union` declarat
 LL | const C: () = ();
    | ^^^^^^^^^^^
 
+error[E0277]: the size for values of type `str` cannot be known at compilation time
+  --> $DIR/debug.rs:78:19
+   |
+LL | type Impossible = (str, str);
+   |                   ^^^^^^^^^^ doesn't have a size known at compile-time
+   |
+   = help: the trait `Sized` is not implemented for `str`
+   = note: only the last element of a tuple may have a dynamically sized type
+
 error: `#[rustc_layout]` can only be applied to `struct`/`enum`/`union` declarations and type aliases
   --> $DIR/debug.rs:74:5
    |
 LL |     const C: () = ();
    |     ^^^^^^^^^^^
 
-error: aborting due to 16 previous errors
+error: aborting due to 17 previous errors
 
+For more information about this error, try `rustc --explain E0277`.

@@ -9,7 +9,9 @@
 
 use crate::rustc_internal::{self, opaque};
 use crate::stable_mir::mir::{CopyNonOverlapping, UserTypeProjection, VariantIdx};
-use crate::stable_mir::ty::{FloatTy, GenericParamDef, IntTy, Movability, RigidTy, TyKind, UintTy};
+use crate::stable_mir::ty::{
+    FloatTy, GenericParamDef, IntTy, Movability, RigidTy, Span, TyKind, UintTy,
+};
 use crate::stable_mir::{self, CompilerError, Context};
 use rustc_hir as hir;
 use rustc_middle::mir::interpret::{alloc_range, AllocId};
@@ -40,6 +42,10 @@ impl<'tcx> Context for Tables<'tcx> {
 
     fn name_of_def_id(&self, def_id: stable_mir::DefId) -> String {
         self.tcx.def_path_str(self[def_id])
+    }
+
+    fn span_of_an_item(&mut self, def_id: stable_mir::DefId) -> Span {
+        self.tcx.def_span(self[def_id]).stable(self)
     }
 
     fn all_local_items(&mut self) -> stable_mir::CrateItems {
@@ -80,7 +86,7 @@ impl<'tcx> Context for Tables<'tcx> {
 
     fn mir_body(&mut self, item: stable_mir::DefId) -> stable_mir::mir::Body {
         let def_id = self[item];
-        let mir = self.tcx.optimized_mir(def_id);
+        let mir = self.tcx.instance_mir(ty::InstanceDef::Item(def_id));
         stable_mir::mir::Body {
             blocks: mir
                 .basic_blocks
@@ -131,6 +137,23 @@ impl<'tcx> Context for Tables<'tcx> {
                 .collect(),
         }
     }
+
+    fn explicit_predicates_of(
+        &mut self,
+        def_id: stable_mir::DefId,
+    ) -> stable_mir::ty::GenericPredicates {
+        let def_id = self[def_id];
+        let ty::GenericPredicates { parent, predicates } = self.tcx.explicit_predicates_of(def_id);
+        stable_mir::ty::GenericPredicates {
+            parent: parent.map(|did| self.trait_def(did)),
+            predicates: predicates
+                .iter()
+                .map(|(clause, span)| {
+                    (clause.as_predicate().kind().skip_binder().stable(self), span.stable(self))
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -164,6 +187,7 @@ pub struct Tables<'tcx> {
     pub tcx: TyCtxt<'tcx>,
     pub def_ids: Vec<DefId>,
     pub alloc_ids: Vec<AllocId>,
+    pub spans: Vec<rustc_span::Span>,
     pub types: Vec<MaybeStable<stable_mir::ty::TyKind, Ty<'tcx>>>,
 }
 
@@ -1293,7 +1317,7 @@ impl<'tcx> Stable<'tcx> for rustc_middle::ty::GenericParamDefKind {
             ty::GenericParamDefKind::Type { has_default, synthetic } => {
                 GenericParamDefKind::Type { has_default: *has_default, synthetic: *synthetic }
             }
-            ty::GenericParamDefKind::Const { has_default } => {
+            ty::GenericParamDefKind::Const { has_default, is_host_effect: _ } => {
                 GenericParamDefKind::Const { has_default: *has_default }
             }
         }
@@ -1493,9 +1517,8 @@ impl<'tcx> Stable<'tcx> for ty::Region<'tcx> {
 impl<'tcx> Stable<'tcx> for rustc_span::Span {
     type T = stable_mir::ty::Span;
 
-    fn stable(&self, _: &mut Tables<'tcx>) -> Self::T {
-        // FIXME: add a real implementation of stable spans
-        opaque(self)
+    fn stable(&self, tables: &mut Tables<'tcx>) -> Self::T {
+        tables.create_span(*self)
     }
 }
 

@@ -460,7 +460,7 @@ impl<'tcx> Visitor<'tcx> for ExtraComments<'tcx> {
                 ConstValue::ZeroSized => "<ZST>".to_string(),
                 ConstValue::Scalar(s) => format!("Scalar({s:?})"),
                 ConstValue::Slice { .. } => "Slice(..)".to_string(),
-                ConstValue::ByRef { .. } => "ByRef(..)".to_string(),
+                ConstValue::Indirect { .. } => "ByRef(..)".to_string(),
             };
 
             let fmt_valtree = |valtree: &ty::ValTree<'tcx>| match valtree {
@@ -583,8 +583,10 @@ fn write_scope_tree(
 
         let mut_str = local_decl.mutability.prefix_str();
 
-        let mut indented_decl =
-            format!("{0:1$}let {2}{3:?}: {4:?}", INDENT, indent, mut_str, local, local_decl.ty);
+        let mut indented_decl = ty::print::with_no_trimmed_paths!(format!(
+            "{0:1$}let {2}{3:?}: {4}",
+            INDENT, indent, mut_str, local, local_decl.ty
+        ));
         if let Some(user_ty) = &local_decl.user_ty {
             for user_ty in user_ty.projections() {
                 write!(indented_decl, " as {user_ty:?}").unwrap();
@@ -699,14 +701,18 @@ pub fn write_allocations<'tcx>(
     fn alloc_ids_from_const_val(val: ConstValue<'_>) -> impl Iterator<Item = AllocId> + '_ {
         match val {
             ConstValue::Scalar(interpret::Scalar::Ptr(ptr, _)) => {
-                Either::Left(Either::Left(std::iter::once(ptr.provenance)))
+                Either::Left(std::iter::once(ptr.provenance))
             }
-            ConstValue::Scalar(interpret::Scalar::Int { .. }) => {
-                Either::Left(Either::Right(std::iter::empty()))
+            ConstValue::Scalar(interpret::Scalar::Int { .. }) => Either::Right(std::iter::empty()),
+            ConstValue::ZeroSized => Either::Right(std::iter::empty()),
+            ConstValue::Slice { .. } => {
+                // `u8`/`str` slices, shouldn't contain pointers that we want to print.
+                Either::Right(std::iter::empty())
             }
-            ConstValue::ZeroSized => Either::Left(Either::Right(std::iter::empty())),
-            ConstValue::ByRef { alloc, .. } | ConstValue::Slice { data: alloc, .. } => {
-                Either::Right(alloc_ids_from_alloc(alloc))
+            ConstValue::Indirect { alloc_id, .. } => {
+                // FIXME: we don't actually want to print all of these, since some are printed nicely directly as values inline in MIR.
+                // Really we'd want `pretty_print_const_value` to decide which allocations to print, instead of having a separate visitor.
+                Either::Left(std::iter::once(alloc_id))
             }
         }
     }
@@ -1058,11 +1064,11 @@ fn write_user_type_annotations(
     for (index, annotation) in body.user_type_annotations.iter_enumerated() {
         writeln!(
             w,
-            "| {:?}: user_ty: {:?}, span: {}, inferred_ty: {:?}",
+            "| {:?}: user_ty: {}, span: {}, inferred_ty: {}",
             index.index(),
             annotation.user_ty,
             tcx.sess.source_map().span_to_embeddable_string(annotation.span),
-            annotation.inferred_ty,
+            with_no_trimmed_paths!(format!("{}", annotation.inferred_ty)),
         )?;
     }
     if !body.user_type_annotations.is_empty() {

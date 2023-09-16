@@ -2,6 +2,7 @@ use crate::abi::{self, Abi, Align, FieldsShape, Size};
 use crate::abi::{HasDataLayout, TyAbiInterface, TyAndLayout};
 use crate::spec::{self, HasTargetSpec};
 use rustc_span::Symbol;
+use std::fmt;
 use std::str::FromStr;
 
 mod aarch64;
@@ -382,8 +383,7 @@ impl<'a, Ty> TyAndLayout<'a, Ty> {
     /// only a single type (e.g., `(u32, u32)`). Such aggregates are often
     /// special-cased in ABIs.
     ///
-    /// Note: We generally ignore fields of zero-sized type when computing
-    /// this value (see #56877).
+    /// Note: We generally ignore 1-ZST fields when computing this value (see #56877).
     ///
     /// This is public so that it can be used in unit tests, but
     /// should generally only be relevant to the ABI details of
@@ -441,11 +441,17 @@ impl<'a, Ty> TyAndLayout<'a, Ty> {
                         let mut total = start;
 
                         for i in 0..layout.fields.count() {
-                            if !is_union && total != layout.fields.offset(i) {
-                                return Err(Heterogeneous);
+                            let field = layout.field(cx, i);
+                            if field.is_1zst() {
+                                // No data here and no impact on layout, can be ignored.
+                                // (We might be able to also ignore all aligned ZST but that's less clear.)
+                                continue;
                             }
 
-                            let field = layout.field(cx, i);
+                            if !is_union && total != layout.fields.offset(i) {
+                                // This field isn't just after the previous one we considered, abort.
+                                return Err(Heterogeneous);
+                            }
 
                             result = result.merge(field.homogeneous_aggregate(cx)?)?;
 
@@ -510,10 +516,18 @@ impl<'a, Ty> TyAndLayout<'a, Ty> {
 
 /// Information about how to pass an argument to,
 /// or return a value from, a function, under some ABI.
-#[derive(Clone, PartialEq, Eq, Hash, Debug, HashStable_Generic)]
+#[derive(Clone, PartialEq, Eq, Hash, HashStable_Generic)]
 pub struct ArgAbi<'a, Ty> {
     pub layout: TyAndLayout<'a, Ty>,
     pub mode: PassMode,
+}
+
+// Needs to be a custom impl because of the bounds on the `TyAndLayout` debug impl.
+impl<'a, Ty: fmt::Display> fmt::Debug for ArgAbi<'a, Ty> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let ArgAbi { layout, mode } = self;
+        f.debug_struct("ArgAbi").field("layout", layout).field("mode", mode).finish()
+    }
 }
 
 impl<'a, Ty> ArgAbi<'a, Ty> {
@@ -689,7 +703,7 @@ impl RiscvInterruptKind {
 ///
 /// I will do my best to describe this structure, but these
 /// comments are reverse-engineered and may be inaccurate. -NDM
-#[derive(Clone, PartialEq, Eq, Hash, Debug, HashStable_Generic)]
+#[derive(Clone, PartialEq, Eq, Hash, HashStable_Generic)]
 pub struct FnAbi<'a, Ty> {
     /// The LLVM types of each argument.
     pub args: Box<[ArgAbi<'a, Ty>]>,
@@ -708,6 +722,21 @@ pub struct FnAbi<'a, Ty> {
     pub conv: Conv,
 
     pub can_unwind: bool,
+}
+
+// Needs to be a custom impl because of the bounds on the `TyAndLayout` debug impl.
+impl<'a, Ty: fmt::Display> fmt::Debug for FnAbi<'a, Ty> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let FnAbi { args, ret, c_variadic, fixed_count, conv, can_unwind } = self;
+        f.debug_struct("FnAbi")
+            .field("args", args)
+            .field("ret", ret)
+            .field("c_variadic", c_variadic)
+            .field("fixed_count", fixed_count)
+            .field("conv", conv)
+            .field("can_unwind", can_unwind)
+            .finish()
+    }
 }
 
 /// Error produced by attempting to adjust a `FnAbi`, for a "foreign" ABI.

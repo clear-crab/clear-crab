@@ -1541,9 +1541,6 @@ options! {
     incremental_info: bool = (false, parse_bool, [UNTRACKED],
         "print high-level information about incremental reuse (or the lack thereof) \
         (default: no)"),
-    #[rustc_lint_opt_deny_field_access("use `Session::incremental_relative_spans` instead of this field")]
-    incremental_relative_spans: bool = (false, parse_bool, [TRACKED],
-        "hash spans relative to their parent item for incr. comp. (default: no)"),
     incremental_verify_ich: bool = (false, parse_bool, [UNTRACKED],
         "verify incr. comp. hashes of green query instances (default: no)"),
     inline_in_all_cgus: Option<bool> = (None, parse_opt_bool, [TRACKED],
@@ -1597,8 +1594,9 @@ options! {
         "what location details should be tracked when using caller_location, either \
         `none`, or a comma separated list of location details, for which \
         valid options are `file`, `line`, and `column` (default: `file,line,column`)"),
-    ls: bool = (false, parse_bool, [UNTRACKED],
-        "list the symbols defined by a library crate (default: no)"),
+    ls: Vec<String> = (Vec::new(), parse_list, [UNTRACKED],
+        "decode and print various parts of the crate metadata for a library crate \
+        (space separated)"),
     macro_backtrace: bool = (false, parse_bool, [UNTRACKED],
         "show macro backtraces (default: no)"),
     maximal_hir_to_mir_coverage: bool = (false, parse_bool, [TRACKED],
