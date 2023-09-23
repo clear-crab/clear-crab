@@ -35,7 +35,8 @@ use rustc_hir::def_id::DefId;
 use rustc_infer::infer::DefineOpaqueTypes;
 use rustc_infer::infer::LateBoundRegionConversionTime;
 use rustc_infer::traits::TraitObligation;
-use rustc_middle::dep_graph::{DepKind, DepNodeIndex};
+use rustc_middle::dep_graph::dep_kinds;
+use rustc_middle::dep_graph::DepNodeIndex;
 use rustc_middle::mir::interpret::ErrorHandled;
 use rustc_middle::traits::DefiningAnchor;
 use rustc_middle::ty::abstract_const::NotConstEvaluatable;
@@ -989,9 +990,10 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                                 Err(_) => Ok(EvaluatedToErr),
                             }
                         }
-                        (Err(ErrorHandled::Reported(_)), _)
-                        | (_, Err(ErrorHandled::Reported(_))) => Ok(EvaluatedToErr),
-                        (Err(ErrorHandled::TooGeneric), _) | (_, Err(ErrorHandled::TooGeneric)) => {
+                        (Err(ErrorHandled::Reported(..)), _)
+                        | (_, Err(ErrorHandled::Reported(..))) => Ok(EvaluatedToErr),
+                        (Err(ErrorHandled::TooGeneric(..)), _)
+                        | (_, Err(ErrorHandled::TooGeneric(..))) => {
                             if c1.has_non_region_infer() || c2.has_non_region_infer() {
                                 Ok(EvaluatedToAmbig)
                             } else {
@@ -1434,7 +1436,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         OP: FnOnce(&mut Self) -> R,
     {
         let (result, dep_node) =
-            self.tcx().dep_graph.with_anon_task(self.tcx(), DepKind::TraitSelect, || op(self));
+            self.tcx().dep_graph.with_anon_task(self.tcx(), dep_kinds::TraitSelect, || op(self));
         self.tcx().dep_graph.read_index(dep_node);
         (result, dep_node)
     }

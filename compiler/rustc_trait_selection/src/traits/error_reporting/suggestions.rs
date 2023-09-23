@@ -406,6 +406,20 @@ pub trait TypeErrCtxtExt<'tcx> {
         candidate_impls: &[ImplCandidate<'tcx>],
         span: Span,
     );
+
+    fn explain_hrtb_projection(
+        &self,
+        diag: &mut Diagnostic,
+        pred: ty::PolyTraitPredicate<'tcx>,
+        param_env: ty::ParamEnv<'tcx>,
+        cause: &ObligationCause<'tcx>,
+    );
+
+    fn suggest_desugaring_async_fn_in_trait(
+        &self,
+        err: &mut Diagnostic,
+        trait_ref: ty::PolyTraitRef<'tcx>,
+    );
 }
 
 fn predicate_constraint(generics: &hir::Generics<'_>, pred: ty::Predicate<'_>) -> (Span, String) {
@@ -2703,6 +2717,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             | ObligationCauseCode::IfExpressionWithNoElse
             | ObligationCauseCode::MainFunctionType
             | ObligationCauseCode::StartFunctionType
+            | ObligationCauseCode::LangFunctionType(_)
             | ObligationCauseCode::IntrinsicType
             | ObligationCauseCode::MethodReceiver
             | ObligationCauseCode::ReturnNoExpression
@@ -2991,6 +3006,24 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             }
             ObligationCauseCode::InlineAsmSized => {
                 err.note("all inline asm arguments must have a statically known size");
+            }
+            ObligationCauseCode::SizedClosureCapture(closure_def_id) => {
+                err.note("all values captured by value by a closure must have a statically known size");
+                let hir::ExprKind::Closure(closure) = self.tcx.hir().get_by_def_id(closure_def_id).expect_expr().kind else {
+                    bug!("expected closure in SizedClosureCapture obligation");
+                };
+                if let hir::CaptureBy::Value = closure.capture_clause
+                    && let Some(span) = closure.fn_arg_span
+                {
+                    err.span_label(span, "this closure captures all values by move");
+                }
+            }
+            ObligationCauseCode::SizedGeneratorInterior(generator_def_id) => {
+                let what = match self.tcx.generator_kind(generator_def_id) {
+                    None | Some(hir::GeneratorKind::Gen) => "yield",
+                    Some(hir::GeneratorKind::Async(..)) => "await",
+                };
+                err.note(format!("all values live across `{what}` must have a statically known size"));
             }
             ObligationCauseCode::ConstPatternStructural => {
                 err.note("constants used for pattern-matching must derive `PartialEq` and `Eq`");
@@ -4026,6 +4059,201 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                 err.span_help(span, msg);
             }
         }
+    }
+
+    fn explain_hrtb_projection(
+        &self,
+        diag: &mut Diagnostic,
+        pred: ty::PolyTraitPredicate<'tcx>,
+        param_env: ty::ParamEnv<'tcx>,
+        cause: &ObligationCause<'tcx>,
+    ) {
+        if pred.skip_binder().has_escaping_bound_vars() && pred.skip_binder().has_non_region_infer()
+        {
+            self.probe(|_| {
+                let ocx = ObligationCtxt::new(self);
+                let pred = self.instantiate_binder_with_placeholders(pred);
+                let pred = ocx.normalize(&ObligationCause::dummy(), param_env, pred);
+                ocx.register_obligation(Obligation::new(
+                    self.tcx,
+                    ObligationCause::dummy(),
+                    param_env,
+                    pred,
+                ));
+                if !ocx.select_where_possible().is_empty() {
+                    // encountered errors.
+                    return;
+                }
+
+                if let ObligationCauseCode::FunctionArgumentObligation {
+                    call_hir_id,
+                    arg_hir_id,
+                    parent_code: _,
+                } = cause.code()
+                {
+                    let arg_span = self.tcx.hir().span(*arg_hir_id);
+                    let mut sp: MultiSpan = arg_span.into();
+
+                    sp.push_span_label(
+                        arg_span,
+                        "the trait solver is unable to infer the \
+                        generic types that should be inferred from this argument",
+                    );
+                    sp.push_span_label(
+                        self.tcx.hir().span(*call_hir_id),
+                        "add turbofish arguments to this call to \
+                        specify the types manually, even if it's redundant",
+                    );
+                    diag.span_note(
+                        sp,
+                        "this is a known limitation of the trait solver that \
+                        will be lifted in the future",
+                    );
+                } else {
+                    let mut sp: MultiSpan = cause.span.into();
+                    sp.push_span_label(
+                        cause.span,
+                        "try adding turbofish arguments to this expression to \
+                        specify the types manually, even if it's redundant",
+                    );
+                    diag.span_note(
+                        sp,
+                        "this is a known limitation of the trait solver that \
+                        will be lifted in the future",
+                    );
+                }
+            });
+        }
+    }
+
+    fn suggest_desugaring_async_fn_in_trait(
+        &self,
+        err: &mut Diagnostic,
+        trait_ref: ty::PolyTraitRef<'tcx>,
+    ) {
+        // Don't suggest if RTN is active -- we should prefer a where-clause bound instead.
+        if self.tcx.features().return_type_notation {
+            return;
+        }
+
+        let trait_def_id = trait_ref.def_id();
+
+        // Only suggest specifying auto traits
+        if !self.tcx.trait_is_auto(trait_def_id) {
+            return;
+        }
+
+        // Look for an RPITIT
+        let ty::Alias(ty::Projection, alias_ty) = trait_ref.self_ty().skip_binder().kind() else {
+            return;
+        };
+        let Some(ty::ImplTraitInTraitData::Trait { fn_def_id, opaque_def_id }) =
+            self.tcx.opt_rpitit_info(alias_ty.def_id)
+        else {
+            return;
+        };
+
+        let auto_trait = self.tcx.def_path_str(trait_def_id);
+        // ... which is a local function
+        let Some(fn_def_id) = fn_def_id.as_local() else {
+            // If it's not local, we can at least mention that the method is async, if it is.
+            if self.tcx.asyncness(fn_def_id).is_async() {
+                err.span_note(
+                    self.tcx.def_span(fn_def_id),
+                    format!(
+                        "`{}::{}` is an `async fn` in trait, which does not \
+                    automatically imply that its future is `{auto_trait}`",
+                        alias_ty.trait_ref(self.tcx),
+                        self.tcx.item_name(fn_def_id)
+                    ),
+                );
+            }
+            return;
+        };
+        let Some(hir::Node::TraitItem(item)) = self.tcx.hir().find_by_def_id(fn_def_id) else {
+            return;
+        };
+
+        // ... whose signature is `async` (i.e. this is an AFIT)
+        let (sig, body) = item.expect_fn();
+        let hir::IsAsync::Async(async_span) = sig.header.asyncness else {
+            return;
+        };
+        let Ok(async_span) =
+            self.tcx.sess.source_map().span_extend_while(async_span, |c| c.is_whitespace())
+        else {
+            return;
+        };
+        let hir::FnRetTy::Return(hir::Ty { kind: hir::TyKind::OpaqueDef(def, ..), .. }) =
+            sig.decl.output
+        else {
+            // This should never happen, but let's not ICE.
+            return;
+        };
+
+        // Check that this is *not* a nested `impl Future` RPIT in an async fn
+        // (i.e. `async fn foo() -> impl Future`)
+        if def.owner_id.to_def_id() != opaque_def_id {
+            return;
+        }
+
+        let future = self.tcx.hir().item(*def).expect_opaque_ty();
+        let Some(hir::GenericBound::LangItemTrait(_, _, _, generics)) = future.bounds.get(0) else {
+            // `async fn` should always lower to a lang item bound... but don't ICE.
+            return;
+        };
+        let Some(hir::TypeBindingKind::Equality { term: hir::Term::Ty(future_output_ty) }) =
+            generics.bindings.get(0).map(|binding| binding.kind)
+        else {
+            // Also should never happen.
+            return;
+        };
+
+        let function_name = self.tcx.def_path_str(fn_def_id);
+
+        let mut sugg = if future_output_ty.span.is_empty() {
+            vec![
+                (async_span, String::new()),
+                (
+                    future_output_ty.span,
+                    format!(" -> impl std::future::Future<Output = ()> + {auto_trait}"),
+                ),
+            ]
+        } else {
+            vec![
+                (
+                    future_output_ty.span.shrink_to_lo(),
+                    "impl std::future::Future<Output = ".to_owned(),
+                ),
+                (future_output_ty.span.shrink_to_hi(), format!("> + {auto_trait}")),
+                (async_span, String::new()),
+            ]
+        };
+
+        // If there's a body, we also need to wrap it in `async {}`
+        if let hir::TraitFn::Provided(body) = body {
+            let body = self.tcx.hir().body(*body);
+            let body_span = body.value.span;
+            let body_span_without_braces =
+                body_span.with_lo(body_span.lo() + BytePos(1)).with_hi(body_span.hi() - BytePos(1));
+            if body_span_without_braces.is_empty() {
+                sugg.push((body_span_without_braces, " async {} ".to_owned()));
+            } else {
+                sugg.extend([
+                    (body_span_without_braces.shrink_to_lo(), "async {".to_owned()),
+                    (body_span_without_braces.shrink_to_hi(), "} ".to_owned()),
+                ]);
+            }
+        }
+
+        err.multipart_suggestion(
+            format!(
+                "`{auto_trait}` can be made part of the associated future's \
+                guarantees for all implementations of `{function_name}`"
+            ),
+            sugg,
+            Applicability::MachineApplicable,
+        );
     }
 }
 

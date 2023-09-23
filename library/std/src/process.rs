@@ -101,7 +101,7 @@
 #![stable(feature = "process", since = "1.0.0")]
 #![deny(unsafe_op_in_unsafe_fn)]
 
-#[cfg(all(test, not(any(target_os = "emscripten", target_env = "sgx"))))]
+#[cfg(all(test, not(any(target_os = "emscripten", target_env = "sgx", target_os = "xous"))))]
 mod tests;
 
 use crate::io::prelude::*;
@@ -789,7 +789,7 @@ impl Command {
     /// or [`Command::envs`]. In addition, it will prevent the spawned child process from inheriting
     /// any environment variable from its parent process.
     ///
-    /// After calling [`Command::env_remove`], the iterator from [`Command::get_envs`] will be
+    /// After calling [`Command::env_clear`], the iterator from [`Command::get_envs`] will be
     /// empty.
     ///
     /// You can use [`Command::env_remove`] to clear a single mapping.

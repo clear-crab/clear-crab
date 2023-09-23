@@ -300,7 +300,7 @@ impl<'tcx> Const<'tcx> {
             | ConstKind::Infer(_)
             | ConstKind::Bound(_, _)
             | ConstKind::Placeholder(_)
-            | ConstKind::Expr(_) => Err(ErrorHandled::TooGeneric),
+            | ConstKind::Expr(_) => Err(ErrorHandled::TooGeneric(span.unwrap_or(DUMMY_SP))),
         }
     }
 
@@ -309,8 +309,8 @@ impl<'tcx> Const<'tcx> {
     pub fn normalize(self, tcx: TyCtxt<'tcx>, param_env: ParamEnv<'tcx>) -> Self {
         match self.eval(tcx, param_env, None) {
             Ok(val) => Self::new_value(tcx, val, self.ty()),
-            Err(ErrorHandled::Reported(r)) => Self::new_error(tcx, r.into(), self.ty()),
-            Err(ErrorHandled::TooGeneric) => self,
+            Err(ErrorHandled::Reported(r, _span)) => Self::new_error(tcx, r.into(), self.ty()),
+            Err(ErrorHandled::TooGeneric(_span)) => self,
         }
     }
 
@@ -339,24 +339,19 @@ impl<'tcx> Const<'tcx> {
     /// Attempts to evaluate the given constant to bits. Can fail to evaluate in the presence of
     /// generics (or erroneous code) or if the value can't be represented as bits (e.g. because it
     /// contains const generic parameters or pointers).
-    pub fn try_eval_bits(
-        self,
-        tcx: TyCtxt<'tcx>,
-        param_env: ParamEnv<'tcx>,
-        ty: Ty<'tcx>,
-    ) -> Option<u128> {
+    pub fn try_eval_bits(self, tcx: TyCtxt<'tcx>, param_env: ParamEnv<'tcx>) -> Option<u128> {
         let int = self.try_eval_scalar_int(tcx, param_env)?;
-        assert_eq!(self.ty(), ty);
-        let size = tcx.layout_of(param_env.with_reveal_all_normalized(tcx).and(ty)).ok()?.size;
+        let size =
+            tcx.layout_of(param_env.with_reveal_all_normalized(tcx).and(self.ty())).ok()?.size;
         // if `ty` does not depend on generic parameters, use an empty param_env
         int.to_bits(size).ok()
     }
 
     #[inline]
     /// Panics if the value cannot be evaluated or doesn't contain a valid integer of the given type.
-    pub fn eval_bits(self, tcx: TyCtxt<'tcx>, param_env: ParamEnv<'tcx>, ty: Ty<'tcx>) -> u128 {
-        self.try_eval_bits(tcx, param_env, ty)
-            .unwrap_or_else(|| bug!("expected bits of {:#?}, got {:#?}", ty, self))
+    pub fn eval_bits(self, tcx: TyCtxt<'tcx>, param_env: ParamEnv<'tcx>) -> u128 {
+        self.try_eval_bits(tcx, param_env)
+            .unwrap_or_else(|| bug!("expected bits of {:#?}, got {:#?}", self.ty(), self))
     }
 
     #[inline]

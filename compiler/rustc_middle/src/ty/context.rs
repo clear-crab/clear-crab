@@ -50,7 +50,7 @@ use rustc_hir::def_id::{CrateNum, DefId, LocalDefId, LOCAL_CRATE};
 use rustc_hir::definitions::Definitions;
 use rustc_hir::intravisit::Visitor;
 use rustc_hir::lang_items::LangItem;
-use rustc_hir::{Constness, HirId, Node, TraitCandidate};
+use rustc_hir::{HirId, Node, TraitCandidate};
 use rustc_index::IndexVec;
 use rustc_macros::HashStable;
 use rustc_query_system::dep_graph::DepNodeIndex;
@@ -82,6 +82,7 @@ use std::ops::{Bound, Deref};
 impl<'tcx> Interner for TyCtxt<'tcx> {
     type AdtDef = ty::AdtDef<'tcx>;
     type GenericArgsRef = ty::GenericArgsRef<'tcx>;
+    type GenericArg = ty::GenericArg<'tcx>;
     type DefId = DefId;
     type Binder<T> = Binder<'tcx, T>;
     type Ty = Ty<'tcx>;
@@ -553,6 +554,10 @@ pub struct GlobalCtxt<'tcx> {
     /// Common consts, pre-interned for your convenience.
     pub consts: CommonConsts<'tcx>,
 
+    /// Hooks to be able to register functions in other crates that can then still
+    /// be called from rustc_middle.
+    pub(crate) hooks: crate::hooks::Providers,
+
     untracked: Untracked,
 
     pub query_system: QuerySystem<'tcx>,
@@ -702,6 +707,7 @@ impl<'tcx> TyCtxt<'tcx> {
         dep_graph: DepGraph,
         query_kinds: &'tcx [DepKindStruct<'tcx>],
         query_system: QuerySystem<'tcx>,
+        hooks: crate::hooks::Providers,
     ) -> GlobalCtxt<'tcx> {
         let data_layout = s.target.parse_data_layout().unwrap_or_else(|err| {
             s.emit_fatal(err);
@@ -720,6 +726,7 @@ impl<'tcx> TyCtxt<'tcx> {
             hir_arena,
             interners,
             dep_graph,
+            hooks,
             prof: s.prof.clone(),
             types: common_types,
             lifetimes: common_lifetimes,
@@ -1214,6 +1221,25 @@ macro_rules! nop_lift {
         impl<'a, 'tcx> Lift<'tcx> for $ty {
             type Lifted = $lifted;
             fn lift_to_tcx(self, tcx: TyCtxt<'tcx>) -> Option<Self::Lifted> {
+                // Assert that the set has the right type.
+                // Given an argument that has an interned type, the return type has the type of
+                // the corresponding interner set. This won't actually return anything, we're
+                // just doing this to compute said type!
+                fn _intern_set_ty_from_interned_ty<'tcx, Inner>(
+                    _x: Interned<'tcx, Inner>,
+                ) -> InternedSet<'tcx, Inner> {
+                    unreachable!()
+                }
+                fn _type_eq<T>(_x: &T, _y: &T) {}
+                fn _test<'tcx>(x: $lifted, tcx: TyCtxt<'tcx>) {
+                    // If `x` is a newtype around an `Interned<T>`, then `interner` is an
+                    // interner of appropriate type. (Ideally we'd also check that `x` is a
+                    // newtype with just that one field. Not sure how to do that.)
+                    let interner = _intern_set_ty_from_interned_ty(x.0);
+                    // Now check that this is the same type as `interners.$set`.
+                    _type_eq(&interner, &tcx.interners.$set);
+                }
+
                 tcx.interners
                     .$set
                     .contains_pointer_to(&InternedInSet(&*self.0.0))
@@ -1230,6 +1256,11 @@ macro_rules! nop_list_lift {
         impl<'a, 'tcx> Lift<'tcx> for &'a List<$ty> {
             type Lifted = &'tcx List<$lifted>;
             fn lift_to_tcx(self, tcx: TyCtxt<'tcx>) -> Option<Self::Lifted> {
+                // Assert that the set has the right type.
+                if false {
+                    let _x: &InternedSet<'tcx, List<$lifted>> = &tcx.interners.$set;
+                }
+
                 if self.is_empty() {
                     return Some(List::empty());
                 }
@@ -1251,19 +1282,13 @@ nop_lift! {predicate; Clause<'a> => Clause<'tcx>}
 
 nop_list_lift! {type_lists; Ty<'a> => Ty<'tcx>}
 nop_list_lift! {poly_existential_predicates; PolyExistentialPredicate<'a> => PolyExistentialPredicate<'tcx>}
-nop_list_lift! {clauses; Clause<'a> => Clause<'tcx>}
-nop_list_lift! {canonical_var_infos; CanonicalVarInfo<'a> => CanonicalVarInfo<'tcx>}
-nop_list_lift! {projs; ProjectionKind => ProjectionKind}
 nop_list_lift! {bound_variable_kinds; ty::BoundVariableKind => ty::BoundVariableKind}
 
 // This is the impl for `&'a GenericArgs<'a>`.
 nop_list_lift! {args; GenericArg<'a> => GenericArg<'tcx>}
 
-CloneLiftImpls! {
-    Constness,
-    traits::WellFormedLoc,
+TrivialLiftImpls! {
     ImplPolarity,
-    crate::mir::ReturnConstraint,
 }
 
 macro_rules! sty_debug_print {

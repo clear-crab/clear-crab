@@ -18,7 +18,7 @@ use rustc_middle::ty::util::ExplicitSelf;
 use rustc_middle::ty::{
     self, GenericArgs, Ty, TypeFoldable, TypeFolder, TypeSuperFoldable, TypeVisitableExt,
 };
-use rustc_middle::ty::{GenericParamDefKind, ToPredicate, TyCtxt};
+use rustc_middle::ty::{GenericParamDefKind, TyCtxt};
 use rustc_span::{Span, DUMMY_SP};
 use rustc_trait_selection::traits::error_reporting::TypeErrCtxtExt;
 use rustc_trait_selection::traits::outlives_bounds::InferCtxtExt as _;
@@ -595,7 +595,7 @@ fn compare_asyncness<'tcx>(
     trait_m: ty::AssocItem,
     delay: bool,
 ) -> Result<(), ErrorGuaranteed> {
-    if tcx.asyncness(trait_m.def_id) == hir::IsAsync::Async {
+    if tcx.asyncness(trait_m.def_id).is_async() {
         match tcx.fn_sig(impl_m.def_id).skip_binder().skip_binder().output().kind() {
             ty::Alias(ty::Opaque, ..) => {
                 // allow both `async fn foo()` and `fn foo() -> impl Future`
@@ -2196,16 +2196,16 @@ pub(super) fn check_type_bounds<'tcx>(
                 //
                 // impl<T> X for T where T: X { type Y = <T as X>::Y; }
             }
-            _ => predicates.push(
+            _ => predicates.push(ty::Clause::from_projection_clause(
+                tcx,
                 ty::Binder::bind_with_vars(
                     ty::ProjectionPredicate {
                         projection_ty: tcx.mk_alias_ty(trait_ty.def_id, rebased_args),
                         term: normalize_impl_ty.into(),
                     },
                     bound_vars,
-                )
-                .to_predicate(tcx),
-            ),
+                ),
+            )),
         };
         ty::ParamEnv::new(tcx.mk_clauses(&predicates), Reveal::UserFacing)
     };

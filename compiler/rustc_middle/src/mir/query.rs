@@ -1,6 +1,5 @@
 //! Values computed by queries that use MIR.
 
-use crate::mir::interpret::ConstValue;
 use crate::ty::{self, OpaqueHiddenType, Ty, TyCtxt};
 use rustc_data_structures::fx::FxIndexMap;
 use rustc_data_structures::unord::UnordSet;
@@ -16,7 +15,7 @@ use smallvec::SmallVec;
 use std::cell::Cell;
 use std::fmt::{self, Debug};
 
-use super::SourceInfo;
+use super::{ConstValue, SourceInfo};
 
 #[derive(Copy, Clone, PartialEq, TyEncodable, TyDecodable, HashStable, Debug)]
 pub enum UnsafetyViolationKind {
@@ -334,7 +333,7 @@ rustc_data_structures::static_assert_size!(ConstraintCategory<'_>, 16);
 ///
 /// See also `rustc_const_eval::borrow_check::constraints`.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord, Hash)]
-#[derive(TyEncodable, TyDecodable, HashStable, Lift, TypeVisitable, TypeFoldable)]
+#[derive(TyEncodable, TyDecodable, HashStable, TypeVisitable, TypeFoldable)]
 pub enum ConstraintCategory<'tcx> {
     Return(ReturnConstraint),
     Yield,

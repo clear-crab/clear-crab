@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
-use std::num::NonZeroUsize;
+use std::num::{IntErrorKind, NonZeroUsize};
 use std::path::PathBuf;
 use std::str;
 
@@ -387,7 +387,7 @@ mod desc {
         "`all` (default), `except-unused-generics`, `except-unused-functions`, or `off`";
     pub const parse_instrument_xray: &str = "either a boolean (`yes`, `no`, `on`, `off`, etc), or a comma separated list of settings: `always` or `never` (mutually exclusive), `ignore-loops`, `instruction-threshold=N`, `skip-entry`, `skip-exit`";
     pub const parse_unpretty: &str = "`string` or `string=string`";
-    pub const parse_treat_err_as_bug: &str = "either no value or a number bigger than 0";
+    pub const parse_treat_err_as_bug: &str = "either no value or a non-negative number";
     pub const parse_trait_solver: &str =
         "one of the supported solver modes (`classic`, `next`, or `next-coherence`)";
     pub const parse_lto: &str =
@@ -986,10 +986,16 @@ mod parse {
 
     pub(crate) fn parse_treat_err_as_bug(slot: &mut Option<NonZeroUsize>, v: Option<&str>) -> bool {
         match v {
-            Some(s) => {
-                *slot = s.parse().ok();
-                slot.is_some()
-            }
+            Some(s) => match s.parse() {
+                Ok(val) => {
+                    *slot = Some(val);
+                    true
+                }
+                Err(e) => {
+                    *slot = None;
+                    e.kind() == &IntErrorKind::Zero
+                }
+            },
             None => {
                 *slot = NonZeroUsize::new(1);
                 true
@@ -1478,15 +1484,12 @@ options! {
     dump_mir_exclude_pass_number: bool = (false, parse_bool, [UNTRACKED],
         "exclude the pass number when dumping MIR (used in tests) (default: no)"),
     dump_mir_graphviz: bool = (false, parse_bool, [UNTRACKED],
-        "in addition to `.mir` files, create graphviz `.dot` files (and with \
-        `-Z instrument-coverage`, also create a `.dot` file for the MIR-derived \
-        coverage graph) (default: no)"),
+        "in addition to `.mir` files, create graphviz `.dot` files (default: no)"),
     dump_mir_spanview: Option<MirSpanview> = (None, parse_mir_spanview, [UNTRACKED],
         "in addition to `.mir` files, create `.html` files to view spans for \
         all `statement`s (including terminators), only `terminator` spans, or \
         computed `block` spans (one span encompassing a block's terminator and \
-        all statements). If `-Z instrument-coverage` is also enabled, create \
-        an additional `.html` file showing the computed coverage spans."),
+        all statements)."),
     dump_mono_stats: SwitchWithOptPath = (SwitchWithOptPath::Disabled,
         parse_switch_with_opt_path, [UNTRACKED],
         "output statistics about monomorphization collection"),
@@ -1536,6 +1539,8 @@ options! {
         "generate human-readable, predictable names for codegen units (default: no)"),
     identify_regions: bool = (false, parse_bool, [UNTRACKED],
         "display unnamed regions as `'<id>`, using a non-ident unique id (default: no)"),
+    ignore_directory_in_diagnostics_source_blocks: Vec<String> = (Vec::new(), parse_string_push, [UNTRACKED],
+        "do not display the source code block in diagnostics for files in the directory"),
     incremental_ignore_spans: bool = (false, parse_bool, [TRACKED],
         "ignore spans during ICH computation -- used for testing (default: no)"),
     incremental_info: bool = (false, parse_bool, [UNTRACKED],
@@ -1847,7 +1852,8 @@ written to standard error output)"),
     trap_unreachable: Option<bool> = (None, parse_opt_bool, [TRACKED],
         "generate trap instructions for unreachable intrinsics (default: use target setting, usually yes)"),
     treat_err_as_bug: Option<NonZeroUsize> = (None, parse_treat_err_as_bug, [TRACKED],
-        "treat error number `val` that occurs as bug"),
+        "treat the `val`th error that occurs as bug (default if not specified: 0 - don't treat errors as bugs. \
+        default if specified without a value: 1 - treat the first error as bug)"),
     trim_diagnostic_paths: bool = (true, parse_bool, [UNTRACKED],
         "in diagnostics, use heuristics to shorten paths referring to items"),
     tune_cpu: Option<String> = (None, parse_opt_string, [TRACKED],

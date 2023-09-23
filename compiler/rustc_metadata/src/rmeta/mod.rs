@@ -21,10 +21,10 @@ use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrs;
 use rustc_middle::middle::exported_symbols::{ExportedSymbol, SymbolExportInfo};
 use rustc_middle::middle::resolve_bound_vars::ObjectLifetimeDefault;
 use rustc_middle::mir;
-use rustc_middle::query::Providers;
 use rustc_middle::ty::fast_reject::SimplifiedType;
 use rustc_middle::ty::{self, ReprOptions, Ty, UnusedGenericParams};
 use rustc_middle::ty::{DeducedParamAttrs, GeneratorDiagnosticData, ParameterizedOverTcx, TyCtxt};
+use rustc_middle::util::Providers;
 use rustc_serialize::opaque::FileEncoder;
 use rustc_session::config::SymbolManglingVersion;
 use rustc_session::cstore::{CrateDepKind, ForeignModule, LinkagePreference, NativeLib};
@@ -38,7 +38,6 @@ use rustc_target::spec::{PanicStrategy, TargetTriple};
 use std::marker::PhantomData;
 use std::num::NonZeroUsize;
 
-pub use decoder::provide_extern;
 use decoder::DecodeContext;
 pub(crate) use decoder::{CrateMetadata, CrateNumMap, MetadataBlob};
 use encoder::EncodeContext;
@@ -439,7 +438,7 @@ define_tables! {
     coerce_unsized_info: Table<DefIndex, LazyValue<ty::adjustment::CoerceUnsizedInfo>>,
     mir_const_qualif: Table<DefIndex, LazyValue<mir::ConstQualifs>>,
     rendered_const: Table<DefIndex, LazyValue<String>>,
-    asyncness: Table<DefIndex, hir::IsAsync>,
+    asyncness: Table<DefIndex, ty::Asyncness>,
     fn_arg_names: Table<DefIndex, LazyArray<Ident>>,
     generator_kind: Table<DefIndex, LazyValue<hir::GeneratorKind>>,
     trait_def: Table<DefIndex, LazyValue<ty::TraitDef>>,

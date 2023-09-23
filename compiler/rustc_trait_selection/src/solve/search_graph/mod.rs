@@ -8,7 +8,7 @@ use cache::ProvisionalCache;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_index::Idx;
 use rustc_index::IndexVec;
-use rustc_middle::dep_graph::DepKind;
+use rustc_middle::dep_graph::dep_kinds;
 use rustc_middle::traits::solve::inspect::CacheHit;
 use rustc_middle::traits::solve::CacheData;
 use rustc_middle::traits::solve::{CanonicalInput, Certainty, EvaluationCache, QueryResult};
@@ -187,7 +187,7 @@ impl<'tcx> SearchGraph<'tcx> {
                 last.encountered_overflow = true;
             }
 
-            inspect.goal_evaluation_kind(inspect::WipGoalEvaluationKind::Overflow);
+            inspect.goal_evaluation_kind(inspect::WipCanonicalGoalEvaluationKind::Overflow);
             return Self::response_no_constraints(tcx, input, Certainty::OVERFLOW);
         };
 
@@ -203,7 +203,7 @@ impl<'tcx> SearchGraph<'tcx> {
                     available_depth,
                 )
             {
-                inspect.goal_evaluation_kind(inspect::WipGoalEvaluationKind::CacheHit(
+                inspect.goal_evaluation_kind(inspect::WipCanonicalGoalEvaluationKind::CacheHit(
                     CacheHit::Global,
                 ));
                 self.on_cache_hit(reached_depth, encountered_overflow);
@@ -240,7 +240,7 @@ impl<'tcx> SearchGraph<'tcx> {
             // Finally we can return either the provisional response for that goal if we have a
             // coinductive cycle or an ambiguous result if the cycle is inductive.
             Entry::Occupied(entry_index) => {
-                inspect.goal_evaluation_kind(inspect::WipGoalEvaluationKind::CacheHit(
+                inspect.goal_evaluation_kind(inspect::WipCanonicalGoalEvaluationKind::CacheHit(
                     CacheHit::Provisional,
                 ));
 
@@ -287,7 +287,7 @@ impl<'tcx> SearchGraph<'tcx> {
         // Everything that affects the `result` should be performed within this
         // `with_anon_task` closure.
         let ((final_entry, result), dep_node) =
-            tcx.dep_graph.with_anon_task(tcx, DepKind::TraitSelect, || {
+            tcx.dep_graph.with_anon_task(tcx, dep_kinds::TraitSelect, || {
                 // When we encounter a coinductive cycle, we have to fetch the
                 // result of that cycle while we are still computing it. Because
                 // of this we continuously recompute the cycle until the result

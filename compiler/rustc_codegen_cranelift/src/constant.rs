@@ -2,9 +2,8 @@
 
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
-use rustc_middle::mir::interpret::{
-    read_target_uint, AllocId, ConstValue, ErrorHandled, GlobalAlloc, Scalar,
-};
+use rustc_middle::mir::interpret::{read_target_uint, AllocId, GlobalAlloc, Scalar};
+use rustc_middle::mir::ConstValue;
 
 use cranelift_module::*;
 
@@ -31,16 +30,6 @@ impl ConstantCx {
         define_all_allocs(tcx, module, &mut self);
         self.done.clear();
     }
-}
-
-pub(crate) fn check_constants(fx: &mut FunctionCx<'_, '_, '_>) -> bool {
-    let mut all_constants_ok = true;
-    for constant in &fx.mir.required_consts {
-        if eval_mir_constant(fx, constant).is_none() {
-            all_constants_ok = false;
-        }
-    }
-    all_constants_ok
 }
 
 pub(crate) fn codegen_static(tcx: TyCtxt<'_>, module: &mut dyn Module, def_id: DefId) {
@@ -75,31 +64,21 @@ pub(crate) fn codegen_tls_ref<'tcx>(
 
 pub(crate) fn eval_mir_constant<'tcx>(
     fx: &FunctionCx<'_, '_, 'tcx>,
-    constant: &Constant<'tcx>,
-) -> Option<(ConstValue<'tcx>, Ty<'tcx>)> {
-    let cv = fx.monomorphize(constant.literal);
+    constant: &ConstOperand<'tcx>,
+) -> (ConstValue<'tcx>, Ty<'tcx>) {
+    let cv = fx.monomorphize(constant.const_);
+    // This cannot fail because we checked all required_consts in advance.
     let val = cv
         .eval(fx.tcx, ty::ParamEnv::reveal_all(), Some(constant.span))
-        .map_err(|err| match err {
-            ErrorHandled::Reported(_) => {
-                fx.tcx.sess.span_err(constant.span, "erroneous constant encountered");
-            }
-            ErrorHandled::TooGeneric => {
-                span_bug!(constant.span, "codegen encountered polymorphic constant: {:?}", err);
-            }
-        })
-        .ok();
-    val.map(|val| (val, cv.ty()))
+        .expect("erroneous constant not captured by required_consts");
+    (val, cv.ty())
 }
 
 pub(crate) fn codegen_constant_operand<'tcx>(
     fx: &mut FunctionCx<'_, '_, 'tcx>,
-    constant: &Constant<'tcx>,
+    constant: &ConstOperand<'tcx>,
 ) -> CValue<'tcx> {
-    let (const_val, ty) = eval_mir_constant(fx, constant).unwrap_or_else(|| {
-        span_bug!(constant.span, "erroneous constant not captured by required_consts")
-    });
-
+    let (const_val, ty) = eval_mir_constant(fx, constant);
     codegen_const_value(fx, const_val, ty)
 }
 
@@ -205,15 +184,11 @@ pub(crate) fn codegen_const_value<'tcx>(
                 .offset_i64(fx, i64::try_from(offset.bytes()).unwrap()),
             layout,
         ),
-        ConstValue::Slice { data, start, end } => {
+        ConstValue::Slice { data, meta } => {
             let alloc_id = fx.tcx.reserve_and_set_memory_alloc(data);
-            let ptr = pointer_for_allocation(fx, alloc_id)
-                .offset_i64(fx, i64::try_from(start).unwrap())
-                .get_addr(fx);
-            let len = fx
-                .bcx
-                .ins()
-                .iconst(fx.pointer_type, i64::try_from(end.checked_sub(start).unwrap()).unwrap());
+            let ptr = pointer_for_allocation(fx, alloc_id).get_addr(fx);
+            // FIXME: the `try_from` here can actually fail, e.g. for very long ZST slices.
+            let len = fx.bcx.ins().iconst(fx.pointer_type, i64::try_from(meta).unwrap());
             CValue::by_val_pair(ptr, len, layout)
         }
     }
@@ -459,7 +434,7 @@ pub(crate) fn mir_operand_get_const_val<'tcx>(
     operand: &Operand<'tcx>,
 ) -> Option<ConstValue<'tcx>> {
     match operand {
-        Operand::Constant(const_) => Some(eval_mir_constant(fx, const_).unwrap().0),
+        Operand::Constant(const_) => Some(eval_mir_constant(fx, const_).0),
         // FIXME(rust-lang/rust#85105): Casts like `IMM8 as u32` result in the const being stored
         // inside a temporary before being passed to the intrinsic requiring the const argument.
         // This code tries to find a single constant defining definition of the referenced local.

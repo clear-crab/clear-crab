@@ -302,7 +302,7 @@ impl<'tcx> MirBorrowckCtxt<'_, 'tcx> {
                     if free_region.bound_region.is_named() {
                         // A named region that is actually named.
                         Some(RegionName { name, source: RegionNameSource::NamedFreeRegion(span) })
-                    } else if let hir::IsAsync::Async = tcx.asyncness(self.mir_hir_id().owner) {
+                    } else if tcx.asyncness(self.mir_hir_id().owner).is_async() {
                         // If we spuriously thought that the region is named, we should let the
                         // system generate a true name for error messages. Currently this can
                         // happen if we have an elided name in an async fn for example: the
@@ -442,8 +442,8 @@ impl<'tcx> MirBorrowckCtxt<'_, 'tcx> {
         span: Span,
         counter: usize,
     ) -> RegionNameHighlight {
-        let mut highlight = RegionHighlightMode::new(self.infcx.tcx);
-        highlight.highlighting_region_vid(needle_fr, counter);
+        let mut highlight = RegionHighlightMode::default();
+        highlight.highlighting_region_vid(self.infcx.tcx, needle_fr, counter);
         let type_name =
             self.infcx.extract_inference_diagnostics_data(ty.into(), Some(highlight)).name;
 
@@ -804,8 +804,8 @@ impl<'tcx> MirBorrowckCtxt<'_, 'tcx> {
             return None;
         }
 
-        let mut highlight = RegionHighlightMode::new(tcx);
-        highlight.highlighting_region_vid(fr, *self.next_region_name.try_borrow().unwrap());
+        let mut highlight = RegionHighlightMode::default();
+        highlight.highlighting_region_vid(tcx, fr, *self.next_region_name.try_borrow().unwrap());
         let type_name =
             self.infcx.extract_inference_diagnostics_data(yield_ty.into(), Some(highlight)).name;
 

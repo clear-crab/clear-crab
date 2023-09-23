@@ -1295,7 +1295,10 @@ fn default_emitter(
                     .diagnostic_width(sopts.diagnostic_width)
                     .macro_backtrace(macro_backtrace)
                     .track_diagnostics(track_diagnostics)
-                    .terminal_url(terminal_url);
+                    .terminal_url(terminal_url)
+                    .ignored_directories_in_source_blocks(
+                        sopts.unstable_opts.ignore_directory_in_diagnostics_source_blocks.clone(),
+                    );
                 Box::new(emitter.ui_testing(sopts.unstable_opts.ui_testing))
             }
         }
@@ -1312,7 +1315,10 @@ fn default_emitter(
                 track_diagnostics,
                 terminal_url,
             )
-            .ui_testing(sopts.unstable_opts.ui_testing),
+            .ui_testing(sopts.unstable_opts.ui_testing)
+            .ignored_directories_in_source_blocks(
+                sopts.unstable_opts.ignore_directory_in_diagnostics_source_blocks.clone(),
+            ),
         ),
     }
 }
@@ -1716,6 +1722,15 @@ impl EarlyErrorHandler {
     #[allow(rustc::diagnostic_outside_of_impl)]
     pub fn early_error(&self, msg: impl Into<DiagnosticMessage>) -> ! {
         self.handler.struct_fatal(msg).emit()
+    }
+
+    #[allow(rustc::untranslatable_diagnostic)]
+    #[allow(rustc::diagnostic_outside_of_impl)]
+    pub(crate) fn early_struct_error(
+        &self,
+        msg: impl Into<DiagnosticMessage>,
+    ) -> DiagnosticBuilder<'_, !> {
+        self.handler.struct_fatal(msg)
     }
 
     #[allow(rustc::untranslatable_diagnostic)]

@@ -117,6 +117,8 @@ pub mod haiku;
 pub mod hermit;
 #[cfg(target_os = "horizon")]
 pub mod horizon;
+#[cfg(target_os = "hurd")]
+pub mod hurd;
 #[cfg(target_os = "illumos")]
 pub mod illumos;
 #[cfg(target_os = "ios")]
@@ -146,6 +148,8 @@ pub mod vita;
 pub mod vxworks;
 #[cfg(target_os = "watchos")]
 pub(crate) mod watchos;
+#[cfg(target_os = "xous")]
+pub mod xous;
 
 #[cfg(any(unix, target_os = "wasi", doc))]
 pub mod fd;
