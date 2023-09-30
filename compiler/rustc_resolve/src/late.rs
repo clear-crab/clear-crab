@@ -474,7 +474,7 @@ impl<'a> PathSource<'a> {
                         | DefKind::Enum
                         | DefKind::Trait
                         | DefKind::TraitAlias
-                        | DefKind::TyAlias { .. }
+                        | DefKind::TyAlias
                         | DefKind::AssocTy
                         | DefKind::TyParam
                         | DefKind::OpaqueTy
@@ -513,7 +513,7 @@ impl<'a> PathSource<'a> {
                     DefKind::Struct
                         | DefKind::Union
                         | DefKind::Variant
-                        | DefKind::TyAlias { .. }
+                        | DefKind::TyAlias
                         | DefKind::AssocTy,
                     _,
                 ) | Res::SelfTyParam { .. }
@@ -1766,7 +1766,7 @@ impl<'a: 'ast, 'b, 'ast, 'tcx> LateResolutionVisitor<'a, 'b, 'ast, 'tcx> {
                 Res::Def(DefKind::Struct, def_id)
                 | Res::Def(DefKind::Union, def_id)
                 | Res::Def(DefKind::Enum, def_id)
-                | Res::Def(DefKind::TyAlias { .. }, def_id)
+                | Res::Def(DefKind::TyAlias, def_id)
                 | Res::Def(DefKind::Trait, def_id)
                     if i + 1 == proj_start =>
                 {
@@ -4140,6 +4140,12 @@ impl<'a: 'ast, 'b, 'ast, 'tcx> LateResolutionVisitor<'a, 'b, 'ast, 'tcx> {
         });
     }
 
+    fn resolve_expr_field(&mut self, f: &'ast ExprField, e: &'ast Expr) {
+        self.resolve_expr(&f.expr, Some(e));
+        self.visit_ident(f.ident);
+        walk_list!(self, visit_attribute, f.attrs.iter());
+    }
+
     fn resolve_expr(&mut self, expr: &'ast Expr, parent: Option<&'ast Expr>) {
         // First, record candidate traits for this expression if it could
         // result in the invocation of a method call.
@@ -4155,7 +4161,19 @@ impl<'a: 'ast, 'b, 'ast, 'tcx> LateResolutionVisitor<'a, 'b, 'ast, 'tcx> {
 
             ExprKind::Struct(ref se) => {
                 self.smart_resolve_path(expr.id, &se.qself, &se.path, PathSource::Struct);
-                visit::walk_expr(self, expr);
+                // This is the same as `visit::walk_expr(self, expr);`, but we want to pass the
+                // parent in for accurate suggestions when encountering `Foo { bar }` that should
+                // have been `Foo { bar: self.bar }`.
+                if let Some(qself) = &se.qself {
+                    self.visit_ty(&qself.ty);
+                }
+                self.visit_path(&se.path, expr.id);
+                walk_list!(self, resolve_expr_field, &se.fields, expr);
+                match &se.rest {
+                    StructRest::Base(expr) => self.visit_expr(expr),
+                    StructRest::Rest(_span) => {}
+                    StructRest::None => {}
+                }
             }
 
             ExprKind::Break(Some(label), _) | ExprKind::Continue(Some(label)) => {

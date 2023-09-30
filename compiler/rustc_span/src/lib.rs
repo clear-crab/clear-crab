@@ -33,7 +33,7 @@ extern crate rustc_macros;
 #[macro_use]
 extern crate tracing;
 
-use rustc_data_structures::{cold_path, AtomicRef};
+use rustc_data_structures::{outline, AtomicRef};
 use rustc_macros::HashStable_Generic;
 use rustc_serialize::{Decodable, Decoder, Encodable, Encoder};
 
@@ -1592,7 +1592,7 @@ impl SourceFile {
             return &lines[..];
         }
 
-        cold_path(|| {
+        outline(|| {
             self.convert_diffs_to_lines_frozen();
             if let Some(SourceFileLines::Lines(lines)) = self.lines.get() {
                 return &lines[..];
@@ -1753,7 +1753,7 @@ impl SourceFile {
         // is recorded.
         let diff = match self.normalized_pos.binary_search_by(|np| np.pos.cmp(&pos)) {
             Ok(i) => self.normalized_pos[i].diff,
-            Err(i) if i == 0 => 0,
+            Err(0) => 0,
             Err(i) => self.normalized_pos[i - 1].diff,
         };
 
@@ -1775,7 +1775,7 @@ impl SourceFile {
             .binary_search_by(|np| (np.pos.0 + np.diff).cmp(&(self.start_pos.0 + offset)))
         {
             Ok(i) => self.normalized_pos[i].diff,
-            Err(i) if i == 0 => 0,
+            Err(0) => 0,
             Err(i) => self.normalized_pos[i - 1].diff,
         };
 

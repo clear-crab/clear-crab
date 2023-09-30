@@ -139,6 +139,7 @@ pub enum RuntimePhase {
     /// * [`TerminatorKind::Yield`]
     /// * [`TerminatorKind::GeneratorDrop`]
     /// * [`Rvalue::Aggregate`] for any `AggregateKind` except `Array`
+    /// * [`PlaceElem::OpaqueCast`]
     ///
     /// And the following variants are allowed:
     /// * [`StatementKind::Retag`]
@@ -1333,7 +1334,7 @@ pub enum AggregateKind<'tcx> {
     Generator(DefId, GenericArgsRef<'tcx>, hir::Movability),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, TyEncodable, TyDecodable, Hash, HashStable)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, TyEncodable, TyDecodable, Hash, HashStable)]
 pub enum NullOp<'tcx> {
     /// Returns the size of a value of that type
     SizeOf,

@@ -210,6 +210,7 @@ provide! { tcx, def_id, other, cdata,
     inferred_outlives_of => { table_defaulted_array }
     super_predicates_of => { table }
     type_of => { table }
+    type_alias_is_lazy => { cdata.root.tables.type_alias_is_lazy.get(cdata, def_id.index) }
     variances_of => { table }
     fn_sig => { table }
     codegen_fn_attrs => { table }
@@ -374,7 +375,6 @@ provide! { tcx, def_id, other, cdata,
 
     crate_extern_paths => { cdata.source().paths().cloned().collect() }
     expn_that_defined => { cdata.get_expn_that_defined(def_id.index, tcx.sess) }
-    generator_diagnostic_data => { cdata.get_generator_diagnostic_data(tcx, def_id.index) }
     is_doc_hidden => { cdata.get_attr_flags(def_id.index).contains(AttrFlags::IS_DOC_HIDDEN) }
     doc_link_resolutions => { tcx.arena.alloc(cdata.get_doc_link_resolutions(def_id.index)) }
     doc_link_traits_in_scope => {

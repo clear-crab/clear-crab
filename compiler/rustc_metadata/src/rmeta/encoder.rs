@@ -31,7 +31,6 @@ use rustc_middle::query::Providers;
 use rustc_middle::traits::specialization_graph;
 use rustc_middle::ty::codec::TyEncoder;
 use rustc_middle::ty::fast_reject::{self, SimplifiedType, TreatParams};
-use rustc_middle::ty::TypeVisitableExt;
 use rustc_middle::ty::{self, AssocItemContainer, SymbolName, Ty, TyCtxt};
 use rustc_middle::util::common::to_readable_str;
 use rustc_serialize::{opaque, Decodable, Decoder, Encodable, Encoder};
@@ -827,7 +826,7 @@ fn should_encode_span(def_kind: DefKind) -> bool {
         | DefKind::Enum
         | DefKind::Variant
         | DefKind::Trait
-        | DefKind::TyAlias { .. }
+        | DefKind::TyAlias
         | DefKind::ForeignTy
         | DefKind::TraitAlias
         | DefKind::AssocTy
@@ -862,7 +861,7 @@ fn should_encode_attrs(def_kind: DefKind) -> bool {
         | DefKind::Enum
         | DefKind::Variant
         | DefKind::Trait
-        | DefKind::TyAlias { .. }
+        | DefKind::TyAlias
         | DefKind::ForeignTy
         | DefKind::TraitAlias
         | DefKind::AssocTy
@@ -903,7 +902,7 @@ fn should_encode_expn_that_defined(def_kind: DefKind) -> bool {
         | DefKind::Variant
         | DefKind::Trait
         | DefKind::Impl { .. } => true,
-        DefKind::TyAlias { .. }
+        DefKind::TyAlias
         | DefKind::ForeignTy
         | DefKind::TraitAlias
         | DefKind::AssocTy
@@ -938,7 +937,7 @@ fn should_encode_visibility(def_kind: DefKind) -> bool {
         | DefKind::Enum
         | DefKind::Variant
         | DefKind::Trait
-        | DefKind::TyAlias { .. }
+        | DefKind::TyAlias
         | DefKind::ForeignTy
         | DefKind::TraitAlias
         | DefKind::AssocTy
@@ -982,7 +981,7 @@ fn should_encode_stability(def_kind: DefKind) -> bool {
         | DefKind::Const
         | DefKind::Fn
         | DefKind::ForeignMod
-        | DefKind::TyAlias { .. }
+        | DefKind::TyAlias
         | DefKind::OpaqueTy
         | DefKind::Enum
         | DefKind::Union
@@ -1092,9 +1091,7 @@ fn should_encode_variances<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, def_kind: Def
         | DefKind::Closure
         | DefKind::Generator
         | DefKind::ExternCrate => false,
-        DefKind::TyAlias { lazy } => {
-            lazy || tcx.type_of(def_id).instantiate_identity().has_opaque_types()
-        }
+        DefKind::TyAlias => tcx.type_alias_is_lazy(def_id),
     }
 }
 
@@ -1105,7 +1102,7 @@ fn should_encode_generics(def_kind: DefKind) -> bool {
         | DefKind::Enum
         | DefKind::Variant
         | DefKind::Trait
-        | DefKind::TyAlias { .. }
+        | DefKind::TyAlias
         | DefKind::ForeignTy
         | DefKind::TraitAlias
         | DefKind::AssocTy
@@ -1145,7 +1142,7 @@ fn should_encode_type(tcx: TyCtxt<'_>, def_id: LocalDefId, def_kind: DefKind) ->
         | DefKind::Fn
         | DefKind::Const
         | DefKind::Static(..)
-        | DefKind::TyAlias { .. }
+        | DefKind::TyAlias
         | DefKind::ForeignTy
         | DefKind::Impl { .. }
         | DefKind::AssocFn
@@ -1205,7 +1202,7 @@ fn should_encode_fn_sig(def_kind: DefKind) -> bool {
         | DefKind::Const
         | DefKind::Static(..)
         | DefKind::Ctor(..)
-        | DefKind::TyAlias { .. }
+        | DefKind::TyAlias
         | DefKind::OpaqueTy
         | DefKind::ForeignTy
         | DefKind::Impl { .. }
@@ -1246,7 +1243,7 @@ fn should_encode_constness(def_kind: DefKind) -> bool {
         | DefKind::AssocConst
         | DefKind::AnonConst
         | DefKind::Static(..)
-        | DefKind::TyAlias { .. }
+        | DefKind::TyAlias
         | DefKind::OpaqueTy
         | DefKind::Impl { of_trait: false }
         | DefKind::ForeignTy
@@ -1279,7 +1276,7 @@ fn should_encode_const(def_kind: DefKind) -> bool {
         | DefKind::Field
         | DefKind::Fn
         | DefKind::Static(..)
-        | DefKind::TyAlias { .. }
+        | DefKind::TyAlias
         | DefKind::OpaqueTy
         | DefKind::ForeignTy
         | DefKind::Impl { .. }
@@ -1439,7 +1436,8 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                 }
             }
             if let DefKind::Generator = def_kind {
-                self.encode_info_for_generator(local_id);
+                let data = self.tcx.generator_kind(def_id).unwrap();
+                record!(self.tables.generator_kind[def_id] <- data);
             }
             if let DefKind::Enum | DefKind::Struct | DefKind::Union = def_kind {
                 self.encode_info_for_adt(local_id);
@@ -1449,6 +1447,11 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
             }
             if let DefKind::Macro(_) = def_kind {
                 self.encode_info_for_macro(local_id);
+            }
+            if let DefKind::TyAlias = def_kind {
+                self.tables
+                    .type_alias_is_lazy
+                    .set(def_id.index, self.tcx.type_alias_is_lazy(def_id));
             }
             if let DefKind::OpaqueTy = def_kind {
                 self.encode_explicit_item_bounds(def_id);
@@ -1612,8 +1615,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                 record!(self.tables.closure_saved_names_of_captured_variables[def_id.to_def_id()]
                     <- tcx.closure_saved_names_of_captured_variables(def_id));
 
-                if tcx.sess.opts.unstable_opts.drop_tracking_mir
-                    && let DefKind::Generator = self.tcx.def_kind(def_id)
+                if let DefKind::Generator = self.tcx.def_kind(def_id)
                     && let Some(witnesses) = tcx.mir_generator_witnesses(def_id)
                 {
                     record!(self.tables.mir_generator_witnesses[def_id.to_def_id()] <- witnesses);
@@ -1639,6 +1641,12 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                 }
             }
             record!(self.tables.promoted_mir[def_id.to_def_id()] <- tcx.promoted_mir(def_id));
+
+            if let DefKind::Generator = self.tcx.def_kind(def_id)
+                && let Some(witnesses) = tcx.mir_generator_witnesses(def_id)
+            {
+                record!(self.tables.mir_generator_witnesses[def_id.to_def_id()] <- witnesses);
+            }
 
             let instance = ty::InstanceDef::Item(def_id.to_def_id());
             let unused = tcx.unused_generic_params(instance);
@@ -1710,15 +1718,6 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         };
         self.tables.is_macro_rules.set(def_id.local_def_index, macro_def.macro_rules);
         record!(self.tables.macro_definition[def_id.to_def_id()] <- &*macro_def.body);
-    }
-
-    #[instrument(level = "debug", skip(self))]
-    fn encode_info_for_generator(&mut self, def_id: LocalDefId) {
-        let typeck_result: &'tcx ty::TypeckResults<'tcx> = self.tcx.typeck(def_id);
-        let data = self.tcx.generator_kind(def_id).unwrap();
-        let generator_diagnostic_data = typeck_result.get_generator_diagnostic_data();
-        record!(self.tables.generator_kind[def_id.to_def_id()] <- data);
-        record!(self.tables.generator_diagnostic_data[def_id.to_def_id()]  <- generator_diagnostic_data);
     }
 
     fn encode_native_libraries(&mut self) -> LazyArray<NativeLib> {

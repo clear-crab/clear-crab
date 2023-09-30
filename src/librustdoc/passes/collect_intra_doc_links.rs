@@ -522,8 +522,7 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
             ty::Alias(..)
             | ty::Closure(..)
             | ty::Generator(..)
-            | ty::GeneratorWitness(_)
-            | ty::GeneratorWitnessMIR(..)
+            | ty::GeneratorWitness(..)
             | ty::Dynamic(..)
             | ty::Param(_)
             | ty::Bound(..)
@@ -594,7 +593,7 @@ impl<'a, 'tcx> LinkCollector<'a, 'tcx> {
                         .unwrap_or(Vec::new())
                 }
             }
-            Res::Def(DefKind::TyAlias { .. }, did) => {
+            Res::Def(DefKind::TyAlias, did) => {
                 // Resolve the link on the type the alias points to.
                 // FIXME: if the associated item is defined directly on the type alias,
                 // it will show up on its documentation page, we should link there instead.

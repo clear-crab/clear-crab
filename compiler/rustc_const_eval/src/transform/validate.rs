@@ -558,8 +558,8 @@ impl<'a, 'tcx> Visitor<'tcx> for CfgChecker<'a, 'tcx> {
     }
 }
 
-/// A faster version of the validation pass that only checks those things which may break when apply
-/// generic substitutions.
+/// A faster version of the validation pass that only checks those things which may break when
+/// instantiating any generic parameters.
 pub fn validate_types<'tcx>(
     tcx: TyCtxt<'tcx>,
     mir_phase: MirPhase,
@@ -633,6 +633,14 @@ impl<'a, 'tcx> Visitor<'tcx> for TypeChecker<'a, 'tcx> {
         location: Location,
     ) {
         match elem {
+            ProjectionElem::OpaqueCast(ty)
+                if self.mir_phase >= MirPhase::Runtime(RuntimePhase::Initial) =>
+            {
+                self.fail(
+                    location,
+                    format!("explicit opaque type cast to `{ty}` after `RevealAll`"),
+                )
+            }
             ProjectionElem::Index(index) => {
                 let index_ty = self.body.local_decls[index].ty;
                 if index_ty != self.tcx.types.usize {

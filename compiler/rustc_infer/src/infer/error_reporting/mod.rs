@@ -242,12 +242,9 @@ fn msg_span_from_named_region<'tcx>(
                         };
                         (text, Some(span))
                     }
-                    ty::BrAnon(span) => (
+                    ty::BrAnon => (
                         "the anonymous lifetime as defined here".to_string(),
-                        Some(match span {
-                            Some(span) => span,
-                            None => tcx.def_span(scope)
-                        })
+                        Some(tcx.def_span(scope))
                     ),
                     _ => (
                         format!("the lifetime `{region}` as defined here"),
@@ -262,11 +259,7 @@ fn msg_span_from_named_region<'tcx>(
             ..
         }) => (format!("the lifetime `{name}` as defined here"), Some(tcx.def_span(def_id))),
         ty::RePlaceholder(ty::PlaceholderRegion {
-            bound: ty::BoundRegion { kind: ty::BoundRegionKind::BrAnon(Some(span)), .. },
-            ..
-        }) => ("the anonymous lifetime defined here".to_owned(), Some(span)),
-        ty::RePlaceholder(ty::PlaceholderRegion {
-            bound: ty::BoundRegion { kind: ty::BoundRegionKind::BrAnon(None), .. },
+            bound: ty::BoundRegion { kind: ty::BoundRegionKind::BrAnon, .. },
             ..
         }) => ("an anonymous lifetime".to_owned(), None),
         _ => bug!("{:?}", region),
@@ -1660,7 +1653,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                             _ => (false, Mismatch::Fixed("type")),
                         }
                     }
-                    ValuePairs::Sigs(infer::ExpectedFound { expected, found }) => {
+                    ValuePairs::PolySigs(infer::ExpectedFound { expected, found }) => {
                         OpaqueTypesVisitor::visit_expected_found(self.tcx, expected, found, span)
                             .report(diag);
                         (false, Mismatch::Fixed("signature"))
@@ -2232,15 +2225,12 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                     ret => ret,
                 }
             }
-            infer::Sigs(exp_found) => {
+            infer::PolySigs(exp_found) => {
                 let exp_found = self.resolve_vars_if_possible(exp_found);
                 if exp_found.references_error() {
                     return None;
                 }
-                let (exp, fnd) = self.cmp_fn_sig(
-                    &ty::Binder::dummy(exp_found.expected),
-                    &ty::Binder::dummy(exp_found.found),
-                );
+                let (exp, fnd) = self.cmp_fn_sig(&exp_found.expected, &exp_found.found);
                 Some((exp, fnd, None, None))
             }
         }

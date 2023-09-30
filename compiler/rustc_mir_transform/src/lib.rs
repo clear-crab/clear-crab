@@ -76,6 +76,7 @@ mod errors;
 mod ffi_unwind_calls;
 mod function_item_references;
 mod generator;
+mod gvn;
 pub mod inline;
 mod instsimplify;
 mod large_enums;
@@ -358,9 +359,7 @@ fn inner_mir_for_ctfe(tcx: TyCtxt<'_>, def: LocalDefId) -> Body<'_> {
 /// mir borrowck *before* doing so in order to ensure that borrowck can be run and doesn't
 /// end up missing the source MIR due to stealing happening.
 fn mir_drops_elaborated_and_const_checked(tcx: TyCtxt<'_>, def: LocalDefId) -> &Steal<Body<'_>> {
-    if tcx.sess.opts.unstable_opts.drop_tracking_mir
-        && let DefKind::Generator = tcx.def_kind(def)
-    {
+    if let DefKind::Generator = tcx.def_kind(def) {
         tcx.ensure_with_value().mir_generator_witnesses(def);
     }
     let mir_borrowck = tcx.mir_borrowck(def);
@@ -481,6 +480,7 @@ fn run_runtime_lowering_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
     let passes: &[&dyn MirPass<'tcx>] = &[
         // These next passes must be executed together
         &add_call_guards::CriticalCallEdges,
+        &reveal_all::RevealAll, // has to be done before drop elaboration, since we need to drop opaque types, too.
         &elaborate_drops::ElaborateDrops,
         // This will remove extraneous landing pads which are no longer
         // necessary as well as well as forcing any call in a non-unwinding
@@ -527,7 +527,6 @@ fn run_optimization_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         body,
         &[
             &check_alignment::CheckAlignment,
-            &reveal_all::RevealAll, // has to be done before inlining, since inlined code is in RevealAll mode.
             &lower_slice_len::LowerSliceLenCalls, // has to be done before inlining, otherwise actual call will be almost always inlined. Also simple, so can just do first
             &unreachable_prop::UnreachablePropagation,
             &uninhabited_enum_branching::UninhabitedEnumBranching,
@@ -551,6 +550,7 @@ fn run_optimization_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
             // latter pass will leverage the created opportunities.
             &separate_const_switch::SeparateConstSwitch,
             &const_prop::ConstProp,
+            &gvn::GVN,
             &dataflow_const_prop::DataflowConstProp,
             //
             // Const-prop runs unconditionally, but doesn't mutate the MIR at mir-opt-level=0.

@@ -30,10 +30,9 @@ use rustc_infer::infer::{DefineOpaqueTypes, InferOk, LateBoundRegionConversionTi
 use rustc_middle::hir::map;
 use rustc_middle::ty::error::TypeError::{self, Sorts};
 use rustc_middle::ty::{
-    self, suggest_arbitrary_trait_bound, suggest_constraining_type_param, AdtKind,
-    GeneratorDiagnosticData, GeneratorInteriorTypeCause, GenericArgs, InferTy, IsSuggestable,
-    ToPredicate, Ty, TyCtxt, TypeAndMut, TypeFoldable, TypeFolder, TypeSuperFoldable,
-    TypeVisitableExt, TypeckResults,
+    self, suggest_arbitrary_trait_bound, suggest_constraining_type_param, AdtKind, GenericArgs,
+    InferTy, IsSuggestable, ToPredicate, Ty, TyCtxt, TypeAndMut, TypeFoldable, TypeFolder,
+    TypeSuperFoldable, TypeVisitableExt, TypeckResults,
 };
 use rustc_span::def_id::LocalDefId;
 use rustc_span::symbol::{sym, Ident, Symbol};
@@ -50,7 +49,7 @@ use rustc_middle::ty::print::{with_forced_trimmed_paths, with_no_trimmed_paths};
 #[derive(Debug)]
 pub enum GeneratorInteriorOrUpvar {
     // span of interior type
-    Interior(Span, Option<(Option<Span>, Span, Option<hir::HirId>, Option<Span>)>),
+    Interior(Span, Option<(Span, Option<Span>)>),
     // span of upvar
     Upvar(Span),
 }
@@ -58,15 +57,12 @@ pub enum GeneratorInteriorOrUpvar {
 // This type provides a uniform interface to retrieve data on generators, whether it originated from
 // the local crate being compiled or from a foreign crate.
 #[derive(Debug)]
-pub enum GeneratorData<'tcx, 'a> {
-    Local(&'a TypeckResults<'tcx>),
-    Foreign(&'tcx GeneratorDiagnosticData<'tcx>),
-}
+struct GeneratorData<'tcx, 'a>(&'a TypeckResults<'tcx>);
 
 impl<'tcx, 'a> GeneratorData<'tcx, 'a> {
-    // Try to get information about variables captured by the generator that matches a type we are
-    // looking for with `ty_matches` function. We uses it to find upvar which causes a failure to
-    // meet an obligation
+    /// Try to get information about variables captured by the generator that matches a type we are
+    /// looking for with `ty_matches` function. We uses it to find upvar which causes a failure to
+    /// meet an obligation
     fn try_get_upvar_span<F>(
         &self,
         infer_context: &InferCtxt<'tcx>,
@@ -76,27 +72,21 @@ impl<'tcx, 'a> GeneratorData<'tcx, 'a> {
     where
         F: Fn(ty::Binder<'tcx, Ty<'tcx>>) -> bool,
     {
-        match self {
-            GeneratorData::Local(typeck_results) => {
-                infer_context.tcx.upvars_mentioned(generator_did).and_then(|upvars| {
-                    upvars.iter().find_map(|(upvar_id, upvar)| {
-                        let upvar_ty = typeck_results.node_type(*upvar_id);
-                        let upvar_ty = infer_context.resolve_vars_if_possible(upvar_ty);
-                        ty_matches(ty::Binder::dummy(upvar_ty))
-                            .then(|| GeneratorInteriorOrUpvar::Upvar(upvar.span))
-                    })
-                })
-            }
-            GeneratorData::Foreign(_) => None,
-        }
+        infer_context.tcx.upvars_mentioned(generator_did).and_then(|upvars| {
+            upvars.iter().find_map(|(upvar_id, upvar)| {
+                let upvar_ty = self.0.node_type(*upvar_id);
+                let upvar_ty = infer_context.resolve_vars_if_possible(upvar_ty);
+                ty_matches(ty::Binder::dummy(upvar_ty))
+                    .then(|| GeneratorInteriorOrUpvar::Upvar(upvar.span))
+            })
+        })
     }
 
-    // Try to get the span of a type being awaited on that matches the type we are looking with the
-    // `ty_matches` function. We uses it to find awaited type which causes a failure to meet an
-    // obligation
+    /// Try to get the span of a type being awaited on that matches the type we are looking with the
+    /// `ty_matches` function. We uses it to find awaited type which causes a failure to meet an
+    /// obligation
     fn get_from_await_ty<F>(
         &self,
-        tcx: TyCtxt<'tcx>,
         visitor: AwaitsVisitor,
         hir: map::Map<'tcx>,
         ty_matches: F,
@@ -104,69 +94,12 @@ impl<'tcx, 'a> GeneratorData<'tcx, 'a> {
     where
         F: Fn(ty::Binder<'tcx, Ty<'tcx>>) -> bool,
     {
-        match self {
-            GeneratorData::Local(typeck_results) => visitor
-                .awaits
-                .into_iter()
-                .map(|id| hir.expect_expr(id))
-                .find(|await_expr| {
-                    ty_matches(ty::Binder::dummy(typeck_results.expr_ty_adjusted(&await_expr)))
-                })
-                .map(|expr| expr.span),
-            GeneratorData::Foreign(generator_diagnostic_data) => visitor
-                .awaits
-                .into_iter()
-                .map(|id| hir.expect_expr(id))
-                .find(|await_expr| {
-                    ty_matches(ty::Binder::dummy(
-                        generator_diagnostic_data
-                            .adjustments
-                            .get(&await_expr.hir_id.local_id)
-                            .map_or::<&[ty::adjustment::Adjustment<'tcx>], _>(&[], |a| &a[..])
-                            .last()
-                            .map_or_else::<Ty<'tcx>, _, _>(
-                                || {
-                                    generator_diagnostic_data
-                                        .nodes_types
-                                        .get(&await_expr.hir_id.local_id)
-                                        .cloned()
-                                        .unwrap_or_else(|| {
-                                            bug!(
-                                                "node_type: no type for node {}",
-                                                tcx.hir().node_to_string(await_expr.hir_id)
-                                            )
-                                        })
-                                },
-                                |adj| adj.target,
-                            ),
-                    ))
-                })
-                .map(|expr| expr.span),
-        }
-    }
-
-    /// Get the type, expression, span and optional scope span of all types
-    /// that are live across the yield of this generator
-    fn get_generator_interior_types(
-        &self,
-    ) -> ty::Binder<'tcx, &[GeneratorInteriorTypeCause<'tcx>]> {
-        match self {
-            GeneratorData::Local(typeck_result) => {
-                typeck_result.generator_interior_types.as_deref()
-            }
-            GeneratorData::Foreign(generator_diagnostic_data) => {
-                generator_diagnostic_data.generator_interior_types.as_deref()
-            }
-        }
-    }
-
-    // Used to get the source of the data, note we don't have as much information for generators
-    // originated from foreign crates
-    fn is_foreign(&self) -> bool {
-        match self {
-            GeneratorData::Local(_) => false,
-            GeneratorData::Foreign(_) => true,
-        }
+        visitor
+            .awaits
+            .into_iter()
+            .map(|id| hir.expect_expr(id))
+            .find(|await_expr| ty_matches(ty::Binder::dummy(self.0.expr_ty_adjusted(&await_expr))))
+            .map(|expr| expr.span)
     }
 }
 
@@ -316,7 +249,6 @@ pub trait TypeErrCtxtExt<'tcx> {
         outer_generator: Option<DefId>,
         trait_pred: ty::TraitPredicate<'tcx>,
         target_ty: Ty<'tcx>,
-        typeck_results: Option<&ty::TypeckResults<'tcx>>,
         obligation: &PredicateObligation<'tcx>,
         next_code: Option<&ObligationCauseCode<'tcx>>,
     );
@@ -2240,11 +2172,10 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                     );
 
                     match *ty.kind() {
-                        ty::Generator(did, ..) | ty::GeneratorWitnessMIR(did, _) => {
+                        ty::Generator(did, ..) | ty::GeneratorWitness(did, _) => {
                             generator = generator.or(Some(did));
                             outer_generator = Some(did);
                         }
-                        ty::GeneratorWitness(..) => {}
                         ty::Tuple(_) if !seen_upvar_tys_infer_tuple => {
                             // By introducing a tuple of upvar types into the chain of obligations
                             // of a generator, the first non-generator item is now the tuple itself,
@@ -2270,11 +2201,10 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                     );
 
                     match *ty.kind() {
-                        ty::Generator(did, ..) | ty::GeneratorWitnessMIR(did, ..) => {
+                        ty::Generator(did, ..) | ty::GeneratorWitness(did, ..) => {
                             generator = generator.or(Some(did));
                             outer_generator = Some(did);
                         }
-                        ty::GeneratorWitness(..) => {}
                         ty::Tuple(_) if !seen_upvar_tys_infer_tuple => {
                             // By introducing a tuple of upvar types into the chain of obligations
                             // of a generator, the first non-generator item is now the tuple itself,
@@ -2351,12 +2281,9 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
         // cycles. If we can't use resolved types because the generator comes from another crate,
         // we still provide a targeted error but without all the relevant spans.
         let generator_data = match &self.typeck_results {
-            Some(t) if t.hir_owner.to_def_id() == generator_did_root => GeneratorData::Local(&t),
+            Some(t) if t.hir_owner.to_def_id() == generator_did_root => GeneratorData(&t),
             _ if generator_did.is_local() => {
-                GeneratorData::Local(self.tcx.typeck(generator_did.expect_local()))
-            }
-            _ if let Some(generator_diag_data) = self.tcx.generator_diagnostic_data(generator_did) => {
-                GeneratorData::Foreign(generator_diag_data)
+                GeneratorData(self.tcx.typeck(generator_did.expect_local()))
             }
             _ => return false,
         };
@@ -2368,30 +2295,11 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
 
         let mut interior_or_upvar_span = None;
 
-        let from_awaited_ty = generator_data.get_from_await_ty(self.tcx, visitor, hir, ty_matches);
+        let from_awaited_ty = generator_data.get_from_await_ty(visitor, hir, ty_matches);
         debug!(?from_awaited_ty);
 
-        // The generator interior types share the same binders
-        if let Some(cause) =
-            generator_data.get_generator_interior_types().skip_binder().iter().find(
-                |ty::GeneratorInteriorTypeCause { ty, .. }| {
-                    ty_matches(generator_data.get_generator_interior_types().rebind(*ty))
-                },
-            )
-        {
-            let ty::GeneratorInteriorTypeCause { span, scope_span, yield_span, expr, .. } = cause;
-
-            interior_or_upvar_span = Some(GeneratorInteriorOrUpvar::Interior(
-                *span,
-                Some((*scope_span, *yield_span, *expr, from_awaited_ty)),
-            ));
-
-            if interior_or_upvar_span.is_none() && generator_data.is_foreign() {
-                interior_or_upvar_span = Some(GeneratorInteriorOrUpvar::Interior(*span, None));
-            }
-        } else if self.tcx.sess.opts.unstable_opts.drop_tracking_mir
-            // Avoid disclosing internal information to downstream crates.
-            && generator_did.is_local()
+        // Avoid disclosing internal information to downstream crates.
+        if generator_did.is_local()
             // Try to avoid cycles.
             && !generator_within_in_progress_typeck
             && let Some(generator_info) = self.tcx.mir_generator_witnesses(generator_did)
@@ -2407,7 +2315,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                     if ty_matches(ty::Binder::dummy(decl.ty)) && !decl.ignore_for_traits {
                         interior_or_upvar_span = Some(GeneratorInteriorOrUpvar::Interior(
                             decl.source_info.span,
-                            Some((None, source_info.span, None, from_awaited_ty)),
+                            Some((source_info.span, from_awaited_ty)),
                         ));
                         break 'find_source;
                     }
@@ -2420,17 +2328,13 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                 generator_data.try_get_upvar_span(&self, generator_did, ty_matches);
         }
 
-        if interior_or_upvar_span.is_none() && generator_data.is_foreign() {
+        if interior_or_upvar_span.is_none() && !generator_did.is_local() {
             interior_or_upvar_span = Some(GeneratorInteriorOrUpvar::Interior(span, None));
         }
 
         debug!(?interior_or_upvar_span);
         if let Some(interior_or_upvar_span) = interior_or_upvar_span {
             let is_async = self.tcx.generator_is_async(generator_did);
-            let typeck_results = match generator_data {
-                GeneratorData::Local(typeck_results) => Some(typeck_results),
-                GeneratorData::Foreign(_) => None,
-            };
             self.note_obligation_cause_for_async_await(
                 err,
                 interior_or_upvar_span,
@@ -2438,7 +2342,6 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                 outer_generator,
                 trait_ref,
                 target_ty,
-                typeck_results,
                 obligation,
                 next_code,
             );
@@ -2459,7 +2362,6 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
         outer_generator: Option<DefId>,
         trait_pred: ty::TraitPredicate<'tcx>,
         target_ty: Ty<'tcx>,
-        typeck_results: Option<&ty::TypeckResults<'tcx>>,
         obligation: &PredicateObligation<'tcx>,
         next_code: Option<&ObligationCauseCode<'tcx>>,
     ) {
@@ -2517,9 +2419,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             format!("does not implement `{}`", trait_pred.print_modifiers_and_trait_path())
         };
 
-        let mut explain_yield = |interior_span: Span,
-                                 yield_span: Span,
-                                 scope_span: Option<Span>| {
+        let mut explain_yield = |interior_span: Span, yield_span: Span| {
             let mut span = MultiSpan::from_span(yield_span);
             let snippet = match source_map.span_to_snippet(interior_span) {
                 // #70935: If snippet contains newlines, display "the value" instead
@@ -2551,22 +2451,14 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                 interior_span,
                 format!("has type `{target_ty}` which {trait_explanation}"),
             );
-            if let Some(scope_span) = scope_span {
-                let scope_span = source_map.end_point(scope_span);
-
-                let msg = format!("{snippet} is later dropped here");
-                span.push_span_label(scope_span, msg);
-            }
             err.span_note(
-                    span,
-                    format!(
-                        "{future_or_generator} {trait_explanation} as this value is used across {an_await_or_yield}"
-                    ),
-                );
+                span,
+                format!("{future_or_generator} {trait_explanation} as this value is used across {an_await_or_yield}"),
+            );
         };
         match interior_or_upvar_span {
             GeneratorInteriorOrUpvar::Interior(interior_span, interior_extra_info) => {
-                if let Some((scope_span, yield_span, expr, from_awaited_ty)) = interior_extra_info {
+                if let Some((yield_span, from_awaited_ty)) = interior_extra_info {
                     if let Some(await_span) = from_awaited_ty {
                         // The type causing this obligation is one being awaited at await_span.
                         let mut span = MultiSpan::from_span(await_span);
@@ -2584,62 +2476,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                         );
                     } else {
                         // Look at the last interior type to get a span for the `.await`.
-                        debug!(
-                            generator_interior_types = ?format_args!(
-                                "{:#?}", typeck_results.as_ref().map(|t| &t.generator_interior_types)
-                            ),
-                        );
-                        explain_yield(interior_span, yield_span, scope_span);
-                    }
-
-                    if let Some(expr_id) = expr {
-                        let expr = hir.expect_expr(expr_id);
-                        debug!("target_ty evaluated from {:?}", expr);
-
-                        let parent = hir.parent_id(expr_id);
-                        if let Some(hir::Node::Expr(e)) = hir.find(parent) {
-                            let parent_span = hir.span(parent);
-                            let parent_did = parent.owner.to_def_id();
-                            // ```rust
-                            // impl T {
-                            //     fn foo(&self) -> i32 {}
-                            // }
-                            // T.foo();
-                            // ^^^^^^^ a temporary `&T` created inside this method call due to `&self`
-                            // ```
-                            //
-                            let is_region_borrow = if let Some(typeck_results) = typeck_results {
-                                typeck_results
-                                    .expr_adjustments(expr)
-                                    .iter()
-                                    .any(|adj| adj.is_region_borrow())
-                            } else {
-                                false
-                            };
-
-                            // ```rust
-                            // struct Foo(*const u8);
-                            // bar(Foo(std::ptr::null())).await;
-                            //     ^^^^^^^^^^^^^^^^^^^^^ raw-ptr `*T` created inside this struct ctor.
-                            // ```
-                            debug!(parent_def_kind = ?self.tcx.def_kind(parent_did));
-                            let is_raw_borrow_inside_fn_like_call =
-                                match self.tcx.def_kind(parent_did) {
-                                    DefKind::Fn | DefKind::Ctor(..) => target_ty.is_unsafe_ptr(),
-                                    _ => false,
-                                };
-                            if let Some(typeck_results) = typeck_results {
-                                if (typeck_results.is_method_call(e) && is_region_borrow)
-                                    || is_raw_borrow_inside_fn_like_call
-                                {
-                                    err.span_help(
-                                        parent_span,
-                                        "consider moving this into a `let` \
-                        binding to create a shorter lived borrow",
-                                    );
-                                }
-                            }
-                        }
+                        explain_yield(interior_span, yield_span);
                     }
                 }
             }
@@ -3090,20 +2927,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                                 }
                                 err.span_note(self.tcx.def_span(def_id), msg)
                             }
-                            ty::GeneratorWitness(bound_tys) => {
-                                use std::fmt::Write;
-
-                                // FIXME: this is kind of an unusual format for rustc, can we make it more clear?
-                                // Maybe we should just remove this note altogether?
-                                // FIXME: only print types which don't meet the trait requirement
-                                let mut msg =
-                                    "required because it captures the following types: ".to_owned();
-                                for ty in bound_tys.skip_binder() {
-                                    with_forced_trimmed_paths!(write!(msg, "`{ty}`, ").unwrap());
-                                }
-                                err.note(msg.trim_end_matches(", ").to_string())
-                            }
-                            ty::GeneratorWitnessMIR(def_id, args) => {
+                            ty::GeneratorWitness(def_id, args) => {
                                 use std::fmt::Write;
 
                                 // FIXME: this is kind of an unusual format for rustc, can we make it more clear?

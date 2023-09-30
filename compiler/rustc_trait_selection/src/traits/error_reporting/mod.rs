@@ -1847,7 +1847,6 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                 ty::Generator(..) => Some(18),
                 ty::Foreign(..) => Some(19),
                 ty::GeneratorWitness(..) => Some(20),
-                ty::GeneratorWitnessMIR(..) => Some(21),
                 ty::Placeholder(..) | ty::Bound(..) | ty::Infer(..) | ty::Error(_) => None,
             }
         }
@@ -3212,7 +3211,7 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
     ) -> DiagnosticBuilder<'tcx, ErrorGuaranteed> {
         let name = match self.tcx.opaque_type_origin(def_id.expect_local()) {
             hir::OpaqueTyOrigin::FnReturn(_) | hir::OpaqueTyOrigin::AsyncFn(_) => {
-                format!("opaque type")
+                "opaque type".to_string()
             }
             hir::OpaqueTyOrigin::TyAlias { .. } => {
                 format!("`{}`", self.tcx.def_path_debug_str(def_id))

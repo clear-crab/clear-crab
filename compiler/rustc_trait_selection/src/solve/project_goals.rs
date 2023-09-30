@@ -59,7 +59,7 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
             }
             DefKind::AnonConst => self.normalize_anon_const(goal),
             DefKind::OpaqueTy => self.normalize_opaque_type(goal),
-            DefKind::TyAlias { .. } => self.normalize_weak_type(goal),
+            DefKind::TyAlias => self.normalize_weak_type(goal),
             kind => bug!("unknown DefKind {} in projection goal: {goal:#?}", kind.descr(def_id)),
         }
     }
@@ -388,7 +388,6 @@ impl<'tcx> assembly::GoalKind<'tcx> for ProjectionPredicate<'tcx> {
                 | ty::Infer(ty::IntVar(..) | ty::FloatVar(..))
                 | ty::Generator(..)
                 | ty::GeneratorWitness(..)
-                | ty::GeneratorWitnessMIR(..)
                 | ty::Never
                 | ty::Foreign(..) => tcx.types.unit,
 
@@ -556,7 +555,6 @@ impl<'tcx> assembly::GoalKind<'tcx> for ProjectionPredicate<'tcx> {
             | ty::Infer(ty::IntVar(..) | ty::FloatVar(..))
             | ty::Generator(..)
             | ty::GeneratorWitness(..)
-            | ty::GeneratorWitnessMIR(..)
             | ty::Never
             | ty::Foreign(..)
             | ty::Adt(_, _)

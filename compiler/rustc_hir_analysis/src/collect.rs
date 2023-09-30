@@ -58,6 +58,7 @@ pub fn provide(providers: &mut Providers) {
     *providers = Providers {
         type_of: type_of::type_of,
         type_of_opaque: type_of::type_of_opaque,
+        type_alias_is_lazy: type_of::type_alias_is_lazy,
         item_bounds: item_bounds::item_bounds,
         explicit_item_bounds: item_bounds::explicit_item_bounds,
         generics_of: generics_of::generics_of,
@@ -1373,7 +1374,7 @@ fn impl_trait_ref(
                 // make astconv happy.
                 let mut path_segments = ast_trait_ref.path.segments.to_vec();
                 let last_segment = path_segments.len() - 1;
-                let mut args = path_segments[last_segment].args().clone();
+                let mut args = *path_segments[last_segment].args();
                 let last_arg = args.args.len() - 1;
                 assert!(matches!(args.args[last_arg], hir::GenericArg::Const(anon_const) if tcx.has_attr(anon_const.value.def_id, sym::rustc_host)));
                 args.args = &args.args[..args.args.len() - 1];

@@ -23,7 +23,7 @@ use rustc_middle::middle::resolve_bound_vars::ObjectLifetimeDefault;
 use rustc_middle::mir;
 use rustc_middle::ty::fast_reject::SimplifiedType;
 use rustc_middle::ty::{self, ReprOptions, Ty, UnusedGenericParams};
-use rustc_middle::ty::{DeducedParamAttrs, GeneratorDiagnosticData, ParameterizedOverTcx, TyCtxt};
+use rustc_middle::ty::{DeducedParamAttrs, ParameterizedOverTcx, TyCtxt};
 use rustc_middle::util::Providers;
 use rustc_serialize::opaque::FileEncoder;
 use rustc_session::config::SymbolManglingVersion;
@@ -383,6 +383,7 @@ define_tables! {
     is_intrinsic: Table<DefIndex, bool>,
     is_macro_rules: Table<DefIndex, bool>,
     is_type_alias_impl_trait: Table<DefIndex, bool>,
+    type_alias_is_lazy: Table<DefIndex, bool>,
     attr_flags: Table<DefIndex, AttrFlags>,
     def_path_hashes: Table<DefIndex, DefPathHash>,
     explicit_item_bounds: Table<DefIndex, LazyArray<(ty::Clause<'static>, Span)>>,
@@ -452,7 +453,6 @@ define_tables! {
     // definitions from any given crate.
     def_keys: Table<DefIndex, LazyValue<DefKey>>,
     proc_macro_quoted_spans: Table<usize, LazyValue<Span>>,
-    generator_diagnostic_data: Table<DefIndex, LazyValue<GeneratorDiagnosticData<'static>>>,
     variant_data: Table<DefIndex, LazyValue<VariantData>>,
     assoc_container: Table<DefIndex, ty::AssocItemContainer>,
     macro_definition: Table<DefIndex, LazyValue<ast::DelimArgs>>,
