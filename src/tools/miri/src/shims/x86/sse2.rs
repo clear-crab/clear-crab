@@ -10,7 +10,7 @@ use rustc_target::spec::abi::Abi;
 
 use super::{bin_op_simd_float_all, bin_op_simd_float_first, FloatBinOp, FloatCmpOp};
 use crate::*;
-use shims::foreign_items::EmulateByNameResult;
+use shims::foreign_items::EmulateForeignItemResult;
 
 impl<'mir, 'tcx: 'mir> EvalContextExt<'mir, 'tcx> for crate::MiriInterpCx<'mir, 'tcx> {}
 pub(super) trait EvalContextExt<'mir, 'tcx: 'mir>:
@@ -22,7 +22,7 @@ pub(super) trait EvalContextExt<'mir, 'tcx: 'mir>:
         abi: Abi,
         args: &[OpTy<'tcx, Provenance>],
         dest: &PlaceTy<'tcx, Provenance>,
-    ) -> InterpResult<'tcx, EmulateByNameResult<'mir, 'tcx>> {
+    ) -> InterpResult<'tcx, EmulateForeignItemResult> {
         let this = self.eval_context_mut();
         // Prefix should have already been checked.
         let unprefixed_name = link_name.as_str().strip_prefix("llvm.x86.sse2.").unwrap();
@@ -80,6 +80,42 @@ pub(super) trait EvalContextExt<'mir, 'tcx: 'mir>:
                     // Narrow back to the original type
                     let res = this.int_to_int_or_float(&divided, dest.layout)?;
                     this.write_immediate(*res, &dest)?;
+                }
+            }
+            // Used to implement the _mm_madd_epi16 function.
+            // Multiplies packed signed 16-bit integers in `left` and `right`, producing
+            // intermediate signed 32-bit integers. Horizontally add adjacent pairs of
+            // intermediate 32-bit integers, and pack the results in `dest`.
+            "pmadd.wd" => {
+                let [left, right] =
+                    this.check_shim(abi, Abi::C { unwind: false }, link_name, args)?;
+
+                let (left, left_len) = this.operand_to_simd(left)?;
+                let (right, right_len) = this.operand_to_simd(right)?;
+                let (dest, dest_len) = this.place_to_simd(dest)?;
+
+                assert_eq!(left_len, right_len);
+                assert_eq!(dest_len.checked_mul(2).unwrap(), left_len);
+
+                for i in 0..dest_len {
+                    let j1 = i.checked_mul(2).unwrap();
+                    let left1 = this.read_scalar(&this.project_index(&left, j1)?)?.to_i16()?;
+                    let right1 = this.read_scalar(&this.project_index(&right, j1)?)?.to_i16()?;
+
+                    let j2 = j1.checked_add(1).unwrap();
+                    let left2 = this.read_scalar(&this.project_index(&left, j2)?)?.to_i16()?;
+                    let right2 = this.read_scalar(&this.project_index(&right, j2)?)?.to_i16()?;
+
+                    let dest = this.project_index(&dest, i)?;
+
+                    // Multiplications are i16*i16->i32, which will not overflow.
+                    let mul1 = i32::from(left1).checked_mul(right1.into()).unwrap();
+                    let mul2 = i32::from(left2).checked_mul(right2.into()).unwrap();
+                    // However, this addition can overflow in the most extreme case
+                    // (-0x8000)*(-0x8000)+(-0x8000)*(-0x8000) = 0x80000000
+                    let res = mul1.wrapping_add(mul2);
+
+                    this.write_scalar(Scalar::from_i32(res), &dest)?;
                 }
             }
             // Used to implement the _mm_mulhi_epi16 and _mm_mulhi_epu16 functions.
@@ -601,10 +637,10 @@ pub(super) trait EvalContextExt<'mir, 'tcx: 'mir>:
 
                 let left = this.read_scalar(&this.project_index(&left, 0)?)?.to_f64()?;
                 let right = this.read_scalar(&this.project_index(&right, 0)?)?.to_f64()?;
-                // The difference between the com* and *ucom variants is signaling
+                // The difference between the com* and ucom* variants is signaling
                 // of exceptions when either argument is a quiet NaN. We do not
                 // support accessing the SSE status register from miri (or from Rust,
-                // for that matter), so we treat equally both variants.
+                // for that matter), so we treat both variants equally.
                 let res = match unprefixed_name {
                     "comieq.sd" | "ucomieq.sd" => left == right,
                     "comilt.sd" | "ucomilt.sd" => left < right,
@@ -761,9 +797,9 @@ pub(super) trait EvalContextExt<'mir, 'tcx: 'mir>:
                 let [] = this.check_shim(abi, Abi::C { unwind: false }, link_name, args)?;
                 this.yield_active_thread();
             }
-            _ => return Ok(EmulateByNameResult::NotSupported),
+            _ => return Ok(EmulateForeignItemResult::NotSupported),
         }
-        Ok(EmulateByNameResult::NeedsJumping)
+        Ok(EmulateForeignItemResult::NeedsJumping)
     }
 }
 

@@ -41,8 +41,8 @@ use rustc_target::spec::abi;
 use std::borrow::Cow;
 use std::iter;
 
-use super::InferCtxtPrivExt;
 use crate::infer::InferCtxtExt as _;
+use crate::traits::error_reporting::type_err_ctxt_ext::InferCtxtPrivExt;
 use crate::traits::query::evaluate_obligation::InferCtxtExt as _;
 use rustc_middle::ty::print::{with_forced_trimmed_paths, with_no_trimmed_paths};
 
@@ -4000,14 +4000,6 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
 
         // ... whose signature is `async` (i.e. this is an AFIT)
         let (sig, body) = item.expect_fn();
-        let hir::IsAsync::Async(async_span) = sig.header.asyncness else {
-            return;
-        };
-        let Ok(async_span) =
-            self.tcx.sess.source_map().span_extend_while(async_span, |c| c.is_whitespace())
-        else {
-            return;
-        };
         let hir::FnRetTy::Return(hir::Ty { kind: hir::TyKind::OpaqueDef(def, ..), .. }) =
             sig.decl.output
         else {
@@ -4021,55 +4013,17 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             return;
         }
 
-        let future = self.tcx.hir().item(*def).expect_opaque_ty();
-        let Some(hir::GenericBound::LangItemTrait(_, _, _, generics)) = future.bounds.get(0) else {
-            // `async fn` should always lower to a lang item bound... but don't ICE.
-            return;
-        };
-        let Some(hir::TypeBindingKind::Equality { term: hir::Term::Ty(future_output_ty) }) =
-            generics.bindings.get(0).map(|binding| binding.kind)
-        else {
-            // Also should never happen.
+        let Some(sugg) = suggest_desugaring_async_fn_to_impl_future_in_trait(
+            self.tcx,
+            *sig,
+            *body,
+            opaque_def_id.expect_local(),
+            &format!(" + {auto_trait}"),
+        ) else {
             return;
         };
 
         let function_name = self.tcx.def_path_str(fn_def_id);
-
-        let mut sugg = if future_output_ty.span.is_empty() {
-            vec![
-                (async_span, String::new()),
-                (
-                    future_output_ty.span,
-                    format!(" -> impl std::future::Future<Output = ()> + {auto_trait}"),
-                ),
-            ]
-        } else {
-            vec![
-                (
-                    future_output_ty.span.shrink_to_lo(),
-                    "impl std::future::Future<Output = ".to_owned(),
-                ),
-                (future_output_ty.span.shrink_to_hi(), format!("> + {auto_trait}")),
-                (async_span, String::new()),
-            ]
-        };
-
-        // If there's a body, we also need to wrap it in `async {}`
-        if let hir::TraitFn::Provided(body) = body {
-            let body = self.tcx.hir().body(*body);
-            let body_span = body.value.span;
-            let body_span_without_braces =
-                body_span.with_lo(body_span.lo() + BytePos(1)).with_hi(body_span.hi() - BytePos(1));
-            if body_span_without_braces.is_empty() {
-                sugg.push((body_span_without_braces, " async {} ".to_owned()));
-            } else {
-                sugg.extend([
-                    (body_span_without_braces.shrink_to_lo(), "async {".to_owned()),
-                    (body_span_without_braces.shrink_to_hi(), "} ".to_owned()),
-                ]);
-            }
-        }
-
         err.multipart_suggestion(
             format!(
                 "`{auto_trait}` can be made part of the associated future's \
@@ -4300,6 +4254,39 @@ impl<'a, 'hir> hir::intravisit::Visitor<'hir> for ReplaceImplTraitVisitor<'a> {
     }
 }
 
+pub(super) fn get_explanation_based_on_obligation<'tcx>(
+    obligation: &PredicateObligation<'tcx>,
+    trait_ref: ty::PolyTraitRef<'tcx>,
+    trait_predicate: &ty::PolyTraitPredicate<'tcx>,
+    pre_message: String,
+) -> String {
+    if let ObligationCauseCode::MainFunctionType = obligation.cause.code() {
+        "consider using `()`, or a `Result`".to_owned()
+    } else {
+        let ty_desc = match trait_ref.skip_binder().self_ty().kind() {
+            ty::FnDef(_, _) => Some("fn item"),
+            ty::Closure(_, _) => Some("closure"),
+            _ => None,
+        };
+
+        match ty_desc {
+            Some(desc) => format!(
+                "{}the trait `{}` is not implemented for {} `{}`",
+                pre_message,
+                trait_predicate.print_modifiers_and_trait_path(),
+                desc,
+                trait_ref.skip_binder().self_ty(),
+            ),
+            None => format!(
+                "{}the trait `{}` is not implemented for `{}`",
+                pre_message,
+                trait_predicate.print_modifiers_and_trait_path(),
+                trait_ref.skip_binder().self_ty(),
+            ),
+        }
+    }
+}
+
 // Replace `param` with `replace_ty`
 struct ReplaceImplTraitFolder<'tcx> {
     tcx: TyCtxt<'tcx>,
@@ -4320,4 +4307,66 @@ impl<'tcx> TypeFolder<TyCtxt<'tcx>> for ReplaceImplTraitFolder<'tcx> {
     fn interner(&self) -> TyCtxt<'tcx> {
         self.tcx
     }
+}
+
+pub fn suggest_desugaring_async_fn_to_impl_future_in_trait<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    sig: hir::FnSig<'tcx>,
+    body: hir::TraitFn<'tcx>,
+    opaque_def_id: LocalDefId,
+    add_bounds: &str,
+) -> Option<Vec<(Span, String)>> {
+    let hir::IsAsync::Async(async_span) = sig.header.asyncness else {
+        return None;
+    };
+    let Ok(async_span) = tcx.sess.source_map().span_extend_while(async_span, |c| c.is_whitespace())
+    else {
+        return None;
+    };
+
+    let future = tcx.hir().get_by_def_id(opaque_def_id).expect_item().expect_opaque_ty();
+    let Some(hir::GenericBound::LangItemTrait(_, _, _, generics)) = future.bounds.get(0) else {
+        // `async fn` should always lower to a lang item bound... but don't ICE.
+        return None;
+    };
+    let Some(hir::TypeBindingKind::Equality { term: hir::Term::Ty(future_output_ty) }) =
+        generics.bindings.get(0).map(|binding| binding.kind)
+    else {
+        // Also should never happen.
+        return None;
+    };
+
+    let mut sugg = if future_output_ty.span.is_empty() {
+        vec![
+            (async_span, String::new()),
+            (
+                future_output_ty.span,
+                format!(" -> impl std::future::Future<Output = ()>{add_bounds}"),
+            ),
+        ]
+    } else {
+        vec![
+            (future_output_ty.span.shrink_to_lo(), "impl std::future::Future<Output = ".to_owned()),
+            (future_output_ty.span.shrink_to_hi(), format!(">{add_bounds}")),
+            (async_span, String::new()),
+        ]
+    };
+
+    // If there's a body, we also need to wrap it in `async {}`
+    if let hir::TraitFn::Provided(body) = body {
+        let body = tcx.hir().body(body);
+        let body_span = body.value.span;
+        let body_span_without_braces =
+            body_span.with_lo(body_span.lo() + BytePos(1)).with_hi(body_span.hi() - BytePos(1));
+        if body_span_without_braces.is_empty() {
+            sugg.push((body_span_without_braces, " async {} ".to_owned()));
+        } else {
+            sugg.extend([
+                (body_span_without_braces.shrink_to_lo(), "async {".to_owned()),
+                (body_span_without_braces.shrink_to_hi(), "} ".to_owned()),
+            ]);
+        }
+    }
+
+    Some(sugg)
 }

@@ -16,6 +16,7 @@ use rustc_infer::traits::util;
 use rustc_middle::ty::error::{ExpectedFound, TypeError};
 use rustc_middle::ty::fold::BottomUpFolder;
 use rustc_middle::ty::util::ExplicitSelf;
+use rustc_middle::ty::ToPredicate;
 use rustc_middle::ty::{
     self, GenericArgs, Ty, TypeFoldable, TypeFolder, TypeSuperFoldable, TypeVisitableExt,
 };
@@ -322,7 +323,7 @@ fn compare_method_predicate_entailment<'tcx>(
         // FIXME(-Ztrait-solver=next): Not needed when the hack below is removed.
         let errors = ocx.select_where_possible();
         if !errors.is_empty() {
-            let reported = infcx.err_ctxt().report_fulfillment_errors(&errors);
+            let reported = infcx.err_ctxt().report_fulfillment_errors(errors);
             return Err(reported);
         }
 
@@ -393,7 +394,7 @@ fn compare_method_predicate_entailment<'tcx>(
                 });
             }
             CheckImpliedWfMode::Skip => {
-                let reported = infcx.err_ctxt().report_fulfillment_errors(&errors);
+                let reported = infcx.err_ctxt().report_fulfillment_errors(errors);
                 return Err(reported);
             }
         }
@@ -873,7 +874,7 @@ pub(super) fn collect_return_position_impl_trait_in_trait_tys<'tcx>(
     // RPITs.
     let errors = ocx.select_all_or_error();
     if !errors.is_empty() {
-        let reported = infcx.err_ctxt().report_fulfillment_errors(&errors);
+        let reported = infcx.err_ctxt().report_fulfillment_errors(errors);
         return Err(reported);
     }
 
@@ -1188,7 +1189,7 @@ fn report_trait_method_mismatch<'tcx>(
                     let ap = Applicability::MachineApplicable;
                     match sig.decl.output {
                         hir::FnRetTy::DefaultReturn(sp) => {
-                            let sugg = format!("-> {} ", trait_sig.output());
+                            let sugg = format!(" -> {}", trait_sig.output());
                             diag.span_suggestion_verbose(sp, msg, sugg, ap);
                         }
                         hir::FnRetTy::Return(hir_ty) => {
@@ -2049,7 +2050,7 @@ fn compare_const_predicate_entailment<'tcx>(
     // version.
     let errors = ocx.select_all_or_error();
     if !errors.is_empty() {
-        return Err(infcx.err_ctxt().report_fulfillment_errors(&errors));
+        return Err(infcx.err_ctxt().report_fulfillment_errors(errors));
     }
 
     let outlives_env = OutlivesEnvironment::new(param_env);
@@ -2142,7 +2143,7 @@ fn compare_type_predicate_entailment<'tcx>(
     // version.
     let errors = ocx.select_all_or_error();
     if !errors.is_empty() {
-        let reported = infcx.err_ctxt().report_fulfillment_errors(&errors);
+        let reported = infcx.err_ctxt().report_fulfillment_errors(errors);
         return Err(reported);
     }
 
@@ -2279,16 +2280,16 @@ pub(super) fn check_type_bounds<'tcx>(
                 //
                 // impl<T> X for T where T: X { type Y = <T as X>::Y; }
             }
-            _ => predicates.push(ty::Clause::from_projection_clause(
-                tcx,
+            _ => predicates.push(
                 ty::Binder::bind_with_vars(
                     ty::ProjectionPredicate {
                         projection_ty: tcx.mk_alias_ty(trait_ty.def_id, rebased_args),
                         term: normalize_impl_ty.into(),
                     },
                     bound_vars,
-                ),
-            )),
+                )
+                .to_predicate(tcx),
+            ),
         };
         ty::ParamEnv::new(tcx.mk_clauses(&predicates), Reveal::UserFacing)
     };
@@ -2357,7 +2358,7 @@ pub(super) fn check_type_bounds<'tcx>(
     // version.
     let errors = ocx.select_all_or_error();
     if !errors.is_empty() {
-        let reported = infcx.err_ctxt().report_fulfillment_errors(&errors);
+        let reported = infcx.err_ctxt().report_fulfillment_errors(errors);
         return Err(reported);
     }
 

@@ -23,6 +23,7 @@ use rustc_middle::traits::query::NoSolution;
 use rustc_middle::ty::error::TypeError;
 use rustc_middle::ty::ToPredicate;
 use rustc_middle::ty::TypeFoldable;
+use rustc_middle::ty::Variance;
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_session::config::TraitSolver;
 
@@ -156,6 +157,20 @@ impl<'a, 'tcx> ObligationCtxt<'a, 'tcx> {
             .map(|infer_ok| self.register_infer_ok_obligations(infer_ok))
     }
 
+    pub fn relate<T: ToTrace<'tcx>>(
+        &self,
+        cause: &ObligationCause<'tcx>,
+        param_env: ty::ParamEnv<'tcx>,
+        variance: Variance,
+        expected: T,
+        actual: T,
+    ) -> Result<(), TypeError<'tcx>> {
+        self.infcx
+            .at(cause, param_env)
+            .relate(DefineOpaqueTypes::Yes, expected, variance, actual)
+            .map(|infer_ok| self.register_infer_ok_obligations(infer_ok))
+    }
+
     /// Checks whether `expected` is a supertype of `actual`: `expected :> actual`.
     pub fn sup<T: ToTrace<'tcx>>(
         &self,
@@ -203,7 +218,7 @@ impl<'a, 'tcx> ObligationCtxt<'a, 'tcx> {
         def_id: LocalDefId,
     ) -> Result<FxIndexSet<Ty<'tcx>>, ErrorGuaranteed> {
         self.assumed_wf_types(param_env, def_id)
-            .map_err(|errors| self.infcx.err_ctxt().report_fulfillment_errors(&errors))
+            .map_err(|errors| self.infcx.err_ctxt().report_fulfillment_errors(errors))
     }
 
     pub fn assumed_wf_types(

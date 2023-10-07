@@ -2,7 +2,7 @@
 //!
 //! [rustc dev guide]: https://rustc-dev-guide.rust-lang.org/mir/index.html
 
-use crate::mir::interpret::{AllocRange, ConstAllocation, ErrorHandled, Scalar};
+use crate::mir::interpret::{AllocRange, ConstAllocation, Scalar};
 use crate::mir::visit::MirVisitable;
 use crate::ty::codec::{TyDecoder, TyEncoder};
 use crate::ty::fold::{FallibleTypeFolder, TypeFoldable};
@@ -568,34 +568,6 @@ impl<'tcx> Body<'tcx> {
     pub fn is_custom_mir(&self) -> bool {
         self.injection_phase.is_some()
     }
-
-    /// *Must* be called once the full substitution for this body is known, to ensure that the body
-    /// is indeed fit for code generation or consumption more generally.
-    ///
-    /// Sadly there's no nice way to represent an "arbitrary normalizer", so we take one for
-    /// constants specifically. (`Option<GenericArgsRef>` could be used for that, but the fact
-    /// that `Instance::args_for_mir_body` is private and instead instance exposes normalization
-    /// functions makes it seem like exposing the generic args is not the intended strategy.)
-    ///
-    /// Also sadly, CTFE doesn't even know whether it runs on MIR that is already polymorphic or still monomorphic,
-    /// so we cannot just immediately ICE on TooGeneric.
-    ///
-    /// Returns Ok(()) if everything went fine, and `Err` if a problem occurred and got reported.
-    pub fn post_mono_checks(
-        &self,
-        tcx: TyCtxt<'tcx>,
-        param_env: ty::ParamEnv<'tcx>,
-        normalize_const: impl Fn(Const<'tcx>) -> Result<Const<'tcx>, ErrorHandled>,
-    ) -> Result<(), ErrorHandled> {
-        // For now, the only thing we have to check is is to ensure that all the constants used in
-        // the body successfully evaluate.
-        for &const_ in &self.required_consts {
-            let c = normalize_const(const_.const_)?;
-            c.eval(tcx, param_env, Some(const_.span))?;
-        }
-
-        Ok(())
-    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, TyEncodable, TyDecodable, HashStable)]
@@ -830,22 +802,6 @@ pub struct LocalDecl<'tcx> {
     // FIXME(matthewjasper) Don't store in this in `Body`
     pub local_info: ClearCrossCrate<Box<LocalInfo<'tcx>>>,
 
-    /// `true` if this is an internal local.
-    ///
-    /// These locals are not based on types in the source code and are only used
-    /// for a few desugarings at the moment.
-    ///
-    /// The generator transformation will sanity check the locals which are live
-    /// across a suspension point against the type components of the generator
-    /// which type checking knows are live across a suspension point. We need to
-    /// flag drop flags to avoid triggering this check as they are introduced
-    /// outside of type inference.
-    ///
-    /// This should be sound because the drop flags are fully algebraic, and
-    /// therefore don't affect the auto-trait or outlives properties of the
-    /// generator.
-    pub internal: bool,
-
     /// The type of this local.
     pub ty: Ty<'tcx>,
 
@@ -1058,7 +1014,7 @@ impl<'tcx> LocalDecl<'tcx> {
         self.source_info.span.desugaring_kind().is_some()
     }
 
-    /// Creates a new `LocalDecl` for a temporary: mutable, non-internal.
+    /// Creates a new `LocalDecl` for a temporary, mutable.
     #[inline]
     pub fn new(ty: Ty<'tcx>, span: Span) -> Self {
         Self::with_source_info(ty, SourceInfo::outermost(span))
@@ -1070,18 +1026,10 @@ impl<'tcx> LocalDecl<'tcx> {
         LocalDecl {
             mutability: Mutability::Mut,
             local_info: ClearCrossCrate::Set(Box::new(LocalInfo::Boring)),
-            internal: false,
             ty,
             user_ty: None,
             source_info,
         }
-    }
-
-    /// Converts `self` into same `LocalDecl` except tagged as internal.
-    #[inline]
-    pub fn internal(mut self) -> Self {
-        self.internal = true;
-        self
     }
 
     /// Converts `self` into same `LocalDecl` except tagged as immutable.

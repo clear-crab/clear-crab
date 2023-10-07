@@ -5,10 +5,12 @@ use rustc_target::spec::abi::Abi;
 
 use crate::*;
 use helpers::bool_to_simd_element;
-use shims::foreign_items::EmulateByNameResult;
+use shims::foreign_items::EmulateForeignItemResult;
 
 mod sse;
 mod sse2;
+mod sse3;
+mod ssse3;
 
 impl<'mir, 'tcx: 'mir> EvalContextExt<'mir, 'tcx> for crate::MiriInterpCx<'mir, 'tcx> {}
 pub(super) trait EvalContextExt<'mir, 'tcx: 'mir>:
@@ -20,7 +22,7 @@ pub(super) trait EvalContextExt<'mir, 'tcx: 'mir>:
         abi: Abi,
         args: &[OpTy<'tcx, Provenance>],
         dest: &PlaceTy<'tcx, Provenance>,
-    ) -> InterpResult<'tcx, EmulateByNameResult<'mir, 'tcx>> {
+    ) -> InterpResult<'tcx, EmulateForeignItemResult> {
         let this = self.eval_context_mut();
         // Prefix should have already been checked.
         let unprefixed_name = link_name.as_str().strip_prefix("llvm.x86.").unwrap();
@@ -32,7 +34,7 @@ pub(super) trait EvalContextExt<'mir, 'tcx: 'mir>:
             // https://www.intel.com/content/www/us/en/docs/cpp-compiler/developer-guide-reference/2021-8/addcarry-u32-addcarry-u64.html
             "addcarry.32" | "addcarry.64" => {
                 if unprefixed_name == "addcarry.64" && this.tcx.sess.target.arch != "x86_64" {
-                    return Ok(EmulateByNameResult::NotSupported);
+                    return Ok(EmulateForeignItemResult::NotSupported);
                 }
 
                 let [c_in, a, b] = this.check_shim(abi, Abi::Unadjusted, link_name, args)?;
@@ -58,7 +60,7 @@ pub(super) trait EvalContextExt<'mir, 'tcx: 'mir>:
             // https://www.intel.com/content/www/us/en/docs/cpp-compiler/developer-guide-reference/2021-8/subborrow-u32-subborrow-u64.html
             "subborrow.32" | "subborrow.64" => {
                 if unprefixed_name == "subborrow.64" && this.tcx.sess.target.arch != "x86_64" {
-                    return Ok(EmulateByNameResult::NotSupported);
+                    return Ok(EmulateForeignItemResult::NotSupported);
                 }
 
                 let [b_in, a, b] = this.check_shim(abi, Abi::Unadjusted, link_name, args)?;
@@ -88,9 +90,19 @@ pub(super) trait EvalContextExt<'mir, 'tcx: 'mir>:
                     this, link_name, abi, args, dest,
                 );
             }
-            _ => return Ok(EmulateByNameResult::NotSupported),
+            name if name.starts_with("sse3.") => {
+                return sse3::EvalContextExt::emulate_x86_sse3_intrinsic(
+                    this, link_name, abi, args, dest,
+                );
+            }
+            name if name.starts_with("ssse3.") => {
+                return ssse3::EvalContextExt::emulate_x86_ssse3_intrinsic(
+                    this, link_name, abi, args, dest,
+                );
+            }
+            _ => return Ok(EmulateForeignItemResult::NotSupported),
         }
-        Ok(EmulateByNameResult::NeedsJumping)
+        Ok(EmulateForeignItemResult::NeedsJumping)
     }
 }
 
@@ -282,6 +294,47 @@ fn bin_op_simd_float_all<'tcx, F: rustc_apfloat::Float>(
 
         let res = bin_op_float::<F>(this, which, &left, &right)?;
         this.write_scalar(res, &dest)?;
+    }
+
+    Ok(())
+}
+
+/// Horizontaly performs `which` operation on adjacent values of
+/// `left` and `right` SIMD vectors and stores the result in `dest`.
+fn horizontal_bin_op<'tcx>(
+    this: &mut crate::MiriInterpCx<'_, 'tcx>,
+    which: mir::BinOp,
+    saturating: bool,
+    left: &OpTy<'tcx, Provenance>,
+    right: &OpTy<'tcx, Provenance>,
+    dest: &PlaceTy<'tcx, Provenance>,
+) -> InterpResult<'tcx, ()> {
+    let (left, left_len) = this.operand_to_simd(left)?;
+    let (right, right_len) = this.operand_to_simd(right)?;
+    let (dest, dest_len) = this.place_to_simd(dest)?;
+
+    assert_eq!(dest_len, left_len);
+    assert_eq!(dest_len, right_len);
+    assert_eq!(dest_len % 2, 0);
+
+    let middle = dest_len / 2;
+    for i in 0..dest_len {
+        // `i` is the index in `dest`
+        // `j` is the index of the 2-item chunk in `src`
+        let (j, src) =
+            if i < middle { (i, &left) } else { (i.checked_sub(middle).unwrap(), &right) };
+        // `base_i` is the index of the first item of the 2-item chunk in `src`
+        let base_i = j.checked_mul(2).unwrap();
+        let lhs = this.read_immediate(&this.project_index(src, base_i)?)?;
+        let rhs = this.read_immediate(&this.project_index(src, base_i.checked_add(1).unwrap())?)?;
+
+        let res = if saturating {
+            Immediate::from(this.saturating_arith(which, &lhs, &rhs)?)
+        } else {
+            *this.wrapping_binary_op(which, &lhs, &rhs)?
+        };
+
+        this.write_immediate(res, &this.project_index(&dest, i)?)?;
     }
 
     Ok(())
