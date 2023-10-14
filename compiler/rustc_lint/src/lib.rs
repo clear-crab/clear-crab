@@ -27,6 +27,8 @@
 
 #![allow(rustc::potential_query_instability)]
 #![doc(html_root_url = "https://doc.rust-lang.org/nightly/nightly-rustc/")]
+#![cfg_attr(not(bootstrap), doc(rust_logo))]
+#![cfg_attr(not(bootstrap), feature(rustdoc_internals))]
 #![feature(array_windows)]
 #![feature(box_patterns)]
 #![feature(control_flow_enum)]
@@ -503,6 +505,11 @@ fn register_builtins(store: &mut LintStore) {
         "private_in_public",
         "replaced with another group of lints, see RFC \
          <https://rust-lang.github.io/rfcs/2145-type-privacy.html> for more information",
+    );
+    store.register_removed(
+        "invalid_alignment",
+        "converted into hard error, see PR #104616 \
+         <https://github.com/rust-lang/rust/pull/104616> for more information",
     );
 }
 

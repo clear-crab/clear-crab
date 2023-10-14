@@ -7,15 +7,6 @@ use rustc_span::edition::Edition;
 use rustc_span::symbol::{sym, Symbol};
 use rustc_span::Span;
 
-macro_rules! set {
-    ($field: ident) => {{
-        fn f(features: &mut Features, _: Span) {
-            features.$field = true;
-        }
-        f as fn(&mut Features, Span)
-    }};
-}
-
 #[derive(PartialEq)]
 enum FeatureStatus {
     Default,
@@ -23,16 +14,19 @@ enum FeatureStatus {
     Internal,
 }
 
-macro_rules! declare_features {
-    (__status_to_enum active) => {
+macro_rules! status_to_enum {
+    (active) => {
         FeatureStatus::Default
     };
-    (__status_to_enum incomplete) => {
+    (incomplete) => {
         FeatureStatus::Incomplete
     };
-    (__status_to_enum internal) => {
+    (internal) => {
         FeatureStatus::Internal
     };
+}
+
+macro_rules! declare_features {
     ($(
         $(#[doc = $doc:tt])* ($status:ident, $feature:ident, $ver:expr, $issue:expr, $edition:expr),
     )+) => {
@@ -43,7 +37,10 @@ macro_rules! declare_features {
             &[$(
                 // (sym::$feature, $ver, $issue, $edition, set!($feature))
                 Feature {
-                    state: State::Active { set: set!($feature) },
+                    state: State::Active {
+                        // Sets this feature's corresponding bool within `features`.
+                        set: |features| features.$feature = true,
+                    },
                     name: sym::$feature,
                     since: $ver,
                     issue: to_nonzero($issue),
@@ -58,8 +55,9 @@ macro_rules! declare_features {
             pub declared_lang_features: Vec<(Symbol, Span, Option<Symbol>)>,
             /// `#![feature]` attrs for non-language (library) features.
             pub declared_lib_features: Vec<(Symbol, Span)>,
-            /// Features enabled for this crate.
-            pub active_features: FxHashSet<Symbol>,
+            /// `declared_lang_features` + `declared_lib_features`.
+            pub declared_features: FxHashSet<Symbol>,
+            /// Individual features (unstable only).
             $(
                 $(#[doc = $doc])*
                 pub $feature: bool
@@ -67,16 +65,33 @@ macro_rules! declare_features {
         }
 
         impl Features {
+            pub fn set_declared_lang_feature(
+                &mut self,
+                symbol: Symbol,
+                span: Span,
+                since: Option<Symbol>
+            ) {
+                self.declared_lang_features.push((symbol, span, since));
+                self.declared_features.insert(symbol);
+            }
+
+            pub fn set_declared_lib_feature(&mut self, symbol: Symbol, span: Span) {
+                self.declared_lib_features.push((symbol, span));
+                self.declared_features.insert(symbol);
+            }
+
             pub fn walk_feature_fields(&self, mut f: impl FnMut(&str, bool)) {
                 $(f(stringify!($feature), self.$feature);)+
             }
 
-            /// Is the given feature active?
-            pub fn active(&self, feature: Symbol) -> bool {
-                self.active_features.contains(&feature)
+            /// Is the given feature explicitly declared, i.e. named in a
+            /// `#![feature(...)]` within the code?
+            pub fn declared(&self, feature: Symbol) -> bool {
+                self.declared_features.contains(&feature)
             }
 
-            /// Is the given feature enabled?
+            /// Is the given feature enabled, i.e. declared or automatically
+            /// enabled due to the edition?
             ///
             /// Panics if the symbol doesn't correspond to a declared feature.
             pub fn enabled(&self, feature: Symbol) -> bool {
@@ -93,11 +108,10 @@ macro_rules! declare_features {
             pub fn incomplete(&self, feature: Symbol) -> bool {
                 match feature {
                     $(
-                        sym::$feature => declare_features!(__status_to_enum $status) == FeatureStatus::Incomplete,
+                        sym::$feature => status_to_enum!($status) == FeatureStatus::Incomplete,
                     )*
                     // accepted and removed features aren't in this file but are never incomplete
-                    _ if self.declared_lang_features.iter().any(|f| f.0 == feature) => false,
-                    _ if self.declared_lib_features.iter().any(|f| f.0 == feature) => false,
+                    _ if self.declared_features.contains(&feature) => false,
                     _ => panic!("`{}` was not listed in `declare_features`", feature),
                 }
             }
@@ -108,12 +122,11 @@ macro_rules! declare_features {
             pub fn internal(&self, feature: Symbol) -> bool {
                 match feature {
                     $(
-                        sym::$feature => declare_features!(__status_to_enum $status) == FeatureStatus::Internal,
+                        sym::$feature => status_to_enum!($status) == FeatureStatus::Internal,
                     )*
                     // accepted and removed features aren't in this file but are never internal
                     // (a removed feature might have been internal, but it doesn't matter anymore)
-                    _ if self.declared_lang_features.iter().any(|f| f.0 == feature) => false,
-                    _ if self.declared_lib_features.iter().any(|f| f.0 == feature) => false,
+                    _ if self.declared_features.contains(&feature) => false,
                     _ => panic!("`{}` was not listed in `declare_features`", feature),
                 }
             }
@@ -123,9 +136,9 @@ macro_rules! declare_features {
 
 impl Feature {
     /// Sets this feature in `Features`. Panics if called on a non-active feature.
-    pub fn set(&self, features: &mut Features, span: Span) {
+    pub fn set(&self, features: &mut Features) {
         match self.state {
-            State::Active { set } => set(features, span),
+            State::Active { set } => set(features),
             _ => panic!("called `set` on feature `{}` which is not `active`", self.name),
         }
     }
@@ -338,8 +351,6 @@ declare_features! (
     (active, associated_type_defaults, "1.2.0", Some(29661), None),
     /// Allows `async || body` closures.
     (active, async_closure, "1.37.0", Some(62290), None),
-    /// Allows async functions to be declared, implemented, and used in traits.
-    (active, async_fn_in_trait, "1.66.0", Some(91611), None),
     /// Allows `#[track_caller]` on async functions.
     (active, async_fn_track_caller, "1.73.0", Some(110011), None),
     /// Allows builtin # foo() syntax
@@ -400,9 +411,9 @@ declare_features! (
     (active, const_try, "1.56.0", Some(74935), None),
     /// Allows function attribute `#[coverage(on/off)]`, to control coverage
     /// instrumentation of that function.
-    (active, coverage_attribute, "CURRENT_RUSTC_VERSION", Some(84605), None),
+    (active, coverage_attribute, "1.74.0", Some(84605), None),
     /// Allows users to provide classes for fenced code block using `class:classname`.
-    (active, custom_code_classes_in_docs, "CURRENT_RUSTC_VERSION", Some(79483), None),
+    (active, custom_code_classes_in_docs, "1.74.0", Some(79483), None),
     /// Allows non-builtin attributes in inner attribute position.
     (active, custom_inner_attributes, "1.30.0", Some(54726), None),
     /// Allows custom test frameworks with `#![test_runner]` and `#[test_case]`.
@@ -538,8 +549,6 @@ declare_features! (
     (incomplete, repr128, "1.16.0", Some(56071), None),
     /// Allows `repr(simd)` and importing the various simd intrinsics.
     (active, repr_simd, "1.4.0", Some(27731), None),
-    /// Allows return-position `impl Trait` in traits.
-    (active, return_position_impl_trait_in_trait, "1.65.0", Some(91611), None),
     /// Allows bounding the return type of AFIT/RPITIT.
     (incomplete, return_type_notation, "1.70.0", Some(109417), None),
     /// Allows `extern "rust-cold"`.
@@ -583,7 +592,7 @@ declare_features! (
     /// Enables rustc to generate code that instructs libstd to NOT ignore SIGPIPE.
     (active, unix_sigpipe, "1.65.0", Some(97889), None),
     /// Allows unnamed fields of struct and union type
-    (incomplete, unnamed_fields, "CURRENT_RUSTC_VERSION", Some(49804), None),
+    (incomplete, unnamed_fields, "1.74.0", Some(49804), None),
     /// Allows unsized fn parameters.
     (active, unsized_fn_params, "1.49.0", Some(48055), None),
     /// Allows unsized rvalues at arguments and parameters.

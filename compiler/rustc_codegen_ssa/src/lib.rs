@@ -1,4 +1,7 @@
 #![doc(html_root_url = "https://doc.rust-lang.org/nightly/nightly-rustc/")]
+#![cfg_attr(not(bootstrap), doc(rust_logo))]
+#![cfg_attr(not(bootstrap), feature(rustdoc_internals))]
+#![cfg_attr(not(bootstrap), allow(internal_features))]
 #![feature(associated_type_bounds)]
 #![feature(box_patterns)]
 #![feature(if_let_guard)]
@@ -43,6 +46,7 @@ use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
 
+pub mod assert_module_sources;
 pub mod back;
 pub mod base;
 pub mod codegen_attrs;

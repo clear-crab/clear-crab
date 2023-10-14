@@ -241,7 +241,7 @@ fn print_coverage_graphviz(
                         "    {:?} [label=\"{:?}: {}\"];\n{}",
                         bcb,
                         bcb,
-                        bcb_data.terminator(mir_body).kind.name(),
+                        mir_body[bcb_data.last_bb()].terminator().kind.name(),
                         basic_coverage_blocks
                             .successors(bcb)
                             .map(|successor| { format!("    {:?} -> {:?};", bcb, successor) })
@@ -628,7 +628,7 @@ fn test_traverse_coverage_with_loops() {
     let basic_coverage_blocks = graph::CoverageGraph::from_mir(&mir_body);
     let mut traversed_in_order = Vec::new();
     let mut traversal = graph::TraverseCoverageGraphWithLoops::new(&basic_coverage_blocks);
-    while let Some(bcb) = traversal.next(&basic_coverage_blocks) {
+    while let Some(bcb) = traversal.next() {
         traversed_in_order.push(bcb);
     }
 
