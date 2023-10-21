@@ -284,6 +284,7 @@ impl<'tcx> dyn AstConv<'tcx> + '_ {
             self.one_bound_for_assoc_type(
                 || traits::supertraits(tcx, trait_ref),
                 trait_ref.skip_binder().print_only_trait_name(),
+                None,
                 binding.item_name,
                 path_span,
                 match binding.kind {
@@ -447,7 +448,7 @@ impl<'tcx> dyn AstConv<'tcx> + '_ {
 
                 debug!(?args_trait_ref_and_assoc_item);
 
-                tcx.mk_alias_ty(assoc_item.def_id, args_trait_ref_and_assoc_item)
+                ty::AliasTy::new(tcx, assoc_item.def_id, args_trait_ref_and_assoc_item)
             })
         };
 
@@ -517,8 +518,10 @@ impl<'tcx> dyn AstConv<'tcx> + '_ {
                         );
 
                         if let DefKind::AssocConst = def_kind
-                          && let Some(t) = term.ty() && (t.is_enum() || t.references_error())
-                          && tcx.features().associated_const_equality {
+                            && let Some(t) = term.ty()
+                            && (t.is_enum() || t.references_error())
+                            && tcx.features().associated_const_equality
+                        {
                             err.span_suggestion(
                                 binding.span,
                                 "if equating a const, try wrapping with braces",

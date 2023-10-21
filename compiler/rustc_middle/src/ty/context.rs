@@ -65,7 +65,7 @@ use rustc_span::symbol::{kw, sym, Ident, Symbol};
 use rustc_span::{Span, DUMMY_SP};
 use rustc_target::abi::{FieldIdx, Layout, LayoutS, TargetDataLayout, VariantIdx};
 use rustc_target::spec::abi;
-use rustc_type_ir::sty::TyKind::*;
+use rustc_type_ir::TyKind::*;
 use rustc_type_ir::WithCachedTypeInfo;
 use rustc_type_ir::{CollectAndApply, Interner, TypeFlags};
 
@@ -80,53 +80,44 @@ use std::ops::{Bound, Deref};
 
 #[allow(rustc::usage_of_ty_tykind)]
 impl<'tcx> Interner for TyCtxt<'tcx> {
-    type AdtDef = ty::AdtDef<'tcx>;
-    type GenericArgsRef = ty::GenericArgsRef<'tcx>;
-    type GenericArg = ty::GenericArg<'tcx>;
     type DefId = DefId;
+    type AdtDef = ty::AdtDef<'tcx>;
+    type GenericArgs = ty::GenericArgsRef<'tcx>;
+    type GenericArg = ty::GenericArg<'tcx>;
     type Binder<T> = Binder<'tcx, T>;
-    type Ty = Ty<'tcx>;
-    type Const = ty::Const<'tcx>;
-    type Region = Region<'tcx>;
     type Predicate = Predicate<'tcx>;
+    type PredicateKind = ty::PredicateKind<'tcx>;
     type TypeAndMut = TypeAndMut<'tcx>;
-    type Mutability = hir::Mutability;
-    type Movability = hir::Movability;
-    type PolyFnSig = PolyFnSig<'tcx>;
-    type ListBinderExistentialPredicate = &'tcx List<PolyExistentialPredicate<'tcx>>;
-    type BinderListTy = Binder<'tcx, &'tcx List<Ty<'tcx>>>;
-    type ListTy = &'tcx List<Ty<'tcx>>;
+    type Ty = Ty<'tcx>;
+    type Tys = &'tcx List<Ty<'tcx>>;
     type AliasTy = ty::AliasTy<'tcx>;
     type ParamTy = ParamTy;
     type BoundTy = ty::BoundTy;
-    type PlaceholderType = ty::PlaceholderType;
+    type PlaceholderTy = ty::PlaceholderType;
     type InferTy = InferTy;
     type ErrorGuaranteed = ErrorGuaranteed;
-    type PredicateKind = ty::PredicateKind<'tcx>;
+    type BoundExistentialPredicates = &'tcx List<PolyExistentialPredicate<'tcx>>;
+    type PolyFnSig = PolyFnSig<'tcx>;
     type AllocId = crate::mir::interpret::AllocId;
-
+    type Const = ty::Const<'tcx>;
     type InferConst = ty::InferConst<'tcx>;
     type AliasConst = ty::UnevaluatedConst<'tcx>;
+    type PlaceholderConst = ty::PlaceholderConst<'tcx>;
     type ParamConst = ty::ParamConst;
     type BoundConst = ty::BoundVar;
-    type PlaceholderConst = ty::PlaceholderConst<'tcx>;
     type ValueConst = ty::ValTree<'tcx>;
     type ExprConst = ty::Expr<'tcx>;
-
+    type Region = Region<'tcx>;
     type EarlyBoundRegion = ty::EarlyBoundRegion;
     type BoundRegion = ty::BoundRegion;
     type FreeRegion = ty::FreeRegion;
-    type RegionVid = ty::RegionVid;
+    type InferRegion = ty::RegionVid;
     type PlaceholderRegion = ty::PlaceholderRegion;
 
     fn ty_and_mut_to_parts(
         TypeAndMut { ty, mutbl }: TypeAndMut<'tcx>,
-    ) -> (Self::Ty, Self::Mutability) {
+    ) -> (Self::Ty, ty::Mutability) {
         (ty, mutbl)
-    }
-
-    fn mutability_is_mut(mutbl: Self::Mutability) -> bool {
-        mutbl.is_mut()
     }
 }
 
@@ -770,9 +761,9 @@ impl<'tcx> TyCtxt<'tcx> {
         self.diagnostic_items(did.krate).name_to_id.get(&name) == Some(&did)
     }
 
-    /// Returns `true` if the node pointed to by `def_id` is a generator for an async construct.
-    pub fn generator_is_async(self, def_id: DefId) -> bool {
-        matches!(self.generator_kind(def_id), Some(hir::GeneratorKind::Async(_)))
+    /// Returns `true` if the node pointed to by `def_id` is a coroutine for an async construct.
+    pub fn coroutine_is_async(self, def_id: DefId) -> bool {
+        matches!(self.coroutine_kind(def_id), Some(hir::CoroutineKind::Async(_)))
     }
 
     pub fn stability(self) -> &'tcx stability::Index {
@@ -960,7 +951,7 @@ impl<'tcx> TyCtxt<'tcx> {
         self.dep_graph.read_index(DepNodeIndex::FOREVER_RED_NODE);
 
         let definitions = &self.untracked.definitions;
-        std::iter::from_generator(|| {
+        std::iter::from_coroutine(|| {
             let mut i = 0;
 
             // Recompute the number of definitions each time, because our caller may be creating
@@ -1126,7 +1117,11 @@ impl<'tcx> TyCtxt<'tcx> {
         {
             v.visit_ty(alias_ty);
             if !v.0.is_empty() {
-                return Some((v.0, alias_generics.span, alias_generics.span_for_lifetime_suggestion()));
+                return Some((
+                    v.0,
+                    alias_generics.span,
+                    alias_generics.span_for_lifetime_suggestion(),
+                ));
             }
         }
         return None;
@@ -1387,8 +1382,8 @@ impl<'tcx> TyCtxt<'tcx> {
                     FnDef,
                     FnPtr,
                     Placeholder,
-                    Generator,
-                    GeneratorWitness,
+                    Coroutine,
+                    CoroutineWitness,
                     Dynamic,
                     Closure,
                     Tuple,
@@ -1683,7 +1678,6 @@ impl<'tcx> TyCtxt<'tcx> {
                 && let DefKind::Impl { of_trait: false } = self.def_kind(self.parent(_def_id))
             {
                 // If this is an inherent projection.
-
                 generics.params.len() + 1
             } else {
                 generics.count()
@@ -1891,15 +1885,6 @@ impl<'tcx> TyCtxt<'tcx> {
         rest: impl IntoIterator<Item = GenericArg<'tcx>>,
     ) -> GenericArgsRef<'tcx> {
         self.mk_args_from_iter(iter::once(self_ty.into()).chain(rest))
-    }
-
-    pub fn mk_alias_ty(
-        self,
-        def_id: DefId,
-        args: impl IntoIterator<Item: Into<GenericArg<'tcx>>>,
-    ) -> ty::AliasTy<'tcx> {
-        let args = self.check_and_mk_args(def_id, args);
-        ty::AliasTy { def_id, args, _use_mk_alias_ty_instead: () }
     }
 
     pub fn mk_bound_variable_kinds_from_iter<I, T>(self, iter: I) -> T::Output

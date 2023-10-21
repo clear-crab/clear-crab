@@ -130,8 +130,8 @@ fn dump_matched_mir_node<'tcx, F>(
             Some(promoted) => write!(file, "::{promoted:?}`")?,
         }
         writeln!(file, " {disambiguator} {pass_name}")?;
-        if let Some(ref layout) = body.generator_layout() {
-            writeln!(file, "/* generator_layout = {layout:#?} */")?;
+        if let Some(ref layout) = body.coroutine_layout() {
+            writeln!(file, "/* coroutine_layout = {layout:#?} */")?;
         }
         writeln!(file)?;
         extra_data(PassWhere::BeforeCFG, &mut file)?;
@@ -493,6 +493,27 @@ pub fn write_mir_intro<'tcx>(
     // Add an empty line before the first block is printed.
     writeln!(w)?;
 
+    if let Some(function_coverage_info) = &body.function_coverage_info {
+        write_function_coverage_info(function_coverage_info, w)?;
+    }
+
+    Ok(())
+}
+
+fn write_function_coverage_info(
+    function_coverage_info: &coverage::FunctionCoverageInfo,
+    w: &mut dyn io::Write,
+) -> io::Result<()> {
+    let coverage::FunctionCoverageInfo { expressions, mappings, .. } = function_coverage_info;
+
+    for (id, expression) in expressions.iter_enumerated() {
+        writeln!(w, "{INDENT}coverage {id:?} => {expression:?};")?;
+    }
+    for coverage::Mapping { term, code_region } in mappings {
+        writeln!(w, "{INDENT}coverage {term:?} => {code_region:?};")?;
+    }
+    writeln!(w)?;
+
     Ok(())
 }
 
@@ -685,13 +706,7 @@ impl Debug for Statement<'_> {
             AscribeUserType(box (ref place, ref c_ty), ref variance) => {
                 write!(fmt, "AscribeUserType({place:?}, {variance:?}, {c_ty:?})")
             }
-            Coverage(box mir::Coverage { ref kind, ref code_regions }) => {
-                if code_regions.is_empty() {
-                    write!(fmt, "Coverage::{kind:?}")
-                } else {
-                    write!(fmt, "Coverage::{kind:?} for {code_regions:?}")
-                }
-            }
+            Coverage(box mir::Coverage { ref kind }) => write!(fmt, "Coverage::{kind:?}"),
             Intrinsic(box ref intrinsic) => write!(fmt, "{intrinsic}"),
             ConstEvalCounter => write!(fmt, "ConstEvalCounter"),
             Nop => write!(fmt, "nop"),
@@ -767,7 +782,7 @@ impl<'tcx> TerminatorKind<'tcx> {
             Goto { .. } => write!(fmt, "goto"),
             SwitchInt { discr, .. } => write!(fmt, "switchInt({discr:?})"),
             Return => write!(fmt, "return"),
-            GeneratorDrop => write!(fmt, "generator_drop"),
+            CoroutineDrop => write!(fmt, "coroutine_drop"),
             UnwindResume => write!(fmt, "resume"),
             UnwindTerminate(reason) => {
                 write!(fmt, "abort({})", reason.as_short_str())
@@ -850,7 +865,7 @@ impl<'tcx> TerminatorKind<'tcx> {
     pub fn fmt_successor_labels(&self) -> Vec<Cow<'static, str>> {
         use self::TerminatorKind::*;
         match *self {
-            Return | UnwindResume | UnwindTerminate(_) | Unreachable | GeneratorDrop => vec![],
+            Return | UnwindResume | UnwindTerminate(_) | Unreachable | CoroutineDrop => vec![],
             Goto { .. } => vec!["".into()],
             SwitchInt { ref targets, .. } => targets
                 .values
@@ -1031,8 +1046,8 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                         struct_fmt.finish()
                     }),
 
-                    AggregateKind::Generator(def_id, _, _) => ty::tls::with(|tcx| {
-                        let name = format!("{{generator@{:?}}}", tcx.def_span(def_id));
+                    AggregateKind::Coroutine(def_id, _, _) => ty::tls::with(|tcx| {
+                        let name = format!("{{coroutine@{:?}}}", tcx.def_span(def_id));
                         let mut struct_fmt = fmt.debug_struct(&name);
 
                         // FIXME(project-rfc-2229#48): This should be a list of capture names/places
@@ -1286,8 +1301,8 @@ impl<'tcx> Visitor<'tcx> for ExtraComments<'tcx> {
                     self.push(&format!("+ args: {args:#?}"));
                 }
 
-                AggregateKind::Generator(def_id, args, movability) => {
-                    self.push("generator");
+                AggregateKind::Coroutine(def_id, args, movability) => {
+                    self.push("coroutine");
                     self.push(&format!("+ def_id: {def_id:?}"));
                     self.push(&format!("+ args: {args:#?}"));
                     self.push(&format!("+ movability: {movability:?}"));

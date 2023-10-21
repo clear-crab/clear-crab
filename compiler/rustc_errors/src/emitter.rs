@@ -23,7 +23,7 @@ use crate::{
 use rustc_lint_defs::pluralize;
 
 use derive_setters::Setters;
-use rustc_data_structures::fx::{FxHashMap, FxIndexMap};
+use rustc_data_structures::fx::{FxHashMap, FxIndexMap, FxIndexSet};
 use rustc_data_structures::sync::{DynSend, IntoDynSyncSend, Lrc};
 use rustc_error_messages::{FluentArgs, SpanLabel};
 use rustc_span::hygiene::{ExpnKind, MacroKind};
@@ -337,9 +337,7 @@ pub trait Emitter: Translate {
                     && last_name != name
                 {
                     let descr = macro_kind.descr();
-                    format!(
-                        " which comes from the expansion of the {descr} `{last_name}`",
-                    )
+                    format!(" which comes from the expansion of the {descr} `{last_name}`",)
                 } else {
                     "".to_string()
                 };
@@ -372,7 +370,7 @@ pub trait Emitter: Translate {
     }
 
     fn render_multispan_macro_backtrace(&self, span: &mut MultiSpan, always_backtrace: bool) {
-        let mut new_labels: Vec<(Span, String)> = vec![];
+        let mut new_labels = FxIndexSet::default();
 
         for &sp in span.primary_spans() {
             if sp.is_dummy() {
@@ -389,7 +387,7 @@ pub trait Emitter: Translate {
                 }
 
                 if always_backtrace {
-                    new_labels.push((
+                    new_labels.insert((
                         trace.def_site,
                         format!(
                             "in this expansion of `{}`{}",
@@ -433,7 +431,7 @@ pub trait Emitter: Translate {
                             format!("this {} desugaring", kind.descr()).into()
                         }
                     };
-                    new_labels.push((
+                    new_labels.insert((
                         trace.call_site,
                         format!(
                             "in {}{}",
@@ -1350,7 +1348,14 @@ impl EmitterWriter {
                 buffer.append(0, "]", Style::Level(*level));
                 label_width += 2 + code.len();
             }
-            let header_style = if is_secondary { Style::HeaderMsg } else { Style::MainHeaderMsg };
+            let header_style = if is_secondary {
+                Style::HeaderMsg
+            } else if self.short_message {
+                // For short messages avoid bolding the message, as it doesn't look great (#63835).
+                Style::NoStyle
+            } else {
+                Style::MainHeaderMsg
+            };
             if *level != Level::FailureNote {
                 buffer.append(0, ": ", header_style);
                 label_width += 2;
@@ -1935,7 +1940,9 @@ impl EmitterWriter {
                     is_multiline,
                 )
             }
-            if let DisplaySuggestion::Add = show_code_change && is_item_attribute {
+            if let DisplaySuggestion::Add = show_code_change
+                && is_item_attribute
+            {
                 // The suggestion adds an entire line of code, ending on a newline, so we'll also
                 // print the *following* line, to provide context of what we're advising people to
                 // do. Otherwise you would only see contextless code that can be confused for

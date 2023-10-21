@@ -901,6 +901,10 @@ pub struct QueryInstability {
 }
 
 #[derive(LintDiagnostic)]
+#[diag(lint_span_use_eq_ctxt)]
+pub struct SpanUseEqCtxtDiag;
+
+#[derive(LintDiagnostic)]
 #[diag(lint_tykind_kind)]
 pub struct TykindKind {
     #[suggestion(code = "ty", applicability = "maybe-incorrect")]
@@ -1696,9 +1700,9 @@ pub struct UnusedClosure<'a> {
 // FIXME(davidtwco): this isn't properly translatable because of the
 // pre/post strings
 #[derive(LintDiagnostic)]
-#[diag(lint_unused_generator)]
+#[diag(lint_unused_coroutine)]
 #[note]
-pub struct UnusedGenerator<'a> {
+pub struct UnusedCoroutine<'a> {
     pub count: usize,
     pub pre: &'a str,
     pub post: &'a str,

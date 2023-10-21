@@ -1,7 +1,7 @@
 use crate::lints::{
     PathStatementDrop, PathStatementDropSub, PathStatementNoEffect, UnusedAllocationDiag,
-    UnusedAllocationMutDiag, UnusedClosure, UnusedDef, UnusedDefSuggestion, UnusedDelim,
-    UnusedDelimSuggestion, UnusedGenerator, UnusedImportBracesDiag, UnusedOp, UnusedOpSuggestion,
+    UnusedAllocationMutDiag, UnusedClosure, UnusedCoroutine, UnusedDef, UnusedDefSuggestion,
+    UnusedDelim, UnusedDelimSuggestion, UnusedImportBracesDiag, UnusedOp, UnusedOpSuggestion,
     UnusedResult,
 };
 use crate::Lint;
@@ -257,8 +257,8 @@ impl<'tcx> LateLintPass<'tcx> for UnusedResults {
             Array(Box<Self>, u64),
             /// The root of the unused_closures lint.
             Closure(Span),
-            /// The root of the unused_generators lint.
-            Generator(Span),
+            /// The root of the unused_coroutines lint.
+            Coroutine(Span),
         }
 
         #[instrument(skip(cx, expr), level = "debug", ret)]
@@ -350,16 +350,16 @@ impl<'tcx> LateLintPass<'tcx> for UnusedResults {
                         .map(|inner| MustUsePath::Array(Box::new(inner), len)),
                 },
                 ty::Closure(..) => Some(MustUsePath::Closure(span)),
-                ty::Generator(def_id, ..) => {
+                ty::Coroutine(def_id, ..) => {
                     // async fn should be treated as "implementor of `Future`"
-                    let must_use = if cx.tcx.generator_is_async(def_id) {
+                    let must_use = if cx.tcx.coroutine_is_async(def_id) {
                         let def_id = cx.tcx.lang_items().future_trait()?;
                         is_def_must_use(cx, def_id, span)
                             .map(|inner| MustUsePath::Opaque(Box::new(inner)))
                     } else {
                         None
                     };
-                    must_use.or(Some(MustUsePath::Generator(span)))
+                    must_use.or(Some(MustUsePath::Coroutine(span)))
                 }
                 _ => None,
             }
@@ -482,11 +482,11 @@ impl<'tcx> LateLintPass<'tcx> for UnusedResults {
                         UnusedClosure { count: plural_len, pre: descr_pre, post: descr_post },
                     );
                 }
-                MustUsePath::Generator(span) => {
+                MustUsePath::Coroutine(span) => {
                     cx.emit_spanned_lint(
                         UNUSED_MUST_USE,
                         *span,
-                        UnusedGenerator { count: plural_len, pre: descr_pre, post: descr_post },
+                        UnusedCoroutine { count: plural_len, pre: descr_pre, post: descr_post },
                     );
                 }
                 MustUsePath::Def(span, def_id, reason) => {
@@ -782,21 +782,23 @@ trait UnusedDelimLint {
         };
         let suggestion = spans.map(|(lo, hi)| {
             let sm = cx.sess().source_map();
-            let lo_replace =
-                    if (keep_space.0 || is_kw) &&
-                        let Ok(snip) = sm.span_to_prev_source(lo) && !snip.ends_with(' ') {
-                        " "
-                        } else {
-                            ""
-                        };
+            let lo_replace = if (keep_space.0 || is_kw)
+                && let Ok(snip) = sm.span_to_prev_source(lo)
+                && !snip.ends_with(' ')
+            {
+                " "
+            } else {
+                ""
+            };
 
-            let hi_replace =
-                    if keep_space.1 &&
-                        let Ok(snip) = sm.span_to_next_source(hi) && !snip.starts_with(' ') {
-                        " "
-                        } else {
-                            ""
-                        };
+            let hi_replace = if keep_space.1
+                && let Ok(snip) = sm.span_to_next_source(hi)
+                && !snip.starts_with(' ')
+            {
+                " "
+            } else {
+                ""
+            };
             UnusedDelimSuggestion {
                 start_span: lo,
                 start_replace: lo_replace,
@@ -1056,10 +1058,10 @@ impl UnusedParens {
 impl EarlyLintPass for UnusedParens {
     #[inline]
     fn check_expr(&mut self, cx: &EarlyContext<'_>, e: &ast::Expr) {
-        if let ExprKind::Binary(op, lhs, _rhs) = &e.kind &&
-            (op.node == ast::BinOpKind::Lt || op.node == ast::BinOpKind::Shl) &&
-            let ExprKind::Cast(_expr, ty) = &lhs.kind &&
-            let ast::TyKind::Paren(_) = &ty.kind
+        if let ExprKind::Binary(op, lhs, _rhs) = &e.kind
+            && (op.node == ast::BinOpKind::Lt || op.node == ast::BinOpKind::Shl)
+            && let ExprKind::Cast(_expr, ty) = &lhs.kind
+            && let ast::TyKind::Paren(_) = &ty.kind
         {
             self.parens_in_cast_in_lt.push(ty.id);
         }
@@ -1111,13 +1113,19 @@ impl EarlyLintPass for UnusedParens {
     }
 
     fn check_expr_post(&mut self, _cx: &EarlyContext<'_>, e: &ast::Expr) {
-        if let ExprKind::Binary(op, lhs, _rhs) = &e.kind &&
-            (op.node == ast::BinOpKind::Lt || op.node == ast::BinOpKind::Shl) &&
-            let ExprKind::Cast(_expr, ty) = &lhs.kind &&
-            let ast::TyKind::Paren(_) = &ty.kind
+        if let ExprKind::Binary(op, lhs, _rhs) = &e.kind
+            && (op.node == ast::BinOpKind::Lt || op.node == ast::BinOpKind::Shl)
+            && let ExprKind::Cast(_expr, ty) = &lhs.kind
+            && let ast::TyKind::Paren(_) = &ty.kind
         {
-            let id = self.parens_in_cast_in_lt.pop().expect("check_expr and check_expr_post must balance");
-            assert_eq!(id, ty.id, "check_expr, check_ty, and check_expr_post are called, in that order, by the visitor");
+            let id = self
+                .parens_in_cast_in_lt
+                .pop()
+                .expect("check_expr and check_expr_post must balance");
+            assert_eq!(
+                id, ty.id,
+                "check_expr, check_ty, and check_expr_post are called, in that order, by the visitor"
+            );
         }
     }
 
@@ -1161,8 +1169,8 @@ impl EarlyLintPass for UnusedParens {
     }
 
     fn check_ty(&mut self, cx: &EarlyContext<'_>, ty: &ast::Ty) {
-        if let ast::TyKind::Paren(_) = ty.kind &&
-            Some(&ty.id) == self.parens_in_cast_in_lt.last()
+        if let ast::TyKind::Paren(_) = ty.kind
+            && Some(&ty.id) == self.parens_in_cast_in_lt.last()
         {
             return;
         }
@@ -1206,13 +1214,14 @@ impl EarlyLintPass for UnusedParens {
     fn enter_where_predicate(&mut self, _: &EarlyContext<'_>, pred: &ast::WherePredicate) {
         use rustc_ast::{WhereBoundPredicate, WherePredicate};
         if let WherePredicate::BoundPredicate(WhereBoundPredicate {
-                bounded_ty,
-                bound_generic_params,
-                ..
-            }) = pred &&
-            let ast::TyKind::Paren(_) = &bounded_ty.kind &&
-            bound_generic_params.is_empty() {
-                self.with_self_ty_parens = true;
+            bounded_ty,
+            bound_generic_params,
+            ..
+        }) = pred
+            && let ast::TyKind::Paren(_) = &bounded_ty.kind
+            && bound_generic_params.is_empty()
+        {
+            self.with_self_ty_parens = true;
         }
     }
 
@@ -1516,9 +1525,8 @@ impl<'tcx> LateLintPass<'tcx> for UnusedAllocation {
         match e.kind {
             hir::ExprKind::Call(path_expr, [_])
                 if let hir::ExprKind::Path(qpath) = &path_expr.kind
-                && let Some(did) = cx.qpath_res(qpath, path_expr.hir_id).opt_def_id()
-                && cx.tcx.is_diagnostic_item(sym::box_new, did)
-                => {}
+                    && let Some(did) = cx.qpath_res(qpath, path_expr.hir_id).opt_def_id()
+                    && cx.tcx.is_diagnostic_item(sym::box_new, did) => {}
             _ => return,
         }
 

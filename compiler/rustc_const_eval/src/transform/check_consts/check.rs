@@ -247,7 +247,7 @@ impl<'mir, 'tcx> Checker<'mir, 'tcx> {
 
         // `async` functions cannot be `const fn`. This is checked during AST lowering, so there's
         // no need to emit duplicate errors here.
-        if self.ccx.is_async() || body.generator.is_some() {
+        if self.ccx.is_async() || body.coroutine.is_some() {
             tcx.sess.delay_span_bug(body.span, "`async` functions cannot be `const fn`");
             return;
         }
@@ -323,7 +323,7 @@ impl<'mir, 'tcx> Checker<'mir, 'tcx> {
         let gate = match op.status_in_item(self.ccx) {
             Status::Allowed => return,
 
-            Status::Unstable(gate) if self.tcx.features().enabled(gate) => {
+            Status::Unstable(gate) if self.tcx.features().active(gate) => {
                 let unstable_in_stable = self.ccx.is_const_stable_const_fn()
                     && !super::rustc_allow_const_fn_unstable(self.tcx, self.def_id(), gate);
                 if unstable_in_stable {
@@ -463,10 +463,11 @@ impl<'tcx> Visitor<'tcx> for Checker<'_, 'tcx> {
             | Rvalue::Len(_) => {}
 
             Rvalue::Aggregate(kind, ..) => {
-                if let AggregateKind::Generator(def_id, ..) = kind.as_ref()
-                    && let Some(generator_kind @ hir::GeneratorKind::Async(..)) = self.tcx.generator_kind(def_id)
+                if let AggregateKind::Coroutine(def_id, ..) = kind.as_ref()
+                    && let Some(coroutine_kind @ hir::CoroutineKind::Async(..)) =
+                        self.tcx.coroutine_kind(def_id)
                 {
-                    self.check_op(ops::Generator(generator_kind));
+                    self.check_op(ops::Coroutine(coroutine_kind));
                 }
             }
 
@@ -579,8 +580,7 @@ impl<'tcx> Visitor<'tcx> for Checker<'_, 'tcx> {
                 }
             }
 
-            Rvalue::BinaryOp(op, box (lhs, rhs))
-            | Rvalue::CheckedBinaryOp(op, box (lhs, rhs)) => {
+            Rvalue::BinaryOp(op, box (lhs, rhs)) | Rvalue::CheckedBinaryOp(op, box (lhs, rhs)) => {
                 let lhs_ty = lhs.ty(self.body, self.tcx);
                 let rhs_ty = rhs.ty(self.body, self.tcx);
 
@@ -588,18 +588,16 @@ impl<'tcx> Visitor<'tcx> for Checker<'_, 'tcx> {
                     // Int, bool, and char operations are fine.
                 } else if lhs_ty.is_fn_ptr() || lhs_ty.is_unsafe_ptr() {
                     assert_eq!(lhs_ty, rhs_ty);
-                    assert!(
-                        matches!(
-                            op,
-                            BinOp::Eq
+                    assert!(matches!(
+                        op,
+                        BinOp::Eq
                             | BinOp::Ne
                             | BinOp::Le
                             | BinOp::Lt
                             | BinOp::Ge
                             | BinOp::Gt
                             | BinOp::Offset
-                        )
-                    );
+                    ));
 
                     self.check_op(ops::RawPtrComparison);
                 } else if lhs_ty.is_floating_point() || rhs_ty.is_floating_point() {
@@ -947,7 +945,9 @@ impl<'tcx> Visitor<'tcx> for Checker<'_, 'tcx> {
                     if self.span.allows_unstable(gate) {
                         return;
                     }
-                    if let Some(implied_by_gate) = implied_by && self.span.allows_unstable(implied_by_gate) {
+                    if let Some(implied_by_gate) = implied_by
+                        && self.span.allows_unstable(implied_by_gate)
+                    {
                         return;
                     }
 
@@ -1042,8 +1042,8 @@ impl<'tcx> Visitor<'tcx> for Checker<'_, 'tcx> {
 
             TerminatorKind::InlineAsm { .. } => self.check_op(ops::InlineAsm),
 
-            TerminatorKind::GeneratorDrop | TerminatorKind::Yield { .. } => {
-                self.check_op(ops::Generator(hir::GeneratorKind::Gen))
+            TerminatorKind::CoroutineDrop | TerminatorKind::Yield { .. } => {
+                self.check_op(ops::Coroutine(hir::CoroutineKind::Coroutine))
             }
 
             TerminatorKind::UnwindTerminate(_) => {

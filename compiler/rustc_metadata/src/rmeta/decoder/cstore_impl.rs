@@ -221,7 +221,7 @@ provide! { tcx, def_id, other, cdata,
     optimized_mir => { table }
     mir_for_ctfe => { table }
     closure_saved_names_of_captured_variables => { table }
-    mir_generator_witnesses => { table }
+    mir_coroutine_witnesses => { table }
     promoted_mir => { table }
     def_span => { table }
     def_ident_span => { table }
@@ -241,7 +241,7 @@ provide! { tcx, def_id, other, cdata,
     rendered_const => { table }
     asyncness => { table_direct }
     fn_arg_names => { table }
-    generator_kind => { table }
+    coroutine_kind => { table }
     trait_def => { table }
     deduced_param_attrs => { table }
     is_type_alias_impl_trait => {
@@ -287,6 +287,7 @@ provide! { tcx, def_id, other, cdata,
     item_attrs => { tcx.arena.alloc_from_iter(cdata.get_item_attrs(def_id.index, tcx.sess)) }
     is_mir_available => { cdata.is_item_mir_available(def_id.index) }
     is_ctfe_mir_available => { cdata.is_ctfe_mir_available(def_id.index) }
+    cross_crate_inlinable => { cdata.cross_crate_inlinable(def_id.index) }
 
     dylib_dependency_formats => { cdata.get_dylib_dependency_formats(tcx) }
     is_private_dep => {

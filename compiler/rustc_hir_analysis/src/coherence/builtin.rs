@@ -162,7 +162,7 @@ fn visit_implementation_of_dispatch_from_dyn(tcx: TyCtxt<'_>, impl_did: LocalDef
     // trait, they *do* satisfy the repr(transparent) rules, and then we assume that everything else
     // in the compiler (in particular, all the call ABI logic) will treat them as repr(transparent)
     // even if they do not carry that attribute.
-    use rustc_type_ir::sty::TyKind::*;
+    use rustc_type_ir::TyKind::*;
     match (source.kind(), target.kind()) {
         (&Ref(r_a, _, mutbl_a), Ref(r_b, _, mutbl_b))
             if infcx.at(&cause, param_env).eq(DefineOpaqueTypes::No, r_a, *r_b).is_ok()
@@ -550,9 +550,11 @@ fn infringing_fields_error(
                                 .entry((ty.clone(), predicate.clone()))
                                 .or_default()
                                 .push(origin.span());
-                            if let ty::RegionKind::ReEarlyBound(ebr) = *b && ebr.has_name() {
-                                        bounds.push((b.to_string(), a.to_string(), None));
-                                    }
+                            if let ty::RegionKind::ReEarlyBound(ebr) = *b
+                                && ebr.has_name()
+                            {
+                                bounds.push((b.to_string(), a.to_string(), None));
+                            }
                         }
                         RegionResolutionError::GenericBoundFailure(origin, a, b) => {
                             let predicate = format!("{a}: {b}");

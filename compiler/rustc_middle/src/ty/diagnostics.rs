@@ -17,7 +17,7 @@ use rustc_hir::def::DefKind;
 use rustc_hir::def_id::DefId;
 use rustc_hir::{PredicateOrigin, WherePredicate};
 use rustc_span::{BytePos, Span};
-use rustc_type_ir::sty::TyKind::*;
+use rustc_type_ir::TyKind::*;
 
 impl<'tcx> IntoDiagnosticArg for Ty<'tcx> {
     fn into_diagnostic_arg(self) -> DiagnosticArgValue<'static> {
@@ -482,8 +482,8 @@ impl<'tcx> TypeVisitor<TyCtxt<'tcx>> for IsSuggestableVisitor<'tcx> {
             FnDef(..)
             | Closure(..)
             | Infer(..)
-            | Generator(..)
-            | GeneratorWitness(..)
+            | Coroutine(..)
+            | CoroutineWitness(..)
             | Bound(_, _)
             | Placeholder(_)
             | Error(_) => {
@@ -494,7 +494,8 @@ impl<'tcx> TypeVisitor<TyCtxt<'tcx>> for IsSuggestableVisitor<'tcx> {
                 let parent = self.tcx.parent(def_id);
                 let parent_ty = self.tcx.type_of(parent).instantiate_identity();
                 if let DefKind::TyAlias | DefKind::AssocTy = self.tcx.def_kind(parent)
-                    && let Alias(Opaque, AliasTy { def_id: parent_opaque_def_id, .. }) = *parent_ty.kind()
+                    && let Alias(Opaque, AliasTy { def_id: parent_opaque_def_id, .. }) =
+                        *parent_ty.kind()
                     && parent_opaque_def_id == def_id
                 {
                     // Okay
@@ -566,8 +567,8 @@ impl<'tcx> FallibleTypeFolder<TyCtxt<'tcx>> for MakeSuggestableFolder<'tcx> {
             // FIXME(compiler-errors): We could replace these with infer, I guess.
             Closure(..)
             | Infer(..)
-            | Generator(..)
-            | GeneratorWitness(..)
+            | Coroutine(..)
+            | CoroutineWitness(..)
             | Bound(_, _)
             | Placeholder(_)
             | Error(_) => {
@@ -577,8 +578,10 @@ impl<'tcx> FallibleTypeFolder<TyCtxt<'tcx>> for MakeSuggestableFolder<'tcx> {
             Alias(Opaque, AliasTy { def_id, .. }) => {
                 let parent = self.tcx.parent(def_id);
                 let parent_ty = self.tcx.type_of(parent).instantiate_identity();
-                if let hir::def::DefKind::TyAlias | hir::def::DefKind::AssocTy = self.tcx.def_kind(parent)
-                    && let Alias(Opaque, AliasTy { def_id: parent_opaque_def_id, .. }) = *parent_ty.kind()
+                if let hir::def::DefKind::TyAlias | hir::def::DefKind::AssocTy =
+                    self.tcx.def_kind(parent)
+                    && let Alias(Opaque, AliasTy { def_id: parent_opaque_def_id, .. }) =
+                        *parent_ty.kind()
                     && parent_opaque_def_id == def_id
                 {
                     t

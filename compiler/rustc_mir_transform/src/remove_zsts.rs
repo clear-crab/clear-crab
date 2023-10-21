@@ -13,8 +13,8 @@ impl<'tcx> MirPass<'tcx> for RemoveZsts {
     }
 
     fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
-        // Avoid query cycles (generators require optimized MIR for layout).
-        if tcx.type_of(body.source.def_id()).instantiate_identity().is_generator() {
+        // Avoid query cycles (coroutines require optimized MIR for layout).
+        if tcx.type_of(body.source.def_id()).instantiate_identity().is_coroutine() {
             return;
         }
         let param_env = tcx.param_env_reveal_all_normalized(body.source.def_id());
@@ -126,7 +126,10 @@ impl<'tcx> MutVisitor<'tcx> for Replacer<'_, 'tcx> {
             && let ty = place_for_ty.ty(self.local_decls, self.tcx).ty
             && self.known_to_be_zst(ty)
             && self.tcx.consider_optimizing(|| {
-                format!("RemoveZsts - Place: {:?} SourceInfo: {:?}", place_for_ty, statement.source_info)
+                format!(
+                    "RemoveZsts - Place: {:?} SourceInfo: {:?}",
+                    place_for_ty, statement.source_info
+                )
             })
         {
             statement.make_nop();

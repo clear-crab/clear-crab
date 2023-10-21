@@ -291,7 +291,7 @@ fn check_opaque_meets_bounds<'tcx>(
 
     let opaque_ty = Ty::new_opaque(tcx, def_id.to_def_id(), args);
 
-    // `ReErased` regions appear in the "parent_args" of closures/generators.
+    // `ReErased` regions appear in the "parent_args" of closures/coroutines.
     // We're ignoring them here and replacing them with fresh region variables.
     // See tests in ui/type-alias-impl-trait/closure_{parent_args,wf_outlives}.rs.
     //
@@ -481,8 +481,7 @@ fn check_item_type(tcx: TyCtxt<'_>, id: hir::ItemId) {
                         fn_maybe_err(tcx, assoc_item.ident(tcx).span, abi);
                     }
                     ty::AssocKind::Type if assoc_item.defaultness(tcx).has_value() => {
-                        let trait_args =
-                            GenericArgs::identity_for_item(tcx, id.owner_id);
+                        let trait_args = GenericArgs::identity_for_item(tcx, id.owner_id);
                         let _: Result<_, rustc_errors::ErrorGuaranteed> = check_type_bounds(
                             tcx,
                             assoc_item,
@@ -502,7 +501,8 @@ fn check_item_type(tcx: TyCtxt<'_>, id: hir::ItemId) {
         }
         DefKind::OpaqueTy => {
             let origin = tcx.opaque_type_origin(id.owner_id.def_id);
-            if let hir::OpaqueTyOrigin::FnReturn(fn_def_id) | hir::OpaqueTyOrigin::AsyncFn(fn_def_id) = origin
+            if let hir::OpaqueTyOrigin::FnReturn(fn_def_id)
+            | hir::OpaqueTyOrigin::AsyncFn(fn_def_id) = origin
                 && let hir::Node::TraitItem(trait_item) = tcx.hir().get_by_def_id(fn_def_id)
                 && let (_, hir::TraitFn::Required(..)) = trait_item.expect_fn()
             {
@@ -589,7 +589,9 @@ fn check_item_type(tcx: TyCtxt<'_>, id: hir::ItemId) {
         }
         DefKind::GlobalAsm => {
             let it = tcx.hir().item(id);
-            let hir::ItemKind::GlobalAsm(asm) = it.kind else { span_bug!(it.span, "DefKind::GlobalAsm but got {:#?}", it) };
+            let hir::ItemKind::GlobalAsm(asm) = it.kind else {
+                span_bug!(it.span, "DefKind::GlobalAsm but got {:#?}", it)
+            };
             InlineAsmCtxt::new_global_asm(tcx).check_asm(asm, id.owner_id.def_id);
         }
         _ => {}
@@ -873,10 +875,7 @@ pub fn check_simd(tcx: TyCtxt<'_>, sp: Span, def_id: LocalDefId) {
             ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::RawPtr(_) => (), // struct(u8, u8, u8, u8) is ok
             ty::Array(t, _) if matches!(t.kind(), ty::Param(_)) => (), // pass struct<T>([T; N]) through, let monomorphization catch errors
             ty::Array(t, _clen)
-                if matches!(
-                    t.kind(),
-                    ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::RawPtr(_)
-                ) =>
+                if matches!(t.kind(), ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::RawPtr(_)) =>
             { /* struct([f32; 4]) is ok */ }
             _ => {
                 struct_span_err!(
@@ -899,17 +898,17 @@ pub(super) fn check_packed(tcx: TyCtxt<'_>, sp: Span, def: ty::AdtDef<'_>) {
         for attr in tcx.get_attrs(def.did(), sym::repr) {
             for r in attr::parse_repr_attr(&tcx.sess, attr) {
                 if let attr::ReprPacked(pack) = r
-                && let Some(repr_pack) = repr.pack
-                && pack as u64 != repr_pack.bytes()
-            {
-                        struct_span_err!(
-                            tcx.sess,
-                            sp,
-                            E0634,
-                            "type has conflicting packed representation hints"
-                        )
-                        .emit();
-            }
+                    && let Some(repr_pack) = repr.pack
+                    && pack as u64 != repr_pack.bytes()
+                {
+                    struct_span_err!(
+                        tcx.sess,
+                        sp,
+                        E0634,
+                        "type has conflicting packed representation hints"
+                    )
+                    .emit();
+                }
             }
         }
         if repr.align.is_some() {
@@ -1174,7 +1173,8 @@ fn detect_discriminant_duplicate<'tcx>(tcx: TyCtxt<'tcx>, adt: ty::AdtDef<'tcx>)
         let (span, display_discr) = match var.discr {
             ty::VariantDiscr::Explicit(discr_def_id) => {
                 // In the case the discriminant is both a duplicate and overflowed, let the user know
-                if let hir::Node::AnonConst(expr) = tcx.hir().get_by_def_id(discr_def_id.expect_local())
+                if let hir::Node::AnonConst(expr) =
+                    tcx.hir().get_by_def_id(discr_def_id.expect_local())
                     && let hir::ExprKind::Lit(lit) = &tcx.hir().body(expr.body).value.kind
                     && let rustc_ast::LitKind::Int(lit_value, _int_kind) = &lit.node
                     && *lit_value != dis.val
@@ -1303,15 +1303,9 @@ pub(super) fn check_type_params_are_used<'tcx>(
             && let ty::GenericParamDefKind::Type { .. } = param.kind
         {
             let span = tcx.def_span(param.def_id);
-            struct_span_err!(
-                tcx.sess,
-                span,
-                E0091,
-                "type parameter `{}` is unused",
-                param.name,
-            )
-            .span_label(span, "unused type parameter")
-            .emit();
+            struct_span_err!(tcx.sess, span, E0091, "type parameter `{}` is unused", param.name,)
+                .span_label(span, "unused type parameter")
+                .emit();
         }
     }
 }
@@ -1400,7 +1394,7 @@ fn opaque_type_cycle_error(
                                 self.opaques.push(def);
                                 ControlFlow::Continue(())
                             }
-                            ty::Closure(def_id, ..) | ty::Generator(def_id, ..) => {
+                            ty::Closure(def_id, ..) | ty::Coroutine(def_id, ..) => {
                                 self.closures.push(def_id);
                                 t.super_visit_with(self)
                             }
@@ -1430,7 +1424,10 @@ fn opaque_type_cycle_error(
                     let mut label_match = |ty: Ty<'_>, span| {
                         for arg in ty.walk() {
                             if let ty::GenericArgKind::Type(ty) = arg.unpack()
-                                && let ty::Alias(ty::Opaque, ty::AliasTy { def_id: captured_def_id, .. }) = *ty.kind()
+                                && let ty::Alias(
+                                    ty::Opaque,
+                                    ty::AliasTy { def_id: captured_def_id, .. },
+                                ) = *ty.kind()
                                 && captured_def_id == opaque_def_id.to_def_id()
                             {
                                 err.span_label(
@@ -1449,11 +1446,11 @@ fn opaque_type_cycle_error(
                     {
                         label_match(capture.place.ty(), capture.get_path_span(tcx));
                     }
-                    // Label any generator locals that capture the opaque
-                    if let DefKind::Generator = tcx.def_kind(closure_def_id)
-                        && let Some(generator_layout) = tcx.mir_generator_witnesses(closure_def_id)
+                    // Label any coroutine locals that capture the opaque
+                    if let DefKind::Coroutine = tcx.def_kind(closure_def_id)
+                        && let Some(coroutine_layout) = tcx.mir_coroutine_witnesses(closure_def_id)
                     {
-                        for interior_ty in &generator_layout.field_tys {
+                        for interior_ty in &coroutine_layout.field_tys {
                             label_match(interior_ty.ty, interior_ty.source_info.span);
                         }
                     }
@@ -1467,14 +1464,14 @@ fn opaque_type_cycle_error(
     err.emit()
 }
 
-pub(super) fn check_generator_obligations(tcx: TyCtxt<'_>, def_id: LocalDefId) {
-    debug_assert!(matches!(tcx.def_kind(def_id), DefKind::Generator));
+pub(super) fn check_coroutine_obligations(tcx: TyCtxt<'_>, def_id: LocalDefId) {
+    debug_assert!(matches!(tcx.def_kind(def_id), DefKind::Coroutine));
 
     let typeck = tcx.typeck(def_id);
     let param_env = tcx.param_env(def_id);
 
-    let generator_interior_predicates = &typeck.generator_interior_predicates[&def_id];
-    debug!(?generator_interior_predicates);
+    let coroutine_interior_predicates = &typeck.coroutine_interior_predicates[&def_id];
+    debug!(?coroutine_interior_predicates);
 
     let infcx = tcx
         .infer_ctxt()
@@ -1486,15 +1483,15 @@ pub(super) fn check_generator_obligations(tcx: TyCtxt<'_>, def_id: LocalDefId) {
         .build();
 
     let mut fulfillment_cx = <dyn TraitEngine<'_>>::new(&infcx);
-    for (predicate, cause) in generator_interior_predicates {
+    for (predicate, cause) in coroutine_interior_predicates {
         let obligation = Obligation::new(tcx, cause.clone(), param_env, *predicate);
         fulfillment_cx.register_predicate_obligation(&infcx, obligation);
     }
 
     if (tcx.features().unsized_locals || tcx.features().unsized_fn_params)
-        && let Some(generator) = tcx.mir_generator_witnesses(def_id)
+        && let Some(coroutine) = tcx.mir_coroutine_witnesses(def_id)
     {
-        for field_ty in generator.field_tys.iter() {
+        for field_ty in coroutine.field_tys.iter() {
             fulfillment_cx.register_bound(
                 &infcx,
                 param_env,
@@ -1503,7 +1500,7 @@ pub(super) fn check_generator_obligations(tcx: TyCtxt<'_>, def_id: LocalDefId) {
                 ObligationCause::new(
                     field_ty.source_info.span,
                     def_id,
-                    ObligationCauseCode::SizedGeneratorInterior(def_id),
+                    ObligationCauseCode::SizedCoroutineInterior(def_id),
                 ),
             );
         }

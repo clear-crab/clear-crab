@@ -82,11 +82,11 @@ impl<'tcx> MirPass<'tcx> for ConstProp {
             return;
         }
 
-        // FIXME(welseywiser) const prop doesn't work on generators because of query cycles
+        // FIXME(welseywiser) const prop doesn't work on coroutines because of query cycles
         // computing their layout.
-        let is_generator = def_kind == DefKind::Generator;
-        if is_generator {
-            trace!("ConstProp skipped for generator {:?}", def_id);
+        let is_coroutine = def_kind == DefKind::Coroutine;
+        if is_coroutine {
+            trace!("ConstProp skipped for coroutine {:?}", def_id);
             return;
         }
 
@@ -512,7 +512,7 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
 
     fn replace_with_const(&mut self, place: Place<'tcx>) -> Option<Const<'tcx>> {
         // This will return None if the above `const_prop` invocation only "wrote" a
-        // type whose creation requires no write. E.g. a generator whose initial state
+        // type whose creation requires no write. E.g. a coroutine whose initial state
         // consists solely of uninitialized memory (so it doesn't capture any locals).
         let value = self.get_const(place)?;
         if !self.tcx.consider_optimizing(|| format!("ConstantPropagation - {value:?}")) {
@@ -684,7 +684,9 @@ impl<'tcx> Visitor<'tcx> for CanConstProp {
 impl<'tcx> Visitor<'tcx> for ConstPropagator<'_, 'tcx> {
     fn visit_operand(&mut self, operand: &Operand<'tcx>, location: Location) {
         self.super_operand(operand, location);
-        if let Some(place) = operand.place() && let Some(value) = self.replace_with_const(place) {
+        if let Some(place) = operand.place()
+            && let Some(value) = self.replace_with_const(place)
+        {
             self.patch.before_effect.insert((location, place), value);
         }
     }
@@ -718,7 +720,10 @@ impl<'tcx> Visitor<'tcx> for ConstPropagator<'_, 'tcx> {
                     if let Rvalue::Use(Operand::Constant(c)) = rvalue
                         && let Const::Val(..) = c.const_
                     {
-                        trace!("skipping replace of Rvalue::Use({:?} because it is already a const", c);
+                        trace!(
+                            "skipping replace of Rvalue::Use({:?} because it is already a const",
+                            c
+                        );
                     } else if let Some(operand) = self.replace_with_const(*place) {
                         self.patch.assignments.insert(location, operand);
                     }

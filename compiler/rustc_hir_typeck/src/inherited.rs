@@ -55,8 +55,8 @@ pub struct Inherited<'tcx> {
 
     pub(super) deferred_asm_checks: RefCell<Vec<(&'tcx hir::InlineAsm<'tcx>, hir::HirId)>>,
 
-    pub(super) deferred_generator_interiors:
-        RefCell<Vec<(LocalDefId, hir::BodyId, Ty<'tcx>, hir::GeneratorKind)>>,
+    pub(super) deferred_coroutine_interiors:
+        RefCell<Vec<(LocalDefId, hir::BodyId, Ty<'tcx>, hir::CoroutineKind)>>,
 
     /// Whenever we introduce an adjustment from `!` into a type variable,
     /// we record that type variable here. This is later used to inform
@@ -94,7 +94,7 @@ impl<'tcx> Inherited<'tcx> {
             deferred_cast_checks: RefCell::new(Vec::new()),
             deferred_transmute_checks: RefCell::new(Vec::new()),
             deferred_asm_checks: RefCell::new(Vec::new()),
-            deferred_generator_interiors: RefCell::new(Vec::new()),
+            deferred_coroutine_interiors: RefCell::new(Vec::new()),
             diverging_type_vars: RefCell::new(Default::default()),
             infer_var_info: RefCell::new(Default::default()),
         }
@@ -129,25 +129,29 @@ impl<'tcx> Inherited<'tcx> {
         let infer_var_info = &mut self.infer_var_info.borrow_mut();
 
         // (*) binder skipped
-        if let ty::PredicateKind::Clause(ty::ClauseKind::Trait(tpred)) = obligation.predicate.kind().skip_binder()
-            && let Some(ty) = self.shallow_resolve(tpred.self_ty()).ty_vid().map(|t| self.root_var(t))
+        if let ty::PredicateKind::Clause(ty::ClauseKind::Trait(tpred)) =
+            obligation.predicate.kind().skip_binder()
+            && let Some(ty) =
+                self.shallow_resolve(tpred.self_ty()).ty_vid().map(|t| self.root_var(t))
             && self.tcx.lang_items().sized_trait().is_some_and(|st| st != tpred.trait_ref.def_id)
         {
             let new_self_ty = self.tcx.types.unit;
 
             // Then construct a new obligation with Self = () added
             // to the ParamEnv, and see if it holds.
-            let o = obligation.with(self.tcx,
-                obligation
-                    .predicate
-                    .kind()
-                    .rebind(
-                        // (*) binder moved here
-                        ty::PredicateKind::Clause(ty::ClauseKind::Trait(tpred.with_self_ty(self.tcx, new_self_ty)))
-                    ),
+            let o = obligation.with(
+                self.tcx,
+                obligation.predicate.kind().rebind(
+                    // (*) binder moved here
+                    ty::PredicateKind::Clause(ty::ClauseKind::Trait(
+                        tpred.with_self_ty(self.tcx, new_self_ty),
+                    )),
+                ),
             );
             // Don't report overflow errors. Otherwise equivalent to may_hold.
-            if let Ok(result) = self.probe(|_| self.evaluate_obligation(&o)) && result.may_apply() {
+            if let Ok(result) = self.probe(|_| self.evaluate_obligation(&o))
+                && result.may_apply()
+            {
                 infer_var_info.entry(ty).or_default().self_in_trait = true;
             }
         }

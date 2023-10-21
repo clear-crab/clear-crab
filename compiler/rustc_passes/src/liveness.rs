@@ -706,7 +706,7 @@ impl<'a, 'tcx> Liveness<'a, 'tcx> {
         //
         // When computing the liveness for captured variables we take into
         // account how variable is captured (ByRef vs ByValue) and what is the
-        // closure kind (Generator / FnOnce vs Fn / FnMut).
+        // closure kind (Coroutine / FnOnce vs Fn / FnMut).
         //
         // Variables captured by reference are assumed to be used on the exit
         // from the closure.
@@ -752,7 +752,7 @@ impl<'a, 'tcx> Liveness<'a, 'tcx> {
                 ty::ClosureKind::FnMut => {}
                 ty::ClosureKind::FnOnce => return succ,
             },
-            ty::Generator(..) => return succ,
+            ty::Coroutine(..) => return succ,
             _ => {
                 span_bug!(
                     body.value.span,
@@ -1512,13 +1512,15 @@ impl<'tcx> Liveness<'_, 'tcx> {
                 Some(body),
                 |spans, hir_id, ln, var| {
                     if !self.live_on_entry(ln, var)
-                        && let Some(name) = self.should_warn(var) {
-                            self.ir.tcx.emit_spanned_lint(
-                                lint::builtin::UNUSED_ASSIGNMENTS,
-                                hir_id,
-                                spans,
-                                errors::UnusedAssignPassed { name },
-                            );                    }
+                        && let Some(name) = self.should_warn(var)
+                    {
+                        self.ir.tcx.emit_spanned_lint(
+                            lint::builtin::UNUSED_ASSIGNMENTS,
+                            hir_id,
+                            spans,
+                            errors::UnusedAssignPassed { name },
+                        );
+                    }
                 },
             );
         }
@@ -1707,13 +1709,14 @@ impl<'tcx> Liveness<'_, 'tcx> {
 
     fn warn_about_dead_assign(&self, spans: Vec<Span>, hir_id: HirId, ln: LiveNode, var: Variable) {
         if !self.live_on_exit(ln, var)
-            && let Some(name) = self.should_warn(var) {
-                self.ir.tcx.emit_spanned_lint(
-                    lint::builtin::UNUSED_ASSIGNMENTS,
-                    hir_id,
-                    spans,
-                    errors::UnusedAssign { name },
-                );
-            }
+            && let Some(name) = self.should_warn(var)
+        {
+            self.ir.tcx.emit_spanned_lint(
+                lint::builtin::UNUSED_ASSIGNMENTS,
+                hir_id,
+                spans,
+                errors::UnusedAssign { name },
+            );
+        }
     }
 }

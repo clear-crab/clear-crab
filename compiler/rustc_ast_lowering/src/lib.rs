@@ -30,6 +30,9 @@
 //! get confused if the spans from leaf AST nodes occur in multiple places
 //! in the HIR, especially for multiple identifiers.
 
+#![cfg_attr(not(bootstrap), allow(internal_features))]
+#![cfg_attr(not(bootstrap), feature(rustdoc_internals))]
+#![cfg_attr(not(bootstrap), doc(rust_logo))]
 #![feature(box_patterns)]
 #![feature(let_chains)]
 #![feature(never_type)]
@@ -108,10 +111,10 @@ struct LoweringContext<'a, 'hir> {
     /// Collect items that were created by lowering the current owner.
     children: Vec<(LocalDefId, hir::MaybeOwner<&'hir hir::OwnerInfo<'hir>>)>,
 
-    generator_kind: Option<hir::GeneratorKind>,
+    coroutine_kind: Option<hir::CoroutineKind>,
 
     /// When inside an `async` context, this is the `HirId` of the
-    /// `task_context` local bound to the resume argument of the generator.
+    /// `task_context` local bound to the resume argument of the coroutine.
     task_context: Option<hir::HirId>,
 
     /// Used to get the current `fn`'s def span to point to when using `await`
@@ -1256,7 +1259,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                     &PolyTraitRef {
                         bound_generic_params: ThinVec::new(),
                         trait_ref: TraitRef { path: path.clone(), ref_id: t.id },
-                        span: t.span
+                        span: t.span,
                     },
                     itctx,
                     ast::Const::No,

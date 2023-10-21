@@ -254,7 +254,8 @@ fn extend_cause_with_original_assoc_item_obligation<'tcx>(
             // projection coming from another associated type. See
             // `tests/ui/associated-types/point-at-type-on-obligation-failure.rs` and
             // `traits-assoc-type-in-supertrait-bad.rs`.
-            if let Some(ty::Alias(ty::Projection, projection_ty)) = proj.term.ty().map(|ty| ty.kind())
+            if let Some(ty::Alias(ty::Projection, projection_ty)) =
+                proj.term.ty().map(|ty| ty.kind())
                 && let Some(&impl_item_id) =
                     tcx.impl_item_implementor_ids(impl_def_id).get(&projection_ty.def_id)
                 && let Some(impl_item_span) = items
@@ -270,8 +271,7 @@ fn extend_cause_with_original_assoc_item_obligation<'tcx>(
             // can be seen in `ui/associated-types/point-at-type-on-obligation-failure-2.rs`.
             debug!("extended_cause_with_original_assoc_item_obligation trait proj {:?}", pred);
             if let ty::Alias(ty::Projection, ty::AliasTy { def_id, .. }) = *pred.self_ty().kind()
-                && let Some(&impl_item_id) =
-                    tcx.impl_item_implementor_ids(impl_def_id).get(&def_id)
+                && let Some(&impl_item_id) = tcx.impl_item_implementor_ids(impl_def_id).get(&def_id)
                 && let Some(impl_item_span) = items
                     .iter()
                     .find(|item| item.id.owner_id.to_def_id() == impl_item_id)
@@ -600,7 +600,7 @@ impl<'a, 'tcx> WfPredicates<'a, 'tcx> {
                 | ty::Float(..)
                 | ty::Error(_)
                 | ty::Str
-                | ty::GeneratorWitness(..)
+                | ty::CoroutineWitness(..)
                 | ty::Never
                 | ty::Param(_)
                 | ty::Bound(..)
@@ -672,14 +672,14 @@ impl<'a, 'tcx> WfPredicates<'a, 'tcx> {
                     }
                 }
 
-                ty::Generator(did, args, ..) => {
-                    // Walk ALL the types in the generator: this will
+                ty::Coroutine(did, args, ..) => {
+                    // Walk ALL the types in the coroutine: this will
                     // include the upvar types as well as the yield
                     // type. Note that this is mildly distinct from
                     // the closure case, where we have to be careful
                     // about the signature of the closure. We don't
                     // have the problem of implied bounds here since
-                    // generators don't take arguments.
+                    // coroutines don't take arguments.
                     let obligations = self.nominal_obligations(did, args);
                     self.out.extend(obligations);
                 }

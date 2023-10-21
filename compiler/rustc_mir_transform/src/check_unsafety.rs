@@ -56,7 +56,7 @@ impl<'tcx> Visitor<'tcx> for UnsafetyChecker<'_, 'tcx> {
             | TerminatorKind::Drop { .. }
             | TerminatorKind::Yield { .. }
             | TerminatorKind::Assert { .. }
-            | TerminatorKind::GeneratorDrop
+            | TerminatorKind::CoroutineDrop
             | TerminatorKind::UnwindResume
             | TerminatorKind::UnwindTerminate(_)
             | TerminatorKind::Return
@@ -128,7 +128,7 @@ impl<'tcx> Visitor<'tcx> for UnsafetyChecker<'_, 'tcx> {
                         ),
                     }
                 }
-                &AggregateKind::Closure(def_id, _) | &AggregateKind::Generator(def_id, _, _) => {
+                &AggregateKind::Closure(def_id, _) | &AggregateKind::Coroutine(def_id, _, _) => {
                     let def_id = def_id.expect_local();
                     let UnsafetyCheckResult { violations, used_unsafe_blocks, .. } =
                         self.tcx.unsafety_check_result(def_id);
@@ -540,8 +540,7 @@ pub fn check_unsafety(tcx: TyCtxt<'_>, def_id: LocalDefId) {
                         && let BlockCheckMode::UnsafeBlock(_) = block.rules
                     {
                         true
-                    }
-                    else if let Some(sig) = tcx.hir().fn_sig_by_hir_id(*id)
+                    } else if let Some(sig) = tcx.hir().fn_sig_by_hir_id(*id)
                         && sig.header.is_unsafe()
                     {
                         true

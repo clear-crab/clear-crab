@@ -13,7 +13,7 @@ use rustc_ast::Mutability;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_hir as hir;
 use rustc_middle::mir::interpret::{
-    ExpectedKind, InterpError, InvalidMetaKind, PointerKind, ValidationErrorInfo,
+    ExpectedKind, InterpError, InvalidMetaKind, Misalignment, PointerKind, ValidationErrorInfo,
     ValidationErrorKind, ValidationErrorKind::*,
 };
 use rustc_middle::ty;
@@ -112,13 +112,13 @@ macro_rules! try_validation {
 pub enum PathElem {
     Field(Symbol),
     Variant(Symbol),
-    GeneratorState(VariantIdx),
+    CoroutineState(VariantIdx),
     CapturedVar(Symbol),
     ArrayElem(usize),
     TupleElem(usize),
     Deref,
     EnumTag,
-    GeneratorTag,
+    CoroutineTag,
     DynDowncast,
 }
 
@@ -171,8 +171,8 @@ fn write_path(out: &mut String, path: &[PathElem]) {
             Field(name) => write!(out, ".{name}"),
             EnumTag => write!(out, ".<enum-tag>"),
             Variant(name) => write!(out, ".<enum-variant({name})>"),
-            GeneratorTag => write!(out, ".<generator-tag>"),
-            GeneratorState(idx) => write!(out, ".<generator-state({})>", idx.index()),
+            CoroutineTag => write!(out, ".<coroutine-tag>"),
+            CoroutineState(idx) => write!(out, ".<coroutine-state({})>", idx.index()),
             CapturedVar(name) => write!(out, ".<captured-var({name})>"),
             TupleElem(idx) => write!(out, ".{idx}"),
             ArrayElem(idx) => write!(out, "[{idx}]"),
@@ -206,7 +206,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
                 if tag_field == field {
                     return match layout.ty.kind() {
                         ty::Adt(def, ..) if def.is_enum() => PathElem::EnumTag,
-                        ty::Generator(..) => PathElem::GeneratorTag,
+                        ty::Coroutine(..) => PathElem::CoroutineTag,
                         _ => bug!("non-variant type {:?}", layout.ty),
                     };
                 }
@@ -216,8 +216,8 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
 
         // Now we know we are projecting to a field, so figure out which one.
         match layout.ty.kind() {
-            // generators and closures.
-            ty::Closure(def_id, _) | ty::Generator(def_id, _, _) => {
+            // coroutines and closures.
+            ty::Closure(def_id, _) | ty::Coroutine(def_id, _, _) => {
                 let mut name = None;
                 // FIXME this should be more descriptive i.e. CapturePlace instead of CapturedVar
                 // https://github.com/rust-lang/project-rfc-2229/issues/46
@@ -225,7 +225,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
                     let captures = self.ecx.tcx.closure_captures(local_def_id);
                     if let Some(captured_place) = captures.get(field) {
                         // Sometimes the index is beyond the number of upvars (seen
-                        // for a generator).
+                        // for a coroutine).
                         let var_hir_id = captured_place.get_root_variable();
                         let node = self.ecx.tcx.hir().get(var_hir_id);
                         if let hir::Node::Pat(pat) = node {
@@ -355,7 +355,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
         value: &OpTy<'tcx, M::Provenance>,
         ptr_kind: PointerKind,
     ) -> InterpResult<'tcx> {
-        // Not using `deref_pointer` since we do the dereferenceable check ourselves below.
+        // Not using `deref_pointer` since we want to use our `read_immediate` wrapper.
         let place = self.ecx.ref_to_mplace(&self.read_immediate(value, ptr_kind.into())?)?;
         // Handle wide pointers.
         // Check metadata early, for better diagnostics
@@ -378,18 +378,12 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
             .unwrap_or_else(|| (place.layout.size, place.layout.align.abi));
         // Direct call to `check_ptr_access_align` checks alignment even on CTFE machines.
         try_validation!(
-            self.ecx.check_ptr_access_align(
+            self.ecx.check_ptr_access(
                 place.ptr(),
                 size,
-                align,
                 CheckInAllocMsg::InboundsTest, // will anyway be replaced by validity message
             ),
             self.path,
-            Ub(AlignmentCheckFailed { required, has }) => UnalignedPtr {
-                ptr_kind,
-                required_bytes: required.bytes(),
-                found_bytes: has.bytes()
-            },
             Ub(DanglingIntPointer(0, _)) => NullPtr { ptr_kind },
             Ub(DanglingIntPointer(i, _)) => DanglingPtrNoProvenance {
                 ptr_kind,
@@ -403,6 +397,18 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
             // dangling pointers), but it can happen in Miri.
             Ub(PointerUseAfterFree(..)) => DanglingPtrUseAfterFree {
                 ptr_kind,
+            },
+        );
+        try_validation!(
+            self.ecx.check_ptr_align(
+                place.ptr(),
+                align,
+            ),
+            self.path,
+            Ub(AlignmentCheckFailed(Misalignment { required, has }, _msg)) => UnalignedPtr {
+                ptr_kind,
+                required_bytes: required.bytes(),
+                found_bytes: has.bytes()
             },
         );
         // Do not allow pointers to uninhabited types.
@@ -574,7 +580,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
             | ty::Str
             | ty::Dynamic(..)
             | ty::Closure(..)
-            | ty::Generator(..) => Ok(false),
+            | ty::Coroutine(..) => Ok(false),
             // Some types only occur during typechecking, they have no layout.
             // We should not see them here and we could not check them anyway.
             ty::Error(_)
@@ -583,7 +589,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValidityVisitor<'rt, 'mir, '
             | ty::Bound(..)
             | ty::Param(..)
             | ty::Alias(..)
-            | ty::GeneratorWitness(..) => bug!("Encountered invalid type {:?}", ty),
+            | ty::CoroutineWitness(..) => bug!("Encountered invalid type {:?}", ty),
         }
     }
 
@@ -645,7 +651,7 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValueVisitor<'mir, 'tcx, M>
 
     #[inline(always)]
     fn ecx(&self) -> &InterpCx<'mir, 'tcx, M> {
-        &self.ecx
+        self.ecx
     }
 
     fn read_discriminant(
@@ -686,8 +692,8 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValueVisitor<'mir, 'tcx, M>
     ) -> InterpResult<'tcx> {
         let name = match old_op.layout.ty.kind() {
             ty::Adt(adt, _) => PathElem::Variant(adt.variant(variant_id).name),
-            // Generators also have variants
-            ty::Generator(..) => PathElem::GeneratorState(variant_id),
+            // Coroutines also have variants
+            ty::Coroutine(..) => PathElem::CoroutineState(variant_id),
             _ => bug!("Unexpected type with variant: {:?}", old_op.layout.ty),
         };
         self.with_elem(name, move |this| this.visit_value(new_op))
@@ -781,14 +787,8 @@ impl<'rt, 'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> ValueVisitor<'mir, 'tcx, M>
                 // Optimization: we just check the entire range at once.
                 // NOTE: Keep this in sync with the handling of integer and float
                 // types above, in `visit_primitive`.
-                // In run-time mode, we accept pointers in here. This is actually more
-                // permissive than a per-element check would be, e.g., we accept
-                // a &[u8] that contains a pointer even though bytewise checking would
-                // reject it. However, that's good: We don't inherently want
-                // to reject those pointers, we just do not have the machinery to
-                // talk about parts of a pointer.
-                // We also accept uninit, for consistency with the slow path.
-                let alloc = self.ecx.get_ptr_alloc(mplace.ptr(), size, mplace.align)?.expect("we already excluded size 0");
+                // No need for an alignment check here, this is not an actual memory access.
+                let alloc = self.ecx.get_ptr_alloc(mplace.ptr(), size)?.expect("we already excluded size 0");
 
                 match alloc.get_bytes_strip_provenance() {
                     // In the happy case, we needn't check anything else.

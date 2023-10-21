@@ -319,7 +319,8 @@ impl<'body, 'tcx> VnState<'body, 'tcx> {
         }
 
         if let Some(local) = self.try_as_local(value, location)
-            && local != place.local // in case we had no projection to begin with.
+            && local != place.local
+        // in case we had no projection to begin with.
         {
             *place = local.into();
             self.reused_locals.insert(local);
@@ -382,7 +383,7 @@ impl<'body, 'tcx> VnState<'body, 'tcx> {
                     AggregateKind::Array(..)
                     | AggregateKind::Tuple
                     | AggregateKind::Closure(..)
-                    | AggregateKind::Generator(..) => FIRST_VARIANT,
+                    | AggregateKind::Coroutine(..) => FIRST_VARIANT,
                     AggregateKind::Adt(_, variant_index, _, _, None) => variant_index,
                     // Do not track unions.
                     AggregateKind::Adt(_, _, _, _, Some(_)) => return None,

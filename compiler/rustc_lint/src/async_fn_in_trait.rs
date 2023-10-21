@@ -58,7 +58,6 @@ declare_lint! {
     ///
     ///
     /// ```rust
-    /// # #![feature(return_position_impl_trait_in_trait)]
     /// use core::future::Future;
     /// pub trait Trait {
     ///     fn method(&self) -> impl Future<Output = ()> + Send { async {} }
@@ -117,9 +116,12 @@ impl<'tcx> LateLintPass<'tcx> for AsyncFnInTrait {
                 def.owner_id.def_id,
                 " + Send",
             );
-            cx.tcx.emit_spanned_lint(ASYNC_FN_IN_TRAIT, item.hir_id(), async_span, AsyncFnInTraitDiag {
-                sugg
-            });
+            cx.tcx.emit_spanned_lint(
+                ASYNC_FN_IN_TRAIT,
+                item.hir_id(),
+                async_span,
+                AsyncFnInTraitDiag { sugg },
+            );
         }
     }
 }

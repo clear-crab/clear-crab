@@ -63,7 +63,7 @@ impl<'tcx> MirPass<'tcx> for Inline {
         if inline(tcx, body) {
             debug!("running simplify cfg on {:?}", body.source);
             CfgSimplifier::new(body).simplify();
-            remove_dead_blocks(tcx, body);
+            remove_dead_blocks(body);
             deref_finder(tcx, body);
         }
     }
@@ -79,10 +79,10 @@ fn inline<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) -> bool {
     if body.source.promoted.is_some() {
         return false;
     }
-    // Avoid inlining into generators, since their `optimized_mir` is used for layout computation,
+    // Avoid inlining into coroutines, since their `optimized_mir` is used for layout computation,
     // which can create a cycle, even when no attempt is made to inline the function in the other
     // direction.
-    if body.generator.is_some() {
+    if body.coroutine.is_some() {
         return false;
     }
 
@@ -169,8 +169,11 @@ impl<'tcx> Inliner<'tcx> {
         caller_body: &mut Body<'tcx>,
         callsite: &CallSite<'tcx>,
     ) -> Result<std::ops::Range<BasicBlock>, &'static str> {
+        self.check_mir_is_available(caller_body, &callsite.callee)?;
+
         let callee_attrs = self.tcx.codegen_fn_attrs(callsite.callee.def_id());
-        self.check_codegen_attributes(callsite, callee_attrs)?;
+        let cross_crate_inlinable = self.tcx.cross_crate_inlinable(callsite.callee.def_id());
+        self.check_codegen_attributes(callsite, callee_attrs, cross_crate_inlinable)?;
 
         let terminator = caller_body[callsite.block].terminator.as_ref().unwrap();
         let TerminatorKind::Call { args, destination, .. } = &terminator.kind else { bug!() };
@@ -183,9 +186,8 @@ impl<'tcx> Inliner<'tcx> {
             }
         }
 
-        self.check_mir_is_available(caller_body, &callsite.callee)?;
         let callee_body = try_instance_mir(self.tcx, callsite.callee.def)?;
-        self.check_mir_body(callsite, callee_body, callee_attrs)?;
+        self.check_mir_body(callsite, callee_body, callee_attrs, cross_crate_inlinable)?;
 
         if !self.tcx.consider_optimizing(|| {
             format!("Inline {:?} into {:?}", callsite.callee, caller_body.source)
@@ -401,6 +403,7 @@ impl<'tcx> Inliner<'tcx> {
         &self,
         callsite: &CallSite<'tcx>,
         callee_attrs: &CodegenFnAttrs,
+        cross_crate_inlinable: bool,
     ) -> Result<(), &'static str> {
         if let InlineAttr::Never = callee_attrs.inline {
             return Err("never inline hint");
@@ -414,7 +417,7 @@ impl<'tcx> Inliner<'tcx> {
             .non_erasable_generics(self.tcx, callsite.callee.def_id())
             .next()
             .is_some();
-        if !is_generic && !callee_attrs.requests_inline() {
+        if !is_generic && !cross_crate_inlinable {
             return Err("not exported");
         }
 
@@ -456,10 +459,11 @@ impl<'tcx> Inliner<'tcx> {
         callsite: &CallSite<'tcx>,
         callee_body: &Body<'tcx>,
         callee_attrs: &CodegenFnAttrs,
+        cross_crate_inlinable: bool,
     ) -> Result<(), &'static str> {
         let tcx = self.tcx;
 
-        let mut threshold = if callee_attrs.requests_inline() {
+        let mut threshold = if cross_crate_inlinable {
             self.tcx.sess.opts.unstable_opts.inline_mir_hint_threshold.unwrap_or(100)
         } else {
             self.tcx.sess.opts.unstable_opts.inline_mir_threshold.unwrap_or(50)
@@ -503,7 +507,9 @@ impl<'tcx> Inliner<'tcx> {
                     self.tcx,
                     ty::EarlyBinder::bind(&place.ty(callee_body, tcx).ty),
                 );
-                if ty.needs_drop(tcx, self.param_env) && let UnwindAction::Cleanup(unwind) = unwind {
+                if ty.needs_drop(tcx, self.param_env)
+                    && let UnwindAction::Cleanup(unwind) = unwind
+                {
                     work_list.push(unwind);
                 }
             } else if callee_attrs.instruction_set != self.codegen_fn_attrs.instruction_set
@@ -842,7 +848,9 @@ impl<'tcx> Visitor<'tcx> for CostChecker<'_, 'tcx> {
             TerminatorKind::Call { func: Operand::Constant(ref f), unwind, .. } => {
                 let fn_ty =
                     self.instance.instantiate_mir(tcx, ty::EarlyBinder::bind(&f.const_.ty()));
-                self.cost += if let ty::FnDef(def_id, _) = *fn_ty.kind() && tcx.is_intrinsic(def_id) {
+                self.cost += if let ty::FnDef(def_id, _) = *fn_ty.kind()
+                    && tcx.is_intrinsic(def_id)
+                {
                     // Don't give intrinsics the extra penalty for calls
                     INSTR_COST
                 } else {
@@ -1006,7 +1014,7 @@ impl<'tcx> MutVisitor<'tcx> for Integrator<'_, 'tcx> {
         }
 
         match terminator.kind {
-            TerminatorKind::GeneratorDrop | TerminatorKind::Yield { .. } => bug!(),
+            TerminatorKind::CoroutineDrop | TerminatorKind::Yield { .. } => bug!(),
             TerminatorKind::Goto { ref mut target } => {
                 *target = self.map_block(*target);
             }

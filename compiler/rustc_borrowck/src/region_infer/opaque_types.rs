@@ -1,5 +1,6 @@
 use rustc_data_structures::fx::{FxIndexMap, FxIndexSet};
 use rustc_errors::ErrorGuaranteed;
+use rustc_hir::def::DefKind;
 use rustc_hir::def_id::LocalDefId;
 use rustc_hir::OpaqueTyOrigin;
 use rustc_infer::infer::InferCtxt;
@@ -308,46 +309,38 @@ fn check_opaque_type_well_formed<'tcx>(
         return Ok(definition_ty);
     };
     let param_env = tcx.param_env(def_id);
-    // HACK This bubble is required for this tests to pass:
-    // nested-return-type2-tait2.rs
-    // nested-return-type2-tait3.rs
+
+    let mut parent_def_id = def_id;
+    while tcx.def_kind(parent_def_id) == DefKind::OpaqueTy {
+        parent_def_id = tcx.local_parent(parent_def_id);
+    }
+
     // FIXME(-Ztrait-solver=next): We probably should use `DefiningAnchor::Error`
     // and prepopulate this `InferCtxt` with known opaque values, rather than
     // using the `Bind` anchor here. For now it's fine.
     let infcx = tcx
         .infer_ctxt()
         .with_next_trait_solver(next_trait_solver)
-        .with_opaque_type_inference(if next_trait_solver {
-            DefiningAnchor::Bind(def_id)
-        } else {
-            DefiningAnchor::Bubble
-        })
+        .with_opaque_type_inference(DefiningAnchor::Bind(parent_def_id))
         .build();
     let ocx = ObligationCtxt::new(&infcx);
     let identity_args = GenericArgs::identity_for_item(tcx, def_id);
 
     // Require that the hidden type actually fulfills all the bounds of the opaque type, even without
     // the bounds that the function supplies.
-    let mut obligations = vec![];
-    infcx
-        .insert_hidden_type(
-            OpaqueTypeKey { def_id, args: identity_args },
-            &ObligationCause::misc(definition_span, def_id),
-            param_env,
-            definition_ty,
-            true,
-            &mut obligations,
-        )
-        .unwrap();
-    infcx.add_item_bounds_for_hidden_type(
-        def_id.to_def_id(),
-        identity_args,
-        ObligationCause::misc(definition_span, def_id),
-        param_env,
-        definition_ty,
-        &mut obligations,
-    );
-    ocx.register_obligations(obligations);
+    let opaque_ty = Ty::new_opaque(tcx, def_id.to_def_id(), identity_args);
+    ocx.eq(&ObligationCause::misc(definition_span, def_id), param_env, opaque_ty, definition_ty)
+        .map_err(|err| {
+            infcx
+                .err_ctxt()
+                .report_mismatched_types(
+                    &ObligationCause::misc(definition_span, def_id),
+                    opaque_ty,
+                    definition_ty,
+                    err,
+                )
+                .emit()
+        })?;
 
     // Require the hidden type to be well-formed with only the generics of the opaque type.
     // Defining use functions may have more bounds than the opaque type, which is ok, as long as the

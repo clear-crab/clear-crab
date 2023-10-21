@@ -59,10 +59,10 @@ impl<'tcx> MirLint<'tcx> for ConstPropLint {
             return;
         }
 
-        // FIXME(welseywiser) const prop doesn't work on generators because of query cycles
+        // FIXME(welseywiser) const prop doesn't work on coroutines because of query cycles
         // computing their layout.
-        if let DefKind::Generator = def_kind {
-            trace!("ConstPropLint skipped for generator {:?}", def_id);
+        if let DefKind::Coroutine = def_kind {
+            trace!("ConstPropLint skipped for coroutine {:?}", def_id);
             return;
         }
 
@@ -627,9 +627,10 @@ impl<'tcx> Visitor<'tcx> for ConstPropagator<'_, 'tcx> {
             }
             TerminatorKind::SwitchInt { ref discr, ref targets } => {
                 if let Some(ref value) = self.eval_operand(&discr, location)
-                  && let Some(value_const) = self.use_ecx(location, |this| this.ecx.read_scalar(value))
-                  && let Ok(constant) = value_const.try_to_int()
-                  && let Ok(constant) = constant.to_bits(constant.size())
+                    && let Some(value_const) =
+                        self.use_ecx(location, |this| this.ecx.read_scalar(value))
+                    && let Ok(constant) = value_const.try_to_int()
+                    && let Ok(constant) = constant.to_bits(constant.size())
                 {
                     // We managed to evaluate the discriminant, so we know we only need to visit
                     // one target.
@@ -647,7 +648,7 @@ impl<'tcx> Visitor<'tcx> for ConstPropagator<'_, 'tcx> {
             | TerminatorKind::Unreachable
             | TerminatorKind::Drop { .. }
             | TerminatorKind::Yield { .. }
-            | TerminatorKind::GeneratorDrop
+            | TerminatorKind::CoroutineDrop
             | TerminatorKind::FalseEdge { .. }
             | TerminatorKind::FalseUnwind { .. }
             | TerminatorKind::Call { .. }

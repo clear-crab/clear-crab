@@ -121,6 +121,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         prior_arm_ty,
                         prior_arm_span,
                         scrut_span: scrut.span,
+                        scrut_hir_id: scrut.hir_id,
                         source: match_src,
                         prior_arms: other_arms.clone(),
                         opt_suggest_box_span,
@@ -373,7 +374,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             // 6 | |     };
             //   | |_____^ expected integer, found `()`
             // ```
-            if block.expr.is_none() && block.stmts.is_empty()
+            if block.expr.is_none()
+                && block.stmts.is_empty()
                 && let Some(outer_span) = &mut outer_span
                 && let Some(cond_span) = cond_span.find_ancestor_inside(*outer_span)
             {

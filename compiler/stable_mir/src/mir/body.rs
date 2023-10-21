@@ -1,12 +1,14 @@
-use crate::ty::{AdtDef, ClosureDef, Const, GeneratorDef, GenericArgs, Movability, Region};
+use crate::ty::{AdtDef, ClosureDef, Const, CoroutineDef, GenericArgs, Movability, Region};
 use crate::Opaque;
 use crate::{ty::Ty, Span};
 
 #[derive(Clone, Debug)]
 pub struct Body {
     pub blocks: Vec<BasicBlock>,
-    pub locals: Vec<LocalDecl>,
+    pub locals: LocalDecls,
 }
+
+type LocalDecls = Vec<LocalDecl>;
 
 #[derive(Clone, Debug)]
 pub struct LocalDecl {
@@ -59,7 +61,7 @@ pub enum TerminatorKind {
         target: usize,
         unwind: UnwindAction,
     },
-    GeneratorDrop,
+    CoroutineDrop,
     InlineAsm {
         template: String,
         operands: Vec<InlineAsmOperand>,
@@ -94,8 +96,8 @@ pub enum AssertMessage {
     OverflowNeg(Operand),
     DivisionByZero(Operand),
     RemainderByZero(Operand),
-    ResumedAfterReturn(GeneratorKind),
-    ResumedAfterPanic(GeneratorKind),
+    ResumedAfterReturn(CoroutineKind),
+    ResumedAfterPanic(CoroutineKind),
     MisalignedPointerDereference { required: Operand, found: Operand },
 }
 
@@ -132,13 +134,13 @@ pub enum UnOp {
 }
 
 #[derive(Clone, Debug)]
-pub enum GeneratorKind {
-    Async(AsyncGeneratorKind),
-    Gen,
+pub enum CoroutineKind {
+    Async(AsyncCoroutineKind),
+    Coroutine,
 }
 
 #[derive(Clone, Debug)]
-pub enum AsyncGeneratorKind {
+pub enum AsyncCoroutineKind {
     Block,
     Closure,
     Fn,
@@ -227,8 +229,8 @@ pub enum Rvalue {
     /// `dest = Foo { x: ..., y: ... }` from `dest.x = ...; dest.y = ...;` in the case that `Foo`
     /// has a destructor.
     ///
-    /// Disallowed after deaggregation for all aggregate kinds except `Array` and `Generator`. After
-    /// generator lowering, `Generator` aggregate kinds are disallowed too.
+    /// Disallowed after deaggregation for all aggregate kinds except `Array` and `Coroutine`. After
+    /// coroutine lowering, `Coroutine` aggregate kinds are disallowed too.
     Aggregate(AggregateKind, Vec<Operand>),
 
     /// * `Offset` has the same semantics as `<*const T>::offset`, except that the second
@@ -331,7 +333,7 @@ pub enum AggregateKind {
     Tuple,
     Adt(AdtDef, VariantIdx, GenericArgs, Option<UserTypeAnnotationIndex>, Option<FieldIdx>),
     Closure(ClosureDef, GenericArgs),
-    Generator(GeneratorDef, GenericArgs, Movability),
+    Coroutine(CoroutineDef, GenericArgs, Movability),
 }
 
 #[derive(Clone, Debug)]
@@ -344,6 +346,7 @@ pub enum Operand {
 #[derive(Clone, Debug)]
 pub struct Place {
     pub local: Local,
+    /// projection out of a place (access a field, deref a pointer, etc)
     pub projection: String,
 }
 
@@ -461,4 +464,26 @@ pub enum NullOp {
     AlignOf,
     /// Returns the offset of a field.
     OffsetOf(Vec<FieldIdx>),
+}
+
+impl Operand {
+    pub fn ty(&self, locals: &LocalDecls) -> Ty {
+        match self {
+            Operand::Copy(place) | Operand::Move(place) => place.ty(locals),
+            Operand::Constant(c) => c.ty(),
+        }
+    }
+}
+
+impl Constant {
+    pub fn ty(&self) -> Ty {
+        self.literal.ty
+    }
+}
+
+impl Place {
+    pub fn ty(&self, locals: &LocalDecls) -> Ty {
+        let _start_ty = locals[self.local].ty;
+        todo!("Implement projection")
+    }
 }

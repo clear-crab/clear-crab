@@ -3,14 +3,14 @@
 
 use crate::lints::{
     BadOptAccessDiag, DefaultHashTypesDiag, DiagOutOfImpl, LintPassByHand, NonExistentDocKeyword,
-    QueryInstability, TyQualified, TykindDiag, TykindKind, UntranslatableDiag,
+    QueryInstability, SpanUseEqCtxtDiag, TyQualified, TykindDiag, TykindKind, UntranslatableDiag,
     UntranslatableDiagnosticTrivial,
 };
 use crate::{EarlyContext, EarlyLintPass, LateContext, LateLintPass, LintContext};
 use rustc_ast as ast;
 use rustc_hir::def::Res;
 use rustc_hir::{def_id::DefId, Expr, ExprKind, GenericArg, PatKind, Path, PathSegment, QPath};
-use rustc_hir::{HirId, Impl, Item, ItemKind, Node, Pat, Ty, TyKind};
+use rustc_hir::{BinOp, BinOpKind, HirId, Impl, Item, ItemKind, Node, Pat, Ty, TyKind};
 use rustc_middle::ty;
 use rustc_session::{declare_lint_pass, declare_tool_lint};
 use rustc_span::hygiene::{ExpnKind, MacroKind};
@@ -62,13 +62,11 @@ fn typeck_results_of_method_fn<'tcx>(
             if let Some(def_id) = cx.typeck_results().type_dependent_def_id(expr.hir_id) =>
         {
             Some((segment.ident.span, def_id, cx.typeck_results().node_args(expr.hir_id)))
-        },
-        _ => {
-            match cx.typeck_results().node_type(expr.hir_id).kind() {
-                &ty::FnDef(def_id, args) => Some((expr.span, def_id, args)),
-                _ => None,
-            }
         }
+        _ => match cx.typeck_results().node_type(expr.hir_id).kind() {
+            &ty::FnDef(def_id, args) => Some((expr.span, def_id, args)),
+            _ => None,
+        },
     }
 }
 
@@ -134,14 +132,11 @@ impl<'tcx> LateLintPass<'tcx> for TyTyKind {
         _: rustc_hir::HirId,
     ) {
         if let Some(segment) = path.segments.iter().nth_back(1)
-        && lint_ty_kind_usage(cx, &segment.res)
+            && lint_ty_kind_usage(cx, &segment.res)
         {
-            let span = path.span.with_hi(
-                segment.args.map_or(segment.ident.span, |a| a.span_ext).hi()
-            );
-            cx.emit_spanned_lint(USAGE_OF_TY_TYKIND, path.span, TykindKind {
-                suggestion: span,
-            });
+            let span =
+                path.span.with_hi(segment.args.map_or(segment.ident.span, |a| a.span_ext).hi());
+            cx.emit_spanned_lint(USAGE_OF_TY_TYKIND, path.span, TykindKind { suggestion: span });
         }
     }
 
@@ -166,10 +161,7 @@ impl<'tcx> LateLintPass<'tcx> for TyTyKind {
                                 None
                             }
                         }
-                        Some(Node::Expr(Expr {
-                            kind: ExprKind::Path(qpath),
-                            ..
-                        })) => {
+                        Some(Node::Expr(Expr { kind: ExprKind::Path(qpath), .. })) => {
                             if let QPath::TypeRelative(qpath_ty, ..) = qpath
                                 && qpath_ty.hir_id == ty.hir_id
                             {
@@ -180,10 +172,7 @@ impl<'tcx> LateLintPass<'tcx> for TyTyKind {
                         }
                         // Can't unify these two branches because qpath below is `&&` and above is `&`
                         // and `A | B` paths don't play well together with adjustments, apparently.
-                        Some(Node::Expr(Expr {
-                            kind: ExprKind::Struct(qpath, ..),
-                            ..
-                        })) => {
+                        Some(Node::Expr(Expr { kind: ExprKind::Struct(qpath, ..), .. })) => {
                             if let QPath::TypeRelative(qpath_ty, ..) = qpath
                                 && qpath_ty.hir_id == ty.hir_id
                             {
@@ -192,22 +181,28 @@ impl<'tcx> LateLintPass<'tcx> for TyTyKind {
                                 None
                             }
                         }
-                        _ => None
+                        _ => None,
                     };
 
                     match span {
                         Some(span) => {
-                            cx.emit_spanned_lint(USAGE_OF_TY_TYKIND, path.span, TykindKind {
-                                suggestion: span,
-                            });
-                        },
+                            cx.emit_spanned_lint(
+                                USAGE_OF_TY_TYKIND,
+                                path.span,
+                                TykindKind { suggestion: span },
+                            );
+                        }
                         None => cx.emit_spanned_lint(USAGE_OF_TY_TYKIND, path.span, TykindDiag),
                     }
-                } else if !ty.span.from_expansion() && path.segments.len() > 1 && let Some(ty) = is_ty_or_ty_ctxt(cx, &path) {
-                    cx.emit_spanned_lint(USAGE_OF_QUALIFIED_TY, path.span, TyQualified {
-                        ty,
-                        suggestion: path.span,
-                    });
+                } else if !ty.span.from_expansion()
+                    && path.segments.len() > 1
+                    && let Some(ty) = is_ty_or_ty_ctxt(cx, &path)
+                {
+                    cx.emit_spanned_lint(
+                        USAGE_OF_QUALIFIED_TY,
+                        path.span,
+                        TyQualified { ty, suggestion: path.span },
+                    );
                 }
             }
             _ => {}
@@ -398,11 +393,11 @@ impl LateLintPass<'_> for Diagnostics {
             }
 
             debug!(?parent);
-            if let Node::Item(Item { kind: ItemKind::Impl(impl_), .. }) = parent &&
-                let Impl { of_trait: Some(of_trait), .. } = impl_ &&
-                let Some(def_id) = of_trait.trait_def_id() &&
-                let Some(name) = cx.tcx.get_diagnostic_name(def_id) &&
-                matches!(name, sym::IntoDiagnostic | sym::AddToDiagnostic | sym::DecorateLint)
+            if let Node::Item(Item { kind: ItemKind::Impl(impl_), .. }) = parent
+                && let Impl { of_trait: Some(of_trait), .. } = impl_
+                && let Some(def_id) = of_trait.trait_def_id()
+                && let Some(name) = cx.tcx.get_diagnostic_name(def_id)
+                && matches!(name, sym::IntoDiagnostic | sym::AddToDiagnostic | sym::DecorateLint)
             {
                 found_impl = true;
                 break;
@@ -416,9 +411,9 @@ impl LateLintPass<'_> for Diagnostics {
         let mut found_diagnostic_message = false;
         for ty in args.types() {
             debug!(?ty);
-            if let Some(adt_def) = ty.ty_adt_def() &&
-                let Some(name) =  cx.tcx.get_diagnostic_name(adt_def.did()) &&
-                matches!(name, sym::DiagnosticMessage | sym::SubdiagnosticMessage)
+            if let Some(adt_def) = ty.ty_adt_def()
+                && let Some(name) = cx.tcx.get_diagnostic_name(adt_def.did())
+                && matches!(name, sym::DiagnosticMessage | sym::SubdiagnosticMessage)
             {
                 found_diagnostic_message = true;
                 break;
@@ -486,8 +481,9 @@ impl EarlyLintPass for Diagnostics {
                 }
             };
             if let ast::ExprKind::Lit(lit) = arg.kind
-                && let ast::token::LitKind::Str = lit.kind {
-                    true
+                && let ast::token::LitKind::Str = lit.kind
+            {
+                true
             } else {
                 false
             }
@@ -524,17 +520,50 @@ impl LateLintPass<'_> for BadOptAccess {
         }
 
         for field in adt_def.all_fields() {
-            if field.name == target.name &&
-                let Some(attr) = cx.tcx.get_attr(field.did, sym::rustc_lint_opt_deny_field_access) &&
-                let Some(items) = attr.meta_item_list()  &&
-                let Some(item) = items.first()  &&
-                let Some(lit) = item.lit()  &&
-                let ast::LitKind::Str(val, _) = lit.kind
+            if field.name == target.name
+                && let Some(attr) =
+                    cx.tcx.get_attr(field.did, sym::rustc_lint_opt_deny_field_access)
+                && let Some(items) = attr.meta_item_list()
+                && let Some(item) = items.first()
+                && let Some(lit) = item.lit()
+                && let ast::LitKind::Str(val, _) = lit.kind
             {
-                cx.emit_spanned_lint(BAD_OPT_ACCESS, expr.span, BadOptAccessDiag {
-                    msg: val.as_str(),
-                });
+                cx.emit_spanned_lint(
+                    BAD_OPT_ACCESS,
+                    expr.span,
+                    BadOptAccessDiag { msg: val.as_str() },
+                );
             }
         }
+    }
+}
+
+declare_tool_lint! {
+    pub rustc::SPAN_USE_EQ_CTXT,
+    Allow,
+    "forbid uses of `==` with `Span::ctxt`, suggest `Span::eq_ctxt` instead",
+    report_in_external_macro: true
+}
+
+declare_lint_pass!(SpanUseEqCtxt => [SPAN_USE_EQ_CTXT]);
+
+impl<'tcx> LateLintPass<'tcx> for SpanUseEqCtxt {
+    fn check_expr(&mut self, cx: &LateContext<'tcx>, expr: &Expr<'_>) {
+        if let ExprKind::Binary(BinOp { node: BinOpKind::Eq, .. }, lhs, rhs) = expr.kind {
+            if is_span_ctxt_call(cx, lhs) && is_span_ctxt_call(cx, rhs) {
+                cx.emit_spanned_lint(SPAN_USE_EQ_CTXT, expr.span, SpanUseEqCtxtDiag);
+            }
+        }
+    }
+}
+
+fn is_span_ctxt_call(cx: &LateContext<'_>, expr: &Expr<'_>) -> bool {
+    match &expr.kind {
+        ExprKind::MethodCall(..) => cx
+            .typeck_results()
+            .type_dependent_def_id(expr.hir_id)
+            .is_some_and(|call_did| cx.tcx.is_diagnostic_item(sym::SpanCtxt, call_did)),
+
+        _ => false,
     }
 }

@@ -304,8 +304,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             hir::ExprKind::Block(..),
         ) = (parent_node, callee_node)
         {
-            let fn_decl_span = if hir.body(body).generator_kind
-                == Some(hir::GeneratorKind::Async(hir::AsyncGeneratorKind::Closure))
+            let fn_decl_span = if hir.body(body).coroutine_kind
+                == Some(hir::CoroutineKind::Async(hir::AsyncCoroutineKind::Closure))
             {
                 // Actually need to unwrap one more layer of HIR to get to
                 // the _real_ closure...
@@ -421,13 +421,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         .steal_diagnostic(segment.ident.span, StashKey::CallIntoMethod)
                 {
                     // Try suggesting `foo(a)` -> `a.foo()` if possible.
-                    self.suggest_call_as_method(
-                        &mut diag,
-                        segment,
-                        arg_exprs,
-                        call_expr,
-                        expected
-                    );
+                    self.suggest_call_as_method(&mut diag, segment, arg_exprs, call_expr, expected);
                     diag.emit();
                 }
 
@@ -656,7 +650,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 .sess
                 .source_map()
                 .is_multiline(call_expr.span.with_lo(callee_expr.span.hi()))
-                && call_expr.span.ctxt() == callee_expr.span.ctxt();
+                && call_expr.span.eq_ctxt(callee_expr.span);
             if call_is_multiline {
                 err.span_suggestion(
                     callee_expr.span.shrink_to_hi(),
@@ -792,8 +786,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 tcx.consts.false_
             }
             Some(hir::ConstContext::ConstFn) => {
-                let args = ty::GenericArgs::identity_for_item(tcx, context);
-                args.host_effect_param().expect("ConstContext::Maybe must have host effect param")
+                let host_idx = tcx
+                    .generics_of(context)
+                    .host_effect_index
+                    .expect("ConstContext::Maybe must have host effect param");
+                ty::GenericArgs::identity_for_item(tcx, context).const_at(host_idx)
             }
             None => tcx.consts.true_,
         };

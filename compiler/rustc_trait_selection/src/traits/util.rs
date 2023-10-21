@@ -275,7 +275,7 @@ pub fn closure_trait_ref_and_return_type<'tcx>(
     sig.map_bound(|sig| (trait_ref, sig.output()))
 }
 
-pub fn generator_trait_ref_and_outputs<'tcx>(
+pub fn coroutine_trait_ref_and_outputs<'tcx>(
     tcx: TyCtxt<'tcx>,
     fn_trait_def_id: DefId,
     self_ty: Ty<'tcx>,
@@ -326,7 +326,8 @@ pub fn check_args_compatible<'tcx>(
 
         if let Some(parent) = generics.parent
             && let parent_generics = tcx.generics_of(parent)
-            && !check_args_compatible_inner(tcx, parent_generics, parent_args) {
+            && !check_args_compatible_inner(tcx, parent_generics, parent_args)
+        {
             return false;
         }
 

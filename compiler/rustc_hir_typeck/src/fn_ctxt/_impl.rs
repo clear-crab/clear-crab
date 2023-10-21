@@ -445,7 +445,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     pub fn node_ty(&self, id: hir::HirId) -> Ty<'tcx> {
         match self.typeck_results.borrow().node_types().get(id) {
             Some(&t) => t,
-            None if let Some(e) = self.tainted_by_errors() => Ty::new_error(self.tcx,e),
+            None if let Some(e) = self.tainted_by_errors() => Ty::new_error(self.tcx, e),
             None => {
                 bug!(
                     "no type for node {} in fcx {}",
@@ -459,7 +459,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     pub fn node_ty_opt(&self, id: hir::HirId) -> Option<Ty<'tcx>> {
         match self.typeck_results.borrow().node_types().get(id) {
             Some(&t) => Some(t),
-            None if let Some(e) = self.tainted_by_errors() => Some(Ty::new_error(self.tcx,e)),
+            None if let Some(e) = self.tainted_by_errors() => Some(Ty::new_error(self.tcx, e)),
             None => None,
         }
     }
@@ -509,40 +509,40 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         typeck_results.rvalue_scopes = rvalue_scopes;
     }
 
-    /// Unify the inference variables corresponding to generator witnesses, and save all the
+    /// Unify the inference variables corresponding to coroutine witnesses, and save all the
     /// predicates that were stalled on those inference variables.
     ///
-    /// This process allows to conservatively save all predicates that do depend on the generator
-    /// interior types, for later processing by `check_generator_obligations`.
+    /// This process allows to conservatively save all predicates that do depend on the coroutine
+    /// interior types, for later processing by `check_coroutine_obligations`.
     ///
     /// We must not attempt to select obligations after this method has run, or risk query cycle
     /// ICE.
     #[instrument(level = "debug", skip(self))]
-    pub(in super::super) fn resolve_generator_interiors(&self, def_id: DefId) {
+    pub(in super::super) fn resolve_coroutine_interiors(&self, def_id: DefId) {
         // Try selecting all obligations that are not blocked on inference variables.
-        // Once we start unifying generator witnesses, trying to select obligations on them will
+        // Once we start unifying coroutine witnesses, trying to select obligations on them will
         // trigger query cycle ICEs, as doing so requires MIR.
         self.select_obligations_where_possible(|_| {});
 
-        let generators = std::mem::take(&mut *self.deferred_generator_interiors.borrow_mut());
-        debug!(?generators);
+        let coroutines = std::mem::take(&mut *self.deferred_coroutine_interiors.borrow_mut());
+        debug!(?coroutines);
 
-        for &(expr_def_id, body_id, interior, _) in generators.iter() {
+        for &(expr_def_id, body_id, interior, _) in coroutines.iter() {
             debug!(?expr_def_id);
 
-            // Create the `GeneratorWitness` type that we will unify with `interior`.
+            // Create the `CoroutineWitness` type that we will unify with `interior`.
             let args = ty::GenericArgs::identity_for_item(
                 self.tcx,
                 self.tcx.typeck_root_def_id(expr_def_id.to_def_id()),
             );
-            let witness = Ty::new_generator_witness(self.tcx, expr_def_id.to_def_id(), args);
+            let witness = Ty::new_coroutine_witness(self.tcx, expr_def_id.to_def_id(), args);
 
             // Unify `interior` with `witness` and collect all the resulting obligations.
             let span = self.tcx.hir().body(body_id).value.span;
             let ok = self
                 .at(&self.misc(span), self.param_env)
                 .eq(DefineOpaqueTypes::No, interior, witness)
-                .expect("Failed to unify generator interior type");
+                .expect("Failed to unify coroutine interior type");
             let mut obligations = ok.obligations;
 
             // Also collect the obligations that were unstalled by this unification.
@@ -553,7 +553,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             debug!(?obligations);
             self.typeck_results
                 .borrow_mut()
-                .generator_interior_predicates
+                .coroutine_interior_predicates
                 .insert(expr_def_id, obligations);
         }
     }
@@ -564,7 +564,12 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         if !errors.is_empty() {
             self.adjust_fulfillment_errors_for_expr_obligation(&mut errors);
+            let errors_causecode = errors
+                .iter()
+                .map(|e| (e.obligation.cause.span, e.root_obligation.cause.code().clone()))
+                .collect::<Vec<_>>();
             self.err_ctxt().report_fulfillment_errors(errors);
+            self.collect_unused_stmts_for_coerce_return_ty(errors_causecode);
         }
     }
 
@@ -713,7 +718,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 if let ty::GenericArgKind::Type(ty) = ty.unpack()
                     && let ty::Alias(ty::Opaque, ty::AliasTy { def_id, .. }) = *ty.kind()
                     && let Some(def_id) = def_id.as_local()
-                    && self.opaque_type_origin(def_id).is_some() {
+                    && self.opaque_type_origin(def_id).is_some()
+                {
                     return None;
                 }
             }
@@ -833,7 +839,13 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             .resolve_fully_qualified_call(span, item_name, ty.normalized, qself.span, hir_id)
             .and_then(|r| {
                 // lint bare trait if the method is found in the trait
-                if span.edition().at_least_rust_2021() && let Some(mut diag) = self.tcx.sess.diagnostic().steal_diagnostic(qself.span, StashKey::TraitMissingMethod) {
+                if span.edition().at_least_rust_2021()
+                    && let Some(mut diag) = self
+                        .tcx
+                        .sess
+                        .diagnostic()
+                        .steal_diagnostic(qself.span, StashKey::TraitMissingMethod)
+                {
                     diag.emit();
                 }
                 Ok(r)
@@ -863,7 +875,13 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 }
 
                 // emit or cancel the diagnostic for bare traits
-                if span.edition().at_least_rust_2021() && let Some(mut diag) = self.tcx.sess.diagnostic().steal_diagnostic(qself.span, StashKey::TraitMissingMethod) {
+                if span.edition().at_least_rust_2021()
+                    && let Some(mut diag) = self
+                        .tcx
+                        .sess
+                        .diagnostic()
+                        .steal_diagnostic(qself.span, StashKey::TraitMissingMethod)
+                {
                     if trait_missing_method {
                         // cancel the diag for bare traits when meeting `MyTrait::missing_method`
                         diag.cancel();
@@ -949,12 +967,15 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     kind: hir::ItemKind::Fn(ref sig, ..),
                     owner_id,
                     ..
-                })) = self.tcx.hir().find_parent(hir_id) => Some((
-                hir::HirId::make_owner(owner_id.def_id),
-                &sig.decl,
-                ident,
-                ident.name != sym::main,
-            )),
+                })) = self.tcx.hir().find_parent(hir_id) =>
+            {
+                Some((
+                    hir::HirId::make_owner(owner_id.def_id),
+                    &sig.decl,
+                    ident,
+                    ident.name != sym::main,
+                ))
+            }
             _ => None,
         }
     }
@@ -1077,11 +1098,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let mut user_self_ty = None;
         let mut is_alias_variant_ctor = false;
         match res {
-            Res::Def(DefKind::Ctor(CtorOf::Variant, _), _)
-                if let Some(self_ty) = self_ty =>
-            {
+            Res::Def(DefKind::Ctor(CtorOf::Variant, _), _) if let Some(self_ty) = self_ty => {
                 let adt_def = self_ty.normalized.ty_adt_def().unwrap();
-                user_self_ty = Some(UserSelfTy { impl_def_id: adt_def.did(), self_ty: self_ty.raw });
+                user_self_ty =
+                    Some(UserSelfTy { impl_def_id: adt_def.did(), self_ty: self_ty.raw });
                 is_alias_variant_ctor = true;
             }
             Res::Def(DefKind::AssocFn | DefKind::AssocConst, def_id) => {
@@ -1090,9 +1110,13 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 let container_id = assoc_item.container_id(tcx);
                 debug!(?def_id, ?container, ?container_id);
                 match container {
-                    ty::TraitContainer => {
-                        callee::check_legal_trait_for_method_call(tcx, span, None, span, container_id)
-                    }
+                    ty::TraitContainer => callee::check_legal_trait_for_method_call(
+                        tcx,
+                        span,
+                        None,
+                        span,
+                        container_id,
+                    ),
                     ty::ImplContainer => {
                         if segments.len() == 1 {
                             // `<T>::assoc` will end up here, and so
@@ -1478,12 +1502,12 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 Ok(normalized_ty) => normalized_ty,
                 Err(errors) => {
                     let guar = self.err_ctxt().report_fulfillment_errors(errors);
-                    return Ty::new_error(self.tcx,guar);
+                    return Ty::new_error(self.tcx, guar);
                 }
             }
         } else {
             ty
-       }
+        }
     }
 
     /// Resolves `ty` by a single level if `ty` is a type variable.

@@ -1009,7 +1009,11 @@ impl<'tcx> TypeFolder<TyCtxt<'tcx>> for ImplTraitInTraitCollector<'_, 'tcx> {
             });
             self.types.insert(proj.def_id, (infer_ty, proj.args));
             // Recurse into bounds
-            for (pred, pred_span) in self.interner().explicit_item_bounds(proj.def_id).iter_instantiated_copied(self.interner(), proj.args) {
+            for (pred, pred_span) in self
+                .interner()
+                .explicit_item_bounds(proj.def_id)
+                .iter_instantiated_copied(self.interner(), proj.args)
+            {
                 let pred = pred.fold_with(self);
                 let pred = self.ocx.normalize(
                     &ObligationCause::misc(self.span, self.body_id),
@@ -1180,7 +1184,8 @@ fn report_trait_method_mismatch<'tcx>(
             if trait_sig.inputs().len() == *i {
                 // Suggestion to change output type. We do not suggest in `async` functions
                 // to avoid complex logic or incorrect output.
-                if let ImplItemKind::Fn(sig, _) = &tcx.hir().expect_impl_item(impl_m.def_id.expect_local()).kind
+                if let ImplItemKind::Fn(sig, _) =
+                    &tcx.hir().expect_impl_item(impl_m.def_id.expect_local()).kind
                     && !sig.header.asyncness.is_async()
                 {
                     let msg = "change the output type to match the trait";
@@ -1552,38 +1557,24 @@ fn compare_number_of_generics<'tcx>(
                 DiagnosticId::Error("E0049".into()),
             );
 
-            let mut suffix = None;
-
+            let msg =
+                format!("expected {trait_count} {kind} parameter{}", pluralize!(trait_count),);
             if let Some(spans) = trait_spans {
                 let mut spans = spans.iter();
                 if let Some(span) = spans.next() {
-                    err.span_label(
-                        *span,
-                        format!(
-                            "expected {} {} parameter{}",
-                            trait_count,
-                            kind,
-                            pluralize!(trait_count),
-                        ),
-                    );
+                    err.span_label(*span, msg);
                 }
                 for span in spans {
                     err.span_label(*span, "");
                 }
             } else {
-                suffix = Some(format!(", expected {trait_count}"));
+                err.span_label(tcx.def_span(trait_.def_id), msg);
             }
 
             if let Some(span) = span {
                 err.span_label(
                     span,
-                    format!(
-                        "found {} {} parameter{}{}",
-                        impl_count,
-                        kind,
-                        pluralize!(impl_count),
-                        suffix.unwrap_or_default(),
-                    ),
+                    format!("found {} {} parameter{}", impl_count, kind, pluralize!(impl_count),),
                 );
             }
 
@@ -2281,7 +2272,7 @@ pub(super) fn check_type_bounds<'tcx>(
             _ => predicates.push(
                 ty::Binder::bind_with_vars(
                     ty::ProjectionPredicate {
-                        projection_ty: tcx.mk_alias_ty(trait_ty.def_id, rebased_args),
+                        projection_ty: ty::AliasTy::new(tcx, trait_ty.def_id, rebased_args),
                         term: normalize_impl_ty.into(),
                     },
                     bound_vars,

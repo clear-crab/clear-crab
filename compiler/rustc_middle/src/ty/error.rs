@@ -241,8 +241,8 @@ impl<'tcx> Ty<'tcx> {
             }
             ty::Dynamic(..) => "trait object".into(),
             ty::Closure(..) => "closure".into(),
-            ty::Generator(def_id, ..) => tcx.generator_kind(def_id).unwrap().descr().into(),
-            ty::GeneratorWitness(..) => "generator witness".into(),
+            ty::Coroutine(def_id, ..) => tcx.coroutine_kind(def_id).unwrap().descr().into(),
+            ty::CoroutineWitness(..) => "coroutine witness".into(),
             ty::Infer(ty::TyVar(_)) => "inferred type".into(),
             ty::Infer(ty::IntVar(_)) => "integer".into(),
             ty::Infer(ty::FloatVar(_)) => "floating-point number".into(),
@@ -253,7 +253,13 @@ impl<'tcx> Ty<'tcx> {
             ty::Infer(ty::FreshFloatTy(_)) => "fresh floating-point type".into(),
             ty::Alias(ty::Projection | ty::Inherent, _) => "associated type".into(),
             ty::Param(p) => format!("type parameter `{p}`").into(),
-            ty::Alias(ty::Opaque, ..) => if tcx.ty_is_opaque_future(self) { "future".into() } else { "opaque type".into() },
+            ty::Alias(ty::Opaque, ..) => {
+                if tcx.ty_is_opaque_future(self) {
+                    "future".into()
+                } else {
+                    "opaque type".into()
+                }
+            }
             ty::Error(_) => "type error".into(),
             _ => {
                 let width = tcx.sess.diagnostic_width();
@@ -293,8 +299,8 @@ impl<'tcx> Ty<'tcx> {
             ty::FnPtr(_) => "fn pointer".into(),
             ty::Dynamic(..) => "trait object".into(),
             ty::Closure(..) => "closure".into(),
-            ty::Generator(def_id, ..) => tcx.generator_kind(def_id).unwrap().descr().into(),
-            ty::GeneratorWitness(..) => "generator witness".into(),
+            ty::Coroutine(def_id, ..) => tcx.coroutine_kind(def_id).unwrap().descr().into(),
+            ty::CoroutineWitness(..) => "coroutine witness".into(),
             ty::Tuple(..) => "tuple".into(),
             ty::Placeholder(..) => "higher-ranked type".into(),
             ty::Bound(..) => "bound type variable".into(),

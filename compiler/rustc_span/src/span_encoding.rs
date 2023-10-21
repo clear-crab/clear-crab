@@ -126,7 +126,7 @@ impl Span {
                 return Span {
                     lo_or_index: lo2,
                     len_with_tag_or_marker: PARENT_TAG | len as u16,
-                    ctxt_or_parent_or_marker: parent2 as u16
+                    ctxt_or_parent_or_marker: parent2 as u16,
                 };
             }
         }
@@ -212,6 +212,7 @@ impl Span {
 
     /// This function is used as a fast path when decoding the full `SpanData` is not necessary.
     /// It's a cut-down version of `data_untracked`.
+    #[cfg_attr(not(test), rustc_diagnostic_item = "SpanCtxt")]
     #[inline]
     pub fn ctxt(self) -> SyntaxContext {
         if self.len_with_tag_or_marker != BASE_LEN_INTERNED_MARKER {

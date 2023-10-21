@@ -1239,7 +1239,7 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
         id: DefIndex,
         sess: &'a Session,
     ) -> impl Iterator<Item = ModChild> + 'a {
-        iter::from_generator(move || {
+        iter::from_coroutine(move || {
             if let Some(data) = &self.root.proc_macro_data {
                 // If we are loading as a proc macro, we want to return
                 // the view of this crate as a proc macro crate.
@@ -1271,6 +1271,10 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
 
     fn is_item_mir_available(self, id: DefIndex) -> bool {
         self.root.tables.optimized_mir.get(self, id).is_some()
+    }
+
+    fn cross_crate_inlinable(self, id: DefIndex) -> bool {
+        self.root.tables.cross_crate_inlinable.get(self, id).unwrap_or(false)
     }
 
     fn get_fn_has_self_parameter(self, id: DefIndex, sess: &'a Session) -> bool {
@@ -1692,17 +1696,22 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
                 // `try_to_translate_virtual_to_real` don't have to worry about how the
                 // compiler is bootstrapped.
                 if let Some(virtual_dir) = &sess.opts.unstable_opts.simulate_remapped_rust_src_base
-                && let Some(real_dir) = &sess.opts.real_rust_source_base_dir
-                && let rustc_span::FileName::Real(ref mut old_name) = name {
+                    && let Some(real_dir) = &sess.opts.real_rust_source_base_dir
+                    && let rustc_span::FileName::Real(ref mut old_name) = name
+                {
                     let relative_path = match old_name {
-                        rustc_span::RealFileName::LocalPath(local) => local.strip_prefix(real_dir).ok(),
+                        rustc_span::RealFileName::LocalPath(local) => {
+                            local.strip_prefix(real_dir).ok()
+                        }
                         rustc_span::RealFileName::Remapped { virtual_name, .. } => {
-                            option_env!("CFG_VIRTUAL_RUST_SOURCE_BASE_DIR").and_then(|virtual_dir| virtual_name.strip_prefix(virtual_dir).ok())
+                            option_env!("CFG_VIRTUAL_RUST_SOURCE_BASE_DIR")
+                                .and_then(|virtual_dir| virtual_name.strip_prefix(virtual_dir).ok())
                         }
                     };
                     debug!(?relative_path, ?virtual_dir, "simulate_remapped_rust_src_base");
                     for subdir in ["library", "compiler"] {
-                        if let Some(rest) = relative_path.and_then(|p| p.strip_prefix(subdir).ok()) {
+                        if let Some(rest) = relative_path.and_then(|p| p.strip_prefix(subdir).ok())
+                        {
                             *old_name = rustc_span::RealFileName::Remapped {
                                 local_path: None, // FIXME: maybe we should preserve this?
                                 virtual_name: virtual_dir.join(subdir).join(rest),

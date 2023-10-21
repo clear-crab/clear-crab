@@ -1,4 +1,4 @@
-use super::deconstruct_pat::{Constructor, DeconstructedPat};
+use super::deconstruct_pat::{Constructor, DeconstructedPat, WitnessPat};
 use super::usefulness::{
     compute_match_usefulness, MatchArm, MatchCheckCtxt, Reachability, UsefulnessReport,
 };
@@ -19,7 +19,7 @@ use rustc_hir::HirId;
 use rustc_middle::thir::visit::{self, Visitor};
 use rustc_middle::thir::*;
 use rustc_middle::ty::print::with_no_trimmed_paths;
-use rustc_middle::ty::{self, AdtDef, Ty, TyCtxt, TypeVisitableExt};
+use rustc_middle::ty::{self, AdtDef, Ty, TyCtxt};
 use rustc_session::lint::builtin::{
     BINDINGS_WITH_VARIANT_NAME, IRREFUTABLE_LET_PATTERNS, UNREACHABLE_PATTERNS,
 };
@@ -168,7 +168,9 @@ impl<'a, 'tcx> Visitor<'a, 'tcx> for MatchVisitor<'a, '_, 'tcx> {
                     self.lint_level = lint_level;
                 }
 
-                if let Some(initializer) = initializer && else_block.is_some() {
+                if let Some(initializer) = initializer
+                    && else_block.is_some()
+                {
                     self.check_let(pattern, initializer, LetSource::LetElse, span);
                 }
 
@@ -231,6 +233,10 @@ impl<'p, 'tcx> MatchVisitor<'_, 'p, 'tcx> {
         if let LetSource::None = source {
             return;
         }
+        if let Err(err) = pat.pat_error_reported() {
+            self.error = Err(err);
+            return;
+        }
         self.check_patterns(pat, Refutable);
         let mut cx = self.new_cx(self.lint_level, true);
         let tpat = self.lower_pattern(&mut cx, pat);
@@ -252,6 +258,10 @@ impl<'p, 'tcx> MatchVisitor<'_, 'p, 'tcx> {
             self.with_lint_level(arm.lint_level, |this| {
                 this.check_patterns(&arm.pattern, Refutable);
             });
+            if let Err(err) = arm.pattern.pat_error_reported() {
+                self.error = Err(err);
+                return;
+            }
         }
 
         let tarms: Vec<_> = arms
@@ -269,7 +279,7 @@ impl<'p, 'tcx> MatchVisitor<'_, 'p, 'tcx> {
 
         let scrut = &self.thir[scrut];
         let scrut_ty = scrut.ty;
-        let report = compute_match_usefulness(&cx, &tarms, self.lint_level, scrut_ty);
+        let report = compute_match_usefulness(&cx, &tarms, self.lint_level, scrut_ty, scrut.span);
 
         match source {
             // Don't report arm reachability of desugared `match $iter.into_iter() { iter => .. }`
@@ -334,7 +344,8 @@ impl<'p, 'tcx> MatchVisitor<'_, 'p, 'tcx> {
         // and record chain members that aren't let exprs.
         let mut chain_refutabilities = Vec::new();
 
-        let add = |expr: ExprId, mut local_lint_level| {
+        let mut error = Ok(());
+        let mut add = |expr: ExprId, mut local_lint_level| {
             // `local_lint_level` is the lint level enclosing the pattern inside `expr`.
             let mut expr = &self.thir[expr];
             debug!(?expr, ?local_lint_level, "add");
@@ -348,6 +359,10 @@ impl<'p, 'tcx> MatchVisitor<'_, 'p, 'tcx> {
             debug!(?expr, ?local_lint_level, "after scopes");
             match expr.kind {
                 ExprKind::Let { box ref pat, expr: _ } => {
+                    if let Err(err) = pat.pat_error_reported() {
+                        error = Err(err);
+                        return None;
+                    }
                     let mut ncx = self.new_cx(local_lint_level, true);
                     let tpat = self.lower_pattern(&mut ncx, pat);
                     let refutable = !is_let_irrefutable(&mut ncx, local_lint_level, tpat);
@@ -380,6 +395,11 @@ impl<'p, 'tcx> MatchVisitor<'_, 'p, 'tcx> {
         debug!(?chain_refutabilities);
         chain_refutabilities.reverse();
 
+        if error.is_err() {
+            self.error = error;
+            return;
+        }
+
         // Third, emit the actual warnings.
         if chain_refutabilities.iter().all(|r| matches!(*r, Some((_, false)))) {
             // The entire chain is made up of irrefutable `let` statements
@@ -393,7 +413,10 @@ impl<'p, 'tcx> MatchVisitor<'_, 'p, 'tcx> {
             return;
         }
 
-        if let Some(until) = chain_refutabilities.iter().position(|r| !matches!(*r, Some((_, false)))) && until > 0 {
+        if let Some(until) =
+            chain_refutabilities.iter().position(|r| !matches!(*r, Some((_, false))))
+            && until > 0
+        {
             // The chain has a non-zero prefix of irrefutable `let` statements.
 
             // Check if the let source is while, for there is no alternative place to put a prefix,
@@ -409,29 +432,49 @@ impl<'p, 'tcx> MatchVisitor<'_, 'p, 'tcx> {
                 let span_end = prefix.last().unwrap().unwrap().0;
                 let span = span_start.to(span_end);
                 let count = prefix.len();
-                self.tcx.emit_spanned_lint(IRREFUTABLE_LET_PATTERNS, self.lint_level, span, LeadingIrrefutableLetPatterns { count });
+                self.tcx.emit_spanned_lint(
+                    IRREFUTABLE_LET_PATTERNS,
+                    self.lint_level,
+                    span,
+                    LeadingIrrefutableLetPatterns { count },
+                );
             }
         }
 
-        if let Some(from) = chain_refutabilities.iter().rposition(|r| !matches!(*r, Some((_, false)))) && from != (chain_refutabilities.len() - 1) {
+        if let Some(from) =
+            chain_refutabilities.iter().rposition(|r| !matches!(*r, Some((_, false))))
+            && from != (chain_refutabilities.len() - 1)
+        {
             // The chain has a non-empty suffix of irrefutable `let` statements
             let suffix = &chain_refutabilities[from + 1..];
             let span_start = suffix[0].unwrap().0;
             let span_end = suffix.last().unwrap().unwrap().0;
             let span = span_start.to(span_end);
             let count = suffix.len();
-            self.tcx.emit_spanned_lint(IRREFUTABLE_LET_PATTERNS, self.lint_level, span, TrailingIrrefutableLetPatterns { count });
+            self.tcx.emit_spanned_lint(
+                IRREFUTABLE_LET_PATTERNS,
+                self.lint_level,
+                span,
+                TrailingIrrefutableLetPatterns { count },
+            );
         }
     }
 
     #[instrument(level = "trace", skip(self))]
     fn check_irrefutable(&mut self, pat: &Pat<'tcx>, origin: &str, sp: Option<Span>) {
+        // If we got errors while lowering, don't emit anything more.
+        if let Err(err) = pat.pat_error_reported() {
+            self.error = Err(err);
+            return;
+        }
+
         let mut cx = self.new_cx(self.lint_level, false);
 
         let pattern = self.lower_pattern(&mut cx, pat);
         let pattern_ty = pattern.ty();
         let arm = MatchArm { pat: pattern, hir_id: self.lint_level, has_guard: false };
-        let report = compute_match_usefulness(&cx, &[arm], self.lint_level, pattern_ty);
+        let report =
+            compute_match_usefulness(&cx, &[arm], self.lint_level, pattern_ty, pattern.span());
 
         // Note: we ignore whether the pattern is unreachable (i.e. whether the type is empty). We
         // only care about exhaustiveness here.
@@ -448,23 +491,21 @@ impl<'p, 'tcx> MatchVisitor<'_, 'p, 'tcx> {
         let mut interpreted_as_const = None;
 
         if let PatKind::Constant { .. }
-            | PatKind::AscribeUserType {
-                subpattern: box Pat { kind: PatKind::Constant { .. }, .. },
-                ..
-              } = pat.kind
+        | PatKind::AscribeUserType {
+            subpattern: box Pat { kind: PatKind::Constant { .. }, .. },
+            ..
+        } = pat.kind
             && let Ok(snippet) = self.tcx.sess.source_map().span_to_snippet(pat.span)
         {
             // If the pattern to match is an integer literal:
             if snippet.chars().all(|c| c.is_digit(10)) {
                 // Then give a suggestion, the user might've meant to create a binding instead.
                 misc_suggestion = Some(MiscPatternSuggestion::AttemptedIntegerLiteral {
-                    start_span: pat.span.shrink_to_lo()
+                    start_span: pat.span.shrink_to_lo(),
                 });
             } else if snippet.chars().all(|c| c.is_alphanumeric() || c == '_') {
-                interpreted_as_const = Some(InterpretedAsConst {
-                    span: pat.span,
-                    variable: snippet,
-                });
+                interpreted_as_const =
+                    Some(InterpretedAsConst { span: pat.span, variable: snippet });
             }
         }
 
@@ -501,20 +542,19 @@ impl<'p, 'tcx> MatchVisitor<'_, 'p, 'tcx> {
 
         // Emit an extra note if the first uncovered witness would be uninhabited
         // if we disregard visibility.
-        let witness_1_is_privately_uninhabited =
-            if cx.tcx.features().exhaustive_patterns
-                && let Some(witness_1) = witnesses.get(0)
-                && let ty::Adt(adt, args) = witness_1.ty().kind()
-                && adt.is_enum()
-                && let Constructor::Variant(variant_index) = witness_1.ctor()
-            {
-                let variant = adt.variant(*variant_index);
-                let inhabited = variant.inhabited_predicate(cx.tcx, *adt).instantiate(cx.tcx, args);
-                assert!(inhabited.apply(cx.tcx, cx.param_env, cx.module));
-                !inhabited.apply_ignore_module(cx.tcx, cx.param_env)
-            } else {
-                false
-            };
+        let witness_1_is_privately_uninhabited = if cx.tcx.features().exhaustive_patterns
+            && let Some(witness_1) = witnesses.get(0)
+            && let ty::Adt(adt, args) = witness_1.ty().kind()
+            && adt.is_enum()
+            && let Constructor::Variant(variant_index) = witness_1.ctor()
+        {
+            let variant = adt.variant(*variant_index);
+            let inhabited = variant.inhabited_predicate(cx.tcx, *adt).instantiate(cx.tcx, args);
+            assert!(inhabited.apply(cx.tcx, cx.param_env, cx.module));
+            !inhabited.apply_ignore_module(cx.tcx, cx.param_env)
+        } else {
+            false
+        };
 
         self.error = Err(self.tcx.sess.emit_err(PatternNotCovered {
             span: pat.span,
@@ -539,23 +579,22 @@ fn check_for_bindings_named_same_as_variants(
 ) {
     pat.walk_always(|p| {
         if let PatKind::Binding {
-                name,
-                mode: BindingMode::ByValue,
-                mutability: Mutability::Not,
-                subpattern: None,
-                ty,
-                ..
-            } = p.kind
+            name,
+            mode: BindingMode::ByValue,
+            mutability: Mutability::Not,
+            subpattern: None,
+            ty,
+            ..
+        } = p.kind
             && let ty::Adt(edef, _) = ty.peel_refs().kind()
             && edef.is_enum()
-            && edef.variants().iter().any(|variant| {
-                variant.name == name && variant.ctor_kind() == Some(CtorKind::Const)
-            })
+            && edef
+                .variants()
+                .iter()
+                .any(|variant| variant.name == name && variant.ctor_kind() == Some(CtorKind::Const))
         {
             let variant_count = edef.variants().len();
-            let ty_path = with_no_trimmed_paths!({
-                cx.tcx.def_path_str(edef.did())
-            });
+            let ty_path = with_no_trimmed_paths!(cx.tcx.def_path_str(edef.did()));
             cx.tcx.emit_spanned_lint(
                 BINDINGS_WITH_VARIANT_NAME,
                 cx.lint_level,
@@ -566,7 +605,9 @@ fn check_for_bindings_named_same_as_variants(
                     // suggestion would produce code that breaks on `check_irrefutable`.
                     suggestion: if rf == Refutable || variant_count == 1 {
                         Some(p.span)
-                    } else { None },
+                    } else {
+                        None
+                    },
                     ty_path,
                     name,
                 },
@@ -622,7 +663,7 @@ fn is_let_irrefutable<'p, 'tcx>(
     pat: &'p DeconstructedPat<'p, 'tcx>,
 ) -> bool {
     let arms = [MatchArm { pat, hir_id: pat_id, has_guard: false }];
-    let report = compute_match_usefulness(&cx, &arms, pat_id, pat.ty());
+    let report = compute_match_usefulness(&cx, &arms, pat_id, pat.ty(), pat.span());
 
     // Report if the pattern is unreachable, which can only occur when the type is uninhabited.
     // This also reports unreachable sub-patterns though, so we can't just replace it with an
@@ -661,8 +702,8 @@ fn report_arm_reachability<'p, 'tcx>(
     }
 }
 
-fn collect_non_exhaustive_tys<'p, 'tcx>(
-    pat: &DeconstructedPat<'p, 'tcx>,
+fn collect_non_exhaustive_tys<'tcx>(
+    pat: &WitnessPat<'tcx>,
     non_exhaustive_tys: &mut FxHashSet<Ty<'tcx>>,
 ) {
     if matches!(pat.ctor(), Constructor::NonExhaustive) {
@@ -678,16 +719,10 @@ fn non_exhaustive_match<'p, 'tcx>(
     thir: &Thir<'tcx>,
     scrut_ty: Ty<'tcx>,
     sp: Span,
-    witnesses: Vec<DeconstructedPat<'p, 'tcx>>,
+    witnesses: Vec<WitnessPat<'tcx>>,
     arms: &[ArmId],
     expr_span: Span,
 ) -> ErrorGuaranteed {
-    for &arm in arms {
-        if let Err(err) = thir[arm].pattern.error_reported() {
-            return err;
-        }
-    }
-
     let is_empty_match = arms.is_empty();
     let non_empty_enum = match scrut_ty.kind() {
         ty::Adt(def, _) => def.is_enum() && !def.variants().is_empty(),
@@ -776,8 +811,10 @@ fn non_exhaustive_match<'p, 'tcx>(
         }
         [only] => {
             let only = &thir[*only];
-            let (pre_indentation, is_multiline) = if let Some(snippet) = sm.indentation_before(only.span)
-                && let Ok(with_trailing) = sm.span_extend_while(only.span, |c| c.is_whitespace() || c == ',')
+            let (pre_indentation, is_multiline) = if let Some(snippet) =
+                sm.indentation_before(only.span)
+                && let Ok(with_trailing) =
+                    sm.span_extend_while(only.span, |c| c.is_whitespace() || c == ',')
                 && sm.is_multiline(with_trailing)
             {
                 (format!("\n{snippet}"), true)
@@ -860,10 +897,10 @@ fn non_exhaustive_match<'p, 'tcx>(
 
 pub(crate) fn joined_uncovered_patterns<'p, 'tcx>(
     cx: &MatchCheckCtxt<'p, 'tcx>,
-    witnesses: &[DeconstructedPat<'p, 'tcx>],
+    witnesses: &[WitnessPat<'tcx>],
 ) -> String {
     const LIMIT: usize = 3;
-    let pat_to_str = |pat: &DeconstructedPat<'p, 'tcx>| pat.to_pat(cx).to_string();
+    let pat_to_str = |pat: &WitnessPat<'tcx>| pat.to_pat(cx).to_string();
     match witnesses {
         [] => bug!(),
         [witness] => format!("`{}`", witness.to_pat(cx)),
@@ -880,7 +917,7 @@ pub(crate) fn joined_uncovered_patterns<'p, 'tcx>(
 }
 
 pub(crate) fn pattern_not_covered_label(
-    witnesses: &[DeconstructedPat<'_, '_>],
+    witnesses: &[WitnessPat<'_>],
     joined_patterns: &str,
 ) -> String {
     format!("pattern{} {} not covered", rustc_errors::pluralize!(witnesses.len()), joined_patterns)
@@ -891,7 +928,7 @@ fn adt_defined_here<'p, 'tcx>(
     cx: &MatchCheckCtxt<'p, 'tcx>,
     err: &mut Diagnostic,
     ty: Ty<'tcx>,
-    witnesses: &[DeconstructedPat<'p, 'tcx>],
+    witnesses: &[WitnessPat<'tcx>],
 ) {
     let ty = ty.peel_refs();
     if let ty::Adt(def, _) = ty.kind() {
@@ -922,13 +959,15 @@ fn adt_defined_here<'p, 'tcx>(
 fn maybe_point_at_variant<'a, 'p: 'a, 'tcx: 'a>(
     cx: &MatchCheckCtxt<'p, 'tcx>,
     def: AdtDef<'tcx>,
-    patterns: impl Iterator<Item = &'a DeconstructedPat<'p, 'tcx>>,
+    patterns: impl Iterator<Item = &'a WitnessPat<'tcx>>,
 ) -> Vec<Span> {
     use Constructor::*;
     let mut covered = vec![];
     for pattern in patterns {
         if let Variant(variant_index) = pattern.ctor() {
-            if let ty::Adt(this_def, _) = pattern.ty().kind() && this_def.did() != def.did() {
+            if let ty::Adt(this_def, _) = pattern.ty().kind()
+                && this_def.did() != def.did()
+            {
                 continue;
             }
             let sp = def.variant(*variant_index).ident(cx.tcx).span;

@@ -167,7 +167,7 @@ fixed_size_enum! {
         ( Impl { of_trait: false }                 )
         ( Impl { of_trait: true }                  )
         ( Closure                                  )
-        ( Generator                                )
+        ( Coroutine                                )
         ( Static(ast::Mutability::Not)             )
         ( Static(ast::Mutability::Mut)             )
         ( Ctor(CtorOf::Struct, CtorKind::Fn)       )
@@ -296,6 +296,30 @@ impl FixedSizeEncoding for bool {
     fn write_to_bytes(self, b: &mut [u8; 1]) {
         debug_assert!(!self.is_default());
         b[0] = self as u8
+    }
+}
+
+impl FixedSizeEncoding for Option<bool> {
+    type ByteArray = [u8; 1];
+
+    #[inline]
+    fn from_bytes(b: &[u8; 1]) -> Self {
+        match b[0] {
+            0 => Some(false),
+            1 => Some(true),
+            2 => None,
+            _ => unreachable!(),
+        }
+    }
+
+    #[inline]
+    fn write_to_bytes(self, b: &mut [u8; 1]) {
+        debug_assert!(!self.is_default());
+        b[0] = match self {
+            Some(false) => 0,
+            Some(true) => 1,
+            None => 2,
+        };
     }
 }
 

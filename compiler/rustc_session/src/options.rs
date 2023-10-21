@@ -4,6 +4,7 @@ use crate::search_paths::SearchPath;
 use crate::utils::NativeLib;
 use crate::{lint, EarlyErrorHandler};
 use rustc_data_structures::profiling::TimePassesFormat;
+use rustc_data_structures::stable_hasher::Hash64;
 use rustc_errors::ColorConfig;
 use rustc_errors::{LanguageIdentifier, TerminalUrl};
 use rustc_target::spec::{CodeModel, LinkerFlavorCli, MergeFunctions, PanicStrategy, SanitizerSet};
@@ -158,6 +159,10 @@ top_level_options!(
         /// directory to store intermediate results.
         incremental: Option<PathBuf> [UNTRACKED],
         assert_incr_state: Option<IncrementalStateAssertion> [UNTRACKED],
+        /// Set by the `Config::hash_untracked_state` callback for custom
+        /// drivers to invalidate the incremental cache
+        #[rustc_lint_opt_deny_field_access("should only be used via `Config::hash_untracked_state`")]
+        untracked_state_hash: Hash64 [TRACKED_NO_CRATE_HASH],
 
         unstable_opts: UnstableOptions [SUBSTRUCT],
         prints: Vec<PrintRequest> [UNTRACKED],
@@ -422,6 +427,7 @@ mod desc {
     pub const parse_proc_macro_execution_strategy: &str =
         "one of supported execution strategies (`same-thread`, or `cross-thread`)";
     pub const parse_dump_solver_proof_tree: &str = "one of: `always`, `on-request`, `on-error`";
+    pub const parse_remap_path_scope: &str = "comma separated list of scopes: `macro`, `diagnostics`, `unsplit-debuginfo`, `split-debuginfo`, `split-debuginfo-path`, `object`, `all`";
 }
 
 mod parse {
@@ -1090,6 +1096,30 @@ mod parse {
         true
     }
 
+    pub(crate) fn parse_remap_path_scope(
+        slot: &mut RemapPathScopeComponents,
+        v: Option<&str>,
+    ) -> bool {
+        if let Some(v) = v {
+            *slot = RemapPathScopeComponents::empty();
+            for s in v.split(',') {
+                *slot |= match s {
+                    "macro" => RemapPathScopeComponents::MACRO,
+                    "diagnostics" => RemapPathScopeComponents::DIAGNOSTICS,
+                    "unsplit-debuginfo" => RemapPathScopeComponents::UNSPLIT_DEBUGINFO,
+                    "split-debuginfo" => RemapPathScopeComponents::SPLIT_DEBUGINFO,
+                    "split-debuginfo-path" => RemapPathScopeComponents::SPLIT_DEBUGINFO_PATH,
+                    "object" => RemapPathScopeComponents::OBJECT,
+                    "all" => RemapPathScopeComponents::all(),
+                    _ => return false,
+                }
+            }
+            true
+        } else {
+            false
+        }
+    }
+
     pub(crate) fn parse_relocation_model(slot: &mut Option<RelocModel>, v: Option<&str>) -> bool {
         match v.and_then(|s| RelocModel::from_str(s).ok()) {
             Some(relocation_model) => *slot = Some(relocation_model),
@@ -1447,6 +1477,8 @@ options! {
         "combine CGUs into a single one"),
     crate_attr: Vec<String> = (Vec::new(), parse_string_push, [TRACKED],
         "inject the given attribute in the crate"),
+    cross_crate_inline_threshold: Option<usize> = (None, parse_opt_number, [TRACKED],
+        "threshold to allow cross crate inlining of functions"),
     debug_info_for_profiling: bool = (false, parse_bool, [TRACKED],
         "emit discriminators and other data necessary for AutoFDO"),
     debug_macros: bool = (false, parse_bool, [TRACKED],
@@ -1726,6 +1758,8 @@ options! {
         "choose which RELRO level to use"),
     remap_cwd_prefix: Option<PathBuf> = (None, parse_opt_pathbuf, [TRACKED],
         "remap paths under the current working directory to this path prefix"),
+    remap_path_scope: RemapPathScopeComponents = (RemapPathScopeComponents::all(), parse_remap_path_scope, [TRACKED],
+        "remap path scope (default: all)"),
     remark_dir: Option<PathBuf> = (None, parse_opt_pathbuf, [UNTRACKED],
         "directory into which to write optimization remarks (if not specified, they will be \
 written to standard error output)"),

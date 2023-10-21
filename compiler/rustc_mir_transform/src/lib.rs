@@ -61,7 +61,9 @@ mod const_goto;
 mod const_prop;
 mod const_prop_lint;
 mod copy_prop;
+mod coroutine;
 mod coverage;
+mod cross_crate_inline;
 mod ctfe_limit;
 mod dataflow_const_prop;
 mod dead_store_elimination;
@@ -76,7 +78,6 @@ mod elaborate_drops;
 mod errors;
 mod ffi_unwind_calls;
 mod function_item_references;
-mod generator;
 mod gvn;
 pub mod inline;
 mod instsimplify;
@@ -123,6 +124,7 @@ pub fn provide(providers: &mut Providers) {
     coverage::query::provide(providers);
     ffi_unwind_calls::provide(providers);
     shim::provide(providers);
+    cross_crate_inline::provide(providers);
     *providers = Providers {
         mir_keys,
         mir_const,
@@ -130,7 +132,7 @@ pub fn provide(providers: &mut Providers) {
         mir_promoted,
         mir_drops_elaborated_and_const_checked,
         mir_for_ctfe,
-        mir_generator_witnesses: generator::mir_generator_witnesses,
+        mir_coroutine_witnesses: coroutine::mir_coroutine_witnesses,
         optimized_mir,
         is_mir_available,
         is_ctfe_mir_available: |tcx, did| is_mir_available(tcx, did),
@@ -162,37 +164,50 @@ fn remap_mir_for_const_eval_select<'tcx>(
                 && tcx.item_name(def_id) == sym::const_eval_select
                 && tcx.is_intrinsic(def_id) =>
             {
-                let [tupled_args, called_in_const, called_at_rt]: [_; 3] = std::mem::take(args).try_into().unwrap();
+                let [tupled_args, called_in_const, called_at_rt]: [_; 3] =
+                    std::mem::take(args).try_into().unwrap();
                 let ty = tupled_args.ty(&body.local_decls, tcx);
                 let fields = ty.tuple_fields();
                 let num_args = fields.len();
-                let func = if context == hir::Constness::Const { called_in_const } else { called_at_rt };
-                let (method, place): (fn(Place<'tcx>) -> Operand<'tcx>, Place<'tcx>) = match tupled_args {
-                    Operand::Constant(_) => {
-                        // there is no good way of extracting a tuple arg from a constant (const generic stuff)
-                        // so we just create a temporary and deconstruct that.
-                        let local = body.local_decls.push(LocalDecl::new(ty, fn_span));
-                        bb.statements.push(Statement {
-                            source_info: SourceInfo::outermost(fn_span),
-                            kind: StatementKind::Assign(Box::new((local.into(), Rvalue::Use(tupled_args.clone())))),
-                        });
-                        (Operand::Move, local.into())
-                    }
-                    Operand::Move(place) => (Operand::Move, place),
-                    Operand::Copy(place) => (Operand::Copy, place),
-                };
-                let place_elems = place.projection;
-                let arguments = (0..num_args).map(|x| {
-                    let mut place_elems = place_elems.to_vec();
-                    place_elems.push(ProjectionElem::Field(x.into(), fields[x]));
-                    let projection = tcx.mk_place_elems(&place_elems);
-                    let place = Place {
-                        local: place.local,
-                        projection,
+                let func =
+                    if context == hir::Constness::Const { called_in_const } else { called_at_rt };
+                let (method, place): (fn(Place<'tcx>) -> Operand<'tcx>, Place<'tcx>) =
+                    match tupled_args {
+                        Operand::Constant(_) => {
+                            // there is no good way of extracting a tuple arg from a constant (const generic stuff)
+                            // so we just create a temporary and deconstruct that.
+                            let local = body.local_decls.push(LocalDecl::new(ty, fn_span));
+                            bb.statements.push(Statement {
+                                source_info: SourceInfo::outermost(fn_span),
+                                kind: StatementKind::Assign(Box::new((
+                                    local.into(),
+                                    Rvalue::Use(tupled_args.clone()),
+                                ))),
+                            });
+                            (Operand::Move, local.into())
+                        }
+                        Operand::Move(place) => (Operand::Move, place),
+                        Operand::Copy(place) => (Operand::Copy, place),
                     };
-                    method(place)
-                }).collect();
-                terminator.kind = TerminatorKind::Call { func, args: arguments, destination, target, unwind, call_source: CallSource::Misc, fn_span };
+                let place_elems = place.projection;
+                let arguments = (0..num_args)
+                    .map(|x| {
+                        let mut place_elems = place_elems.to_vec();
+                        place_elems.push(ProjectionElem::Field(x.into(), fields[x]));
+                        let projection = tcx.mk_place_elems(&place_elems);
+                        let place = Place { local: place.local, projection };
+                        method(place)
+                    })
+                    .collect();
+                terminator.kind = TerminatorKind::Call {
+                    func,
+                    args: arguments,
+                    destination,
+                    target,
+                    unwind,
+                    call_source: CallSource::Misc,
+                    fn_span,
+                };
             }
             _ => {}
         }
@@ -360,15 +375,15 @@ fn inner_mir_for_ctfe(tcx: TyCtxt<'_>, def: LocalDefId) -> Body<'_> {
 /// mir borrowck *before* doing so in order to ensure that borrowck can be run and doesn't
 /// end up missing the source MIR due to stealing happening.
 fn mir_drops_elaborated_and_const_checked(tcx: TyCtxt<'_>, def: LocalDefId) -> &Steal<Body<'_>> {
-    if let DefKind::Generator = tcx.def_kind(def) {
-        tcx.ensure_with_value().mir_generator_witnesses(def);
+    if let DefKind::Coroutine = tcx.def_kind(def) {
+        tcx.ensure_with_value().mir_coroutine_witnesses(def);
     }
     let mir_borrowck = tcx.mir_borrowck(def);
 
     let is_fn_like = tcx.def_kind(def).is_fn_like();
     if is_fn_like {
         // Do not compute the mir call graph without said call graph actually being used.
-        if inline::Inline.is_enabled(&tcx.sess) {
+        if pm::should_run_pass(tcx, &inline::Inline) {
             tcx.ensure_with_value().mir_inliner_callees(ty::InstanceDef::Item(def.to_def_id()));
         }
     }
@@ -494,7 +509,7 @@ fn run_runtime_lowering_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         // `AddRetag` needs to run after `ElaborateDrops`. Otherwise it should run fairly late,
         // but before optimizations begin.
         &elaborate_box_derefs::ElaborateBoxDerefs,
-        &generator::StateTransform,
+        &coroutine::StateTransform,
         &add_retag::AddRetag,
         &Lint(const_prop_lint::ConstPropLint),
     ];

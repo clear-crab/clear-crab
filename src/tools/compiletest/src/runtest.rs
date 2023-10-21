@@ -15,6 +15,7 @@ use crate::json;
 use crate::read2::{read2_abbreviated, Truncated};
 use crate::util::{add_dylib_path, dylib_env_var, logv, PathBufExt};
 use crate::ColorConfig;
+use miropt_test_tools::{files_for_miropt_test, MiroptTest, MiroptTestFile};
 use regex::{Captures, Regex};
 use rustfix::{apply_suggestions, get_suggestions_from_json, Filter};
 
@@ -229,6 +230,7 @@ enum Emit {
     None,
     Metadata,
     LlvmIr,
+    Mir,
     Asm,
     LinkArgsAsm,
 }
@@ -2506,6 +2508,9 @@ impl<'test> TestCx<'test> {
             Emit::LlvmIr => {
                 rustc.args(&["--emit", "llvm-ir"]);
             }
+            Emit::Mir => {
+                rustc.args(&["--emit", "mir"]);
+            }
             Emit::Asm => {
                 rustc.args(&["--emit", "asm"]);
             }
@@ -3984,11 +3989,17 @@ impl<'test> TestCx<'test> {
     fn run_mir_opt_test(&self) {
         let pm = self.pass_mode();
         let should_run = self.should_run(pm);
-        let emit_metadata = self.should_emit_metadata(pm);
-        let passes = self.get_passes();
 
-        let proc_res = self.compile_test_with_passes(should_run, emit_metadata, passes);
-        self.check_mir_dump();
+        let mut test_info = files_for_miropt_test(
+            &self.testpaths.file,
+            self.config.get_pointer_width(),
+            self.config.target_cfg().panic.for_miropt_test_tools(),
+        );
+
+        let passes = std::mem::take(&mut test_info.passes);
+
+        let proc_res = self.compile_test_with_passes(should_run, Emit::Mir, passes);
+        self.check_mir_dump(test_info);
         if !proc_res.status.success() {
             self.fatal_proc_rec("compilation failed!", &proc_res);
         }
@@ -4002,37 +4013,12 @@ impl<'test> TestCx<'test> {
         }
     }
 
-    fn get_passes(&self) -> Vec<String> {
-        let files = miropt_test_tools::files_for_miropt_test(
-            &self.testpaths.file,
-            self.config.get_pointer_width(),
-            self.config.target_cfg().panic.for_miropt_test_tools(),
-        );
-
-        let mut out = Vec::new();
-
-        for miropt_test_tools::MiroptTestFiles {
-            from_file: _,
-            to_file: _,
-            expected_file: _,
-            passes,
-        } in files
-        {
-            out.extend(passes);
-        }
-        out
-    }
-
-    fn check_mir_dump(&self) {
+    fn check_mir_dump(&self, test_info: MiroptTest) {
         let test_dir = self.testpaths.file.parent().unwrap();
         let test_crate =
             self.testpaths.file.file_stem().unwrap().to_str().unwrap().replace("-", "_");
 
-        let suffix = miropt_test_tools::output_file_suffix(
-            &self.testpaths.file,
-            self.config.get_pointer_width(),
-            self.config.target_cfg().panic.for_miropt_test_tools(),
-        );
+        let MiroptTest { run_filecheck, suffix, files, passes: _ } = test_info;
 
         if self.config.bless {
             for e in
@@ -4047,14 +4033,7 @@ impl<'test> TestCx<'test> {
             }
         }
 
-        let files = miropt_test_tools::files_for_miropt_test(
-            &self.testpaths.file,
-            self.config.get_pointer_width(),
-            self.config.target_cfg().panic.for_miropt_test_tools(),
-        );
-        for miropt_test_tools::MiroptTestFiles { from_file, to_file, expected_file, passes: _ } in
-            files
-        {
+        for MiroptTestFile { from_file, to_file, expected_file } in files {
             let dumped_string = if let Some(after) = to_file {
                 self.diff_mir_files(from_file.into(), after.into())
             } else {
@@ -4093,6 +4072,14 @@ impl<'test> TestCx<'test> {
                         expected_file.display()
                     );
                 }
+            }
+        }
+
+        if run_filecheck {
+            let output_path = self.output_base_name().with_extension("mir");
+            let proc_res = self.verify_with_filecheck(&output_path);
+            if !proc_res.status.success() {
+                self.fatal_proc_rec("verification with 'FileCheck' failed", &proc_res);
             }
         }
     }
@@ -4256,6 +4243,39 @@ impl<'test> TestCx<'test> {
             // Normalize back references (see RFC 2603)
             normalized =
                 V0_BACK_REF_RE.replace_all(&normalized, V0_BACK_REF_PLACEHOLDER).into_owned();
+        }
+
+        // AllocId are numbered globally in a compilation session. This can lead to changes
+        // depending on the exact compilation flags and host architecture. Meanwhile, we want
+        // to keep them numbered, to see if the same id appears multiple times.
+        // So we remap to deterministic numbers that only depend on the subset of allocations
+        // that actually appear in the output.
+        // We use uppercase ALLOC to distinguish from the non-normalized version.
+        {
+            let mut seen_allocs = indexmap::IndexSet::new();
+
+            // The alloc-id appears in pretty-printed allocations.
+            let re = Regex::new(r"╾─*a(lloc)?([0-9]+)(\+0x[0-9]+)?─*╼").unwrap();
+            normalized = re
+                .replace_all(&normalized, |caps: &Captures<'_>| {
+                    // Renumber the captured index.
+                    let index = caps.get(2).unwrap().as_str().to_string();
+                    let (index, _) = seen_allocs.insert_full(index);
+                    let offset = caps.get(3).map_or("", |c| c.as_str());
+                    // Do not bother keeping it pretty, just make it deterministic.
+                    format!("╾ALLOC{index}{offset}╼")
+                })
+                .into_owned();
+
+            // The alloc-id appears in a sentence.
+            let re = Regex::new(r"\balloc([0-9]+)\b").unwrap();
+            normalized = re
+                .replace_all(&normalized, |caps: &Captures<'_>| {
+                    let index = caps.get(1).unwrap().as_str().to_string();
+                    let (index, _) = seen_allocs.insert_full(index);
+                    format!("ALLOC{index}")
+                })
+                .into_owned();
         }
 
         // Custom normalization rules

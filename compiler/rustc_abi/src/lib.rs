@@ -1,5 +1,7 @@
 #![cfg_attr(feature = "nightly", feature(step_trait))]
 #![cfg_attr(feature = "nightly", allow(internal_features))]
+#![cfg_attr(all(not(bootstrap), feature = "nightly"), doc(rust_logo))]
+#![cfg_attr(all(not(bootstrap), feature = "nightly"), feature(rustdoc_internals))]
 
 use std::fmt;
 use std::num::{NonZeroUsize, ParseIntError};
@@ -681,6 +683,7 @@ impl fmt::Display for AlignFromBytesError {
 
 impl Align {
     pub const ONE: Align = Align { pow2: 0 };
+    // LLVM has a maximal supported alignment of 2^29, we inherit that.
     pub const MAX: Align = Align { pow2: 29 };
 
     #[inline]
@@ -1499,7 +1502,7 @@ pub struct LayoutS<FieldIdx: Idx, VariantIdx: Idx> {
     /// Encodes information about multi-variant layouts.
     /// Even with `Multiple` variants, a layout still has its own fields! Those are then
     /// shared between all variants. One of them will be the discriminant,
-    /// but e.g. generators can have more.
+    /// but e.g. coroutines can have more.
     ///
     /// To access all fields of this layout, both `fields` and the fields of the active variant
     /// must be taken into account.
