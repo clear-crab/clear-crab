@@ -1010,7 +1010,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
             // Just make this an efficient immediate.
             // Note that not calling `layout_of` here does have one real consequence:
             // if the type is too big, we'll only notice this when the local is actually initialized,
-            // which is a bit too late -- we should ideally notice this alreayd here, when the memory
+            // which is a bit too late -- we should ideally notice this already here, when the memory
             // is conceptually allocated. But given how rare that error is and that this is a hot function,
             // we accept this downside for now.
             Operand::Immediate(Immediate::Uninit)
@@ -1074,17 +1074,14 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         instance: ty::Instance<'tcx>,
     ) -> InterpResult<'tcx, MPlaceTy<'tcx, M::Provenance>> {
         let gid = GlobalId { instance, promoted: None };
-        // For statics we pick `ParamEnv::reveal_all`, because statics don't have generics
-        // and thus don't care about the parameter environment. While we could just use
-        // `self.param_env`, that would mean we invoke the query to evaluate the static
-        // with different parameter environments, thus causing the static to be evaluated
-        // multiple times.
-        let param_env = if self.tcx.is_static(gid.instance.def_id()) {
-            ty::ParamEnv::reveal_all()
+        let val = if self.tcx.is_static(gid.instance.def_id()) {
+            let alloc_id = self.tcx.reserve_and_set_static_alloc(gid.instance.def_id());
+
+            let ty = instance.ty(self.tcx.tcx, self.param_env);
+            mir::ConstAlloc { alloc_id, ty }
         } else {
-            self.param_env
+            self.ctfe_query(|tcx| tcx.eval_to_allocation_raw(self.param_env.and(gid)))?
         };
-        let val = self.ctfe_query(|tcx| tcx.eval_to_allocation_raw(param_env.and(gid)))?;
         self.raw_const_to_mplace(val)
     }
 

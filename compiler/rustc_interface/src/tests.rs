@@ -1,17 +1,16 @@
 #![allow(rustc::bad_opt_access)]
-use crate::interface::parse_cfgspecs;
-
-use rustc_data_structures::fx::FxHashSet;
+use crate::interface::parse_cfg;
 use rustc_data_structures::profiling::TimePassesFormat;
 use rustc_errors::{emitter::HumanReadableErrorType, registry, ColorConfig};
 use rustc_session::config::rustc_optgroups;
+use rustc_session::config::Cfg;
 use rustc_session::config::DebugInfo;
 use rustc_session::config::Input;
 use rustc_session::config::InstrumentXRay;
 use rustc_session::config::LinkSelfContained;
 use rustc_session::config::Polonius;
 use rustc_session::config::TraitSolver;
-use rustc_session::config::{build_configuration, build_session_options, to_crate_config};
+use rustc_session::config::{build_configuration, build_session_options};
 use rustc_session::config::{
     BranchProtection, Externs, OomStrategy, OutFileName, OutputType, OutputTypes, PAuthKey, PacRet,
     ProcMacroExecutionStrategy, SymbolManglingVersion, WasiExecModel,
@@ -31,25 +30,18 @@ use rustc_span::FileName;
 use rustc_span::SourceFileHashAlgorithm;
 use rustc_target::spec::{CodeModel, LinkerFlavorCli, MergeFunctions, PanicStrategy, RelocModel};
 use rustc_target::spec::{RelroLevel, SanitizerSet, SplitDebuginfo, StackProtector, TlsModel};
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-type CfgSpecs = FxHashSet<(String, Option<String>)>;
-
-fn build_session_options_and_crate_config(
+fn mk_session(
     handler: &mut EarlyErrorHandler,
     matches: getopts::Matches,
-) -> (Options, CfgSpecs) {
-    let sessopts = build_session_options(handler, &matches);
-    let cfg = parse_cfgspecs(handler, matches.opt_strs("cfg"));
-    (sessopts, cfg)
-}
-
-fn mk_session(handler: &mut EarlyErrorHandler, matches: getopts::Matches) -> (Session, CfgSpecs) {
+) -> (Session, Cfg<String>) {
     let registry = registry::Registry::new(&[]);
-    let (sessopts, cfg) = build_session_options_and_crate_config(handler, matches);
+    let sessopts = build_session_options(handler, &matches);
+    let cfg = parse_cfg(handler, matches.opt_strs("cfg"));
     let temps_dir = sessopts.unstable_opts.temps_dir.as_deref().map(PathBuf::from);
     let io = CompilerIO {
         input: Input::Str { name: FileName::Custom(String::new()), input: String::new() },
@@ -69,6 +61,7 @@ fn mk_session(handler: &mut EarlyErrorHandler, matches: getopts::Matches) -> (Se
         None,
         "",
         None,
+        Arc::default(),
         Default::default(),
     );
     (sess, cfg)
@@ -139,7 +132,7 @@ fn test_switch_implies_cfg_test() {
         let matches = optgroups().parse(&["--test".to_string()]).unwrap();
         let mut handler = EarlyErrorHandler::new(ErrorOutputType::default());
         let (sess, cfg) = mk_session(&mut handler, matches);
-        let cfg = build_configuration(&sess, to_crate_config(cfg));
+        let cfg = build_configuration(&sess, cfg);
         assert!(cfg.contains(&(sym::test, None)));
     });
 }
@@ -151,7 +144,7 @@ fn test_switch_implies_cfg_test_unless_cfg_test() {
         let matches = optgroups().parse(&["--test".to_string(), "--cfg=test".to_string()]).unwrap();
         let mut handler = EarlyErrorHandler::new(ErrorOutputType::default());
         let (sess, cfg) = mk_session(&mut handler, matches);
-        let cfg = build_configuration(&sess, to_crate_config(cfg));
+        let cfg = build_configuration(&sess, cfg);
         let mut test_items = cfg.iter().filter(|&&(name, _)| name == sym::test);
         assert!(test_items.next().is_some());
         assert!(test_items.next().is_none());
@@ -612,7 +605,7 @@ fn test_codegen_options_tracking_hash() {
     tracked!(force_frame_pointers, Some(false));
     tracked!(force_unwind_tables, Some(true));
     tracked!(inline_threshold, Some(0xf007ba11));
-    tracked!(instrument_coverage, Some(InstrumentCoverage::All));
+    tracked!(instrument_coverage, InstrumentCoverage::All);
     tracked!(link_dead_code, Some(true));
     tracked!(linker_plugin_lto, LinkerPluginLto::LinkerPluginAuto);
     tracked!(llvm_args, vec![String::from("1"), String::from("2")]);
@@ -682,7 +675,6 @@ fn test_unstable_options_tracking_hash() {
     // tidy-alphabetical-start
     untracked!(assert_incr_state, Some(String::from("loaded")));
     untracked!(deduplicate_diagnostics, false);
-    untracked!(dep_tasks, true);
     untracked!(dont_buffer_diagnostics, true);
     untracked!(dump_dep_graph, true);
     untracked!(dump_mir, Some(String::from("abc")));
@@ -789,7 +781,6 @@ fn test_unstable_options_tracking_hash() {
     tracked!(inline_mir, Some(true));
     tracked!(inline_mir_hint_threshold, Some(123));
     tracked!(inline_mir_threshold, Some(123));
-    tracked!(instrument_coverage, Some(InstrumentCoverage::All));
     tracked!(instrument_mcount, true);
     tracked!(instrument_xray, Some(InstrumentXRay::default()));
     tracked!(link_directives, false);
@@ -879,6 +870,6 @@ fn test_edition_parsing() {
     let mut handler = EarlyErrorHandler::new(ErrorOutputType::default());
 
     let matches = optgroups().parse(&["--edition=2018".to_string()]).unwrap();
-    let (sessopts, _) = build_session_options_and_crate_config(&mut handler, matches);
+    let sessopts = build_session_options(&mut handler, &matches);
     assert!(sessopts.edition == Edition::Edition2018)
 }

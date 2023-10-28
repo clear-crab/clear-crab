@@ -93,6 +93,9 @@ jobs:
       - name: show the current environment
         run: src/ci/scripts/dump-environment.sh
         if: success() && !env.SKIP_JOB
+      - name: install awscli
+        run: src/ci/scripts/install-awscli.sh
+        if: success() && !env.SKIP_JOB
       - name: install sccache
         run: src/ci/scripts/install-sccache.sh
         if: success() && !env.SKIP_JOB
@@ -190,8 +193,9 @@ jobs:
             os: ubuntu-20.04-8core-32gb
             env: {}
           - name: dist-aarch64-linux
+            env:
+              CODEGEN_BACKENDS: "llvm,cranelift"
             os: ubuntu-20.04-8core-32gb
-            env: {}
           - name: dist-android
             os: ubuntu-20.04-8core-32gb
             env: {}
@@ -241,15 +245,18 @@ jobs:
             os: ubuntu-20.04-8core-32gb
             env: {}
           - name: dist-x86_64-linux
+            env:
+              CODEGEN_BACKENDS: "llvm,cranelift"
             os: ubuntu-20.04-16core-64gb
-            env: {}
           - name: dist-x86_64-linux-alt
             env:
               IMAGE: dist-x86_64-linux
+              CODEGEN_BACKENDS: "llvm,cranelift"
             os: ubuntu-20.04-16core-64gb
           - name: dist-x86_64-musl
+            env:
+              CODEGEN_BACKENDS: "llvm,cranelift"
             os: ubuntu-20.04-8core-32gb
-            env: {}
           - name: dist-x86_64-netbsd
             os: ubuntu-20.04-8core-32gb
             env: {}
@@ -283,6 +290,10 @@ jobs:
           - name: x86_64-gnu-distcheck
             os: ubuntu-20.04-8core-32gb
             env: {}
+          - name: x86_64-gnu-llvm-17
+            env:
+              RUST_BACKTRACE: 1
+            os: ubuntu-20.04-8core-32gb
           - name: x86_64-gnu-llvm-16
             env:
               RUST_BACKTRACE: 1
@@ -309,6 +320,7 @@ jobs:
               NO_DEBUG_ASSERTIONS: 1
               NO_OVERFLOW_CHECKS: 1
               DIST_REQUIRE_ALL_TOOLS: 1
+              CODEGEN_BACKENDS: "llvm,cranelift"
             os: macos-13
           - name: dist-apple-various
             env:
@@ -345,8 +357,8 @@ jobs:
             os: macos-13
           - name: dist-aarch64-apple
             env:
-              SCRIPT: "./x.py dist bootstrap --include-default-paths --stage 2"
-              RUST_CONFIGURE_ARGS: "--build=x86_64-apple-darwin --host=aarch64-apple-darwin --target=aarch64-apple-darwin --enable-full-tools --enable-sanitizers --enable-profiler --disable-docs --set rust.jemalloc --set llvm.ninja=false"
+              SCRIPT: "./x.py dist bootstrap --include-default-paths --host=aarch64-apple-darwin --target=aarch64-apple-darwin"
+              RUST_CONFIGURE_ARGS: "--enable-full-tools --enable-sanitizers --enable-profiler --set rust.jemalloc --set llvm.ninja=false --set rust.lto=thin"
               RUSTC_RETRY_LINKER_ON_SEGFAULT: 1
               SELECT_XCODE: /Applications/Xcode_13.4.1.app
               USE_XCODE_CLANG: 1
@@ -356,8 +368,7 @@ jobs:
               NO_DEBUG_ASSERTIONS: 1
               NO_OVERFLOW_CHECKS: 1
               DIST_REQUIRE_ALL_TOOLS: 1
-              JEMALLOC_SYS_WITH_LG_PAGE: 14
-            os: macos-13
+            os: macos-13-xlarge
           - name: x86_64-msvc
             env:
               RUST_CONFIGURE_ARGS: "--build=x86_64-pc-windows-msvc --enable-profiler"
@@ -458,6 +469,9 @@ jobs:
       - name: show the current environment
         run: src/ci/scripts/dump-environment.sh
         if: success() && !env.SKIP_JOB
+      - name: install awscli
+        run: src/ci/scripts/install-awscli.sh
+        if: success() && !env.SKIP_JOB
       - name: install sccache
         run: src/ci/scripts/install-sccache.sh
         if: success() && !env.SKIP_JOB
@@ -545,8 +559,9 @@ jobs:
       matrix:
         include:
           - name: dist-x86_64-linux
+            env:
+              CODEGEN_BACKENDS: "llvm,cranelift"
             os: ubuntu-20.04-16core-64gb
-            env: {}
     timeout-minutes: 600
     runs-on: "${{ matrix.os }}"
     steps:
@@ -577,6 +592,9 @@ jobs:
         if: success() && !env.SKIP_JOB
       - name: show the current environment
         run: src/ci/scripts/dump-environment.sh
+        if: success() && !env.SKIP_JOB
+      - name: install awscli
+        run: src/ci/scripts/install-awscli.sh
         if: success() && !env.SKIP_JOB
       - name: install sccache
         run: src/ci/scripts/install-sccache.sh

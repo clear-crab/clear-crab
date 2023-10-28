@@ -775,12 +775,16 @@ fn analysis(tcx: TyCtxt<'_>, (): ()) -> Result<()> {
     rustc_hir_analysis::check_crate(tcx)?;
 
     sess.time("MIR_borrow_checking", || {
-        tcx.hir().par_body_owners(|def_id| tcx.ensure().mir_borrowck(def_id));
+        tcx.hir().par_body_owners(|def_id| {
+            // Run THIR unsafety check because it's responsible for stealing
+            // and deallocating THIR when enabled.
+            tcx.ensure().thir_check_unsafety(def_id);
+            tcx.ensure().mir_borrowck(def_id)
+        });
     });
 
     sess.time("MIR_effect_checking", || {
         for def_id in tcx.hir().body_owners() {
-            tcx.ensure().thir_check_unsafety(def_id);
             if !tcx.sess.opts.unstable_opts.thir_unsafeck {
                 rustc_mir_transform::check_unsafety::check_unsafety(tcx, def_id);
             }
@@ -852,6 +856,11 @@ fn analysis(tcx: TyCtxt<'_>, (): ()) -> Result<()> {
         // This check has to be run after all lints are done processing. We don't
         // define a lint filter, as all lint checks should have finished at this point.
         sess.time("check_lint_expectations", || tcx.ensure().check_expectations(None));
+
+        // This query is only invoked normally if a diagnostic is emitted that needs any
+        // diagnostic item. If the crate compiles without checking any diagnostic items,
+        // we will fail to emit overlap diagnostics. Thus we invoke it here unconditionally.
+        let _ = tcx.all_diagnostic_items(());
     });
 
     if sess.opts.unstable_opts.print_vtable_sizes {

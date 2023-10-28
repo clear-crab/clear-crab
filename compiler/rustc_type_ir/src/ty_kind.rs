@@ -11,7 +11,7 @@ use crate::HashStableContext;
 use crate::Interner;
 use crate::TyDecoder;
 use crate::TyEncoder;
-use crate::{DebruijnIndex, DebugWithInfcx, InferCtxtLike, OptWithInfcx};
+use crate::{DebruijnIndex, DebugWithInfcx, InferCtxtLike, WithInfcx};
 
 use self::TyKind::*;
 
@@ -534,8 +534,8 @@ impl<I: Interner> hash::Hash for TyKind<I> {
 }
 
 impl<I: Interner> DebugWithInfcx<I> for TyKind<I> {
-    fn fmt<InfCtx: InferCtxtLike<I>>(
-        this: OptWithInfcx<'_, I, InfCtx, &Self>,
+    fn fmt<Infcx: InferCtxtLike<Interner = I>>(
+        this: WithInfcx<'_, Infcx, &Self>,
         f: &mut core::fmt::Formatter<'_>,
     ) -> fmt::Result {
         match this.data {
@@ -617,12 +617,12 @@ impl<I: Interner> DebugWithInfcx<I> for TyKind<I> {
 // This is manually implemented because a derive would require `I: Debug`
 impl<I: Interner> fmt::Debug for TyKind<I> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        OptWithInfcx::new_no_ctx(self).fmt(f)
+        WithInfcx::with_no_infcx(self).fmt(f)
     }
 }
 
 // This is manually implemented because a derive would require `I: Encodable`
-impl<I: Interner, E: TyEncoder> Encodable<E> for TyKind<I>
+impl<I: Interner, E: TyEncoder<I = I>> Encodable<E> for TyKind<I>
 where
     I::ErrorGuaranteed: Encodable<E>,
     I::AdtDef: Encodable<E>,
@@ -640,7 +640,6 @@ where
     I::BoundTy: Encodable<E>,
     I::PlaceholderTy: Encodable<E>,
     I::InferTy: Encodable<E>,
-    I::PredicateKind: Encodable<E>,
     I::AllocId: Encodable<E>,
 {
     fn encode(&self, e: &mut E) {
@@ -753,7 +752,6 @@ where
     I::BoundTy: Decodable<D>,
     I::PlaceholderTy: Decodable<D>,
     I::InferTy: Decodable<D>,
-    I::PredicateKind: Decodable<D>,
     I::AllocId: Decodable<D>,
 {
     fn decode(d: &mut D) -> Self {
@@ -817,11 +815,7 @@ where
     I::ErrorGuaranteed: HashStable<CTX>,
 {
     #[inline]
-    fn hash_stable(
-        &self,
-        __hcx: &mut CTX,
-        __hasher: &mut rustc_data_structures::stable_hasher::StableHasher,
-    ) {
+    fn hash_stable(&self, __hcx: &mut CTX, __hasher: &mut StableHasher) {
         std::mem::discriminant(self).hash_stable(__hcx, __hasher);
         match self {
             Bool => {}
@@ -1239,12 +1233,12 @@ impl fmt::Debug for InferTy {
 }
 
 impl<I: Interner<InferTy = InferTy>> DebugWithInfcx<I> for InferTy {
-    fn fmt<InfCtx: InferCtxtLike<I>>(
-        this: OptWithInfcx<'_, I, InfCtx, &Self>,
+    fn fmt<Infcx: InferCtxtLike<Interner = I>>(
+        this: WithInfcx<'_, Infcx, &Self>,
         f: &mut fmt::Formatter<'_>,
     ) -> fmt::Result {
         use InferTy::*;
-        match this.infcx.and_then(|infcx| infcx.universe_of_ty(*this.data)) {
+        match this.infcx.universe_of_ty(*this.data) {
             None => write!(f, "{:?}", this.data),
             Some(universe) => match *this.data {
                 TyVar(ty_vid) => write!(f, "?{}_{}t", ty_vid.index(), universe.index()),

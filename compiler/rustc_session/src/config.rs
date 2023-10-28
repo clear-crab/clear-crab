@@ -9,14 +9,13 @@ use crate::utils::{CanonicalizedPath, NativeLib, NativeLibKind};
 use crate::{lint, HashStableContext};
 use crate::{EarlyErrorHandler, Session};
 
-use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use rustc_data_structures::fx::{FxHashMap, FxHashSet, FxIndexSet};
 use rustc_data_structures::stable_hasher::{StableOrd, ToStableHashKey};
 use rustc_target::abi::Align;
 use rustc_target::spec::LinkSelfContainedComponents;
 use rustc_target::spec::{PanicStrategy, RelocModel, SanitizerSet, SplitDebuginfo};
 use rustc_target::spec::{Target, TargetTriple, TargetWarnings, TARGETS};
 
-use crate::parse::{CrateCheckConfig, CrateConfig};
 use rustc_feature::UnstableFeatures;
 use rustc_span::edition::{Edition, DEFAULT_EDITION, EDITION_NAME_LIST, LATEST_STABLE_EDITION};
 use rustc_span::source_map::{FileName, FilePathMapping};
@@ -169,6 +168,9 @@ pub enum MirSpanview {
 pub enum InstrumentCoverage {
     /// Default `-C instrument-coverage` or `-C instrument-coverage=statement`
     All,
+    /// Additionally, instrument branches and output branch coverage.
+    /// `-Zunstable-options -C instrument-coverage=branch`
+    Branch,
     /// `-Zunstable-options -C instrument-coverage=except-unused-generics`
     ExceptUnusedGenerics,
     /// `-Zunstable-options -C instrument-coverage=except-unused-functions`
@@ -1245,8 +1247,8 @@ pub const fn default_lib_output() -> CrateType {
     CrateType::Rlib
 }
 
-fn default_configuration(sess: &Session) -> CrateConfig {
-    // NOTE: This should be kept in sync with `CrateCheckConfig::fill_well_known` below.
+fn default_configuration(sess: &Session) -> Cfg<Symbol> {
+    // NOTE: This should be kept in sync with `CheckCfg::<Symbol>::fill_well_known` below.
     let end = &sess.target.endian;
     let arch = &sess.target.arch;
     let wordsz = sess.target.pointer_width.to_string();
@@ -1262,7 +1264,7 @@ fn default_configuration(sess: &Session) -> CrateConfig {
         sess.emit_fatal(err);
     });
 
-    let mut ret = CrateConfig::default();
+    let mut ret = Cfg::default();
     ret.reserve(7); // the minimum number of insertions
     // Target bindings.
     ret.insert((sym::target_os, Some(Symbol::intern(os))));
@@ -1355,15 +1357,17 @@ fn default_configuration(sess: &Session) -> CrateConfig {
     ret
 }
 
-/// Converts the crate `cfg!` configuration from `String` to `Symbol`.
-/// `rustc_interface::interface::Config` accepts this in the compiler configuration,
-/// but the symbol interner is not yet set up then, so we must convert it later.
-pub fn to_crate_config(cfg: FxHashSet<(String, Option<String>)>) -> CrateConfig {
-    cfg.into_iter().map(|(a, b)| (Symbol::intern(&a), b.map(|b| Symbol::intern(&b)))).collect()
-}
+/// The parsed `--cfg` options that define the compilation environment of the
+/// crate, used to drive conditional compilation. `T` is always `String` or
+/// `Symbol`. Strings are used temporarily very early on. Once the the main
+/// symbol interner is running, they are converted to symbols.
+///
+/// An `FxIndexSet` is used to ensure deterministic ordering of error messages
+/// relating to `--cfg`.
+pub type Cfg<T> = FxIndexSet<(T, Option<T>)>;
 
-/// The parsed `--check-cfg` options
-pub struct CheckCfg<T = String> {
+/// The parsed `--check-cfg` options. The `<T>` structure is similar to `Cfg`.
+pub struct CheckCfg<T> {
     /// Is well known names activated
     pub exhaustive_names: bool,
     /// Is well known values activated
@@ -1382,8 +1386,8 @@ impl<T> Default for CheckCfg<T> {
     }
 }
 
-impl<T> CheckCfg<T> {
-    fn map_data<O: Eq + Hash>(self, f: impl Fn(T) -> O) -> CheckCfg<O> {
+impl CheckCfg<String> {
+    pub fn intern(self) -> CheckCfg<Symbol> {
         CheckCfg {
             exhaustive_names: self.exhaustive_names,
             exhaustive_values: self.exhaustive_values,
@@ -1392,10 +1396,10 @@ impl<T> CheckCfg<T> {
                 .into_iter()
                 .map(|(name, values)| {
                     (
-                        f(name),
+                        Symbol::intern(&name),
                         match values {
                             ExpectedValues::Some(values) => ExpectedValues::Some(
-                                values.into_iter().map(|b| b.map(|b| f(b))).collect(),
+                                values.into_iter().map(|b| b.map(|b| Symbol::intern(&b))).collect(),
                             ),
                             ExpectedValues::Any => ExpectedValues::Any,
                         },
@@ -1438,14 +1442,7 @@ impl<'a, T: Eq + Hash + Copy + 'a> Extend<&'a T> for ExpectedValues<T> {
     }
 }
 
-/// Converts the crate `--check-cfg` options from `String` to `Symbol`.
-/// `rustc_interface::interface::Config` accepts this in the compiler configuration,
-/// but the symbol interner is not yet set up then, so we must convert it later.
-pub fn to_crate_check_config(cfg: CheckCfg) -> CrateCheckConfig {
-    cfg.map_data(|s| Symbol::intern(&s))
-}
-
-impl CrateCheckConfig {
+impl CheckCfg<Symbol> {
     pub fn fill_well_known(&mut self, current_target: &Target) {
         if !self.exhaustive_values && !self.exhaustive_names {
             return;
@@ -1585,7 +1582,13 @@ impl CrateCheckConfig {
     }
 }
 
-pub fn build_configuration(sess: &Session, mut user_cfg: CrateConfig) -> CrateConfig {
+pub fn build_configuration(sess: &Session, user_cfg: Cfg<String>) -> Cfg<Symbol> {
+    // We can now intern these strings.
+    let mut user_cfg: Cfg<Symbol> = user_cfg
+        .into_iter()
+        .map(|(a, b)| (Symbol::intern(&a), b.map(|b| Symbol::intern(&b))))
+        .collect();
+
     // Combine the configuration requested by the session (command line) with
     // some default and generated configuration items.
     let default_cfg = default_configuration(sess);
@@ -2736,29 +2739,25 @@ pub fn build_session_options(
         _ => {}
     }
 
-    // Handle both `-Z instrument-coverage` and `-C instrument-coverage`; the latter takes
-    // precedence.
-    match (cg.instrument_coverage, unstable_opts.instrument_coverage) {
-        (Some(ic_c), Some(ic_z)) if ic_c != ic_z => {
-            handler.early_error(
-                "incompatible values passed for `-C instrument-coverage` \
-                and `-Z instrument-coverage`",
-            );
+    // Check for unstable values of `-C instrument-coverage`.
+    // This is what prevents them from being used on stable compilers.
+    match cg.instrument_coverage {
+        // Stable values:
+        InstrumentCoverage::All | InstrumentCoverage::Off => {}
+        // Unstable values:
+        InstrumentCoverage::Branch
+        | InstrumentCoverage::ExceptUnusedFunctions
+        | InstrumentCoverage::ExceptUnusedGenerics => {
+            if !unstable_opts.unstable_options {
+                handler.early_error(
+                    "`-C instrument-coverage=branch` and `-C instrument-coverage=except-*` \
+                    require `-Z unstable-options`",
+                );
+            }
         }
-        (Some(InstrumentCoverage::Off | InstrumentCoverage::All), _) => {}
-        (Some(_), _) if !unstable_opts.unstable_options => {
-            handler.early_error("`-C instrument-coverage=except-*` requires `-Z unstable-options`");
-        }
-        (None, None) => {}
-        (None, ic) => {
-            handler
-                .early_warn("`-Z instrument-coverage` is deprecated; use `-C instrument-coverage`");
-            cg.instrument_coverage = ic;
-        }
-        _ => {}
     }
 
-    if cg.instrument_coverage.is_some() && cg.instrument_coverage != Some(InstrumentCoverage::Off) {
+    if cg.instrument_coverage != InstrumentCoverage::Off {
         if cg.profile_generate.enabled() || cg.profile_use.is_some() {
             handler.early_error(
                 "option `-C instrument-coverage` is not compatible with either `-C profile-use` \
@@ -3463,9 +3462,10 @@ impl DumpMonoStatsFormat {
 
 /// `-Zpolonius` values, enabling the borrow checker polonius analysis, and which version: legacy,
 /// or future prototype.
-#[derive(Clone, Copy, PartialEq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Hash, Debug, Default)]
 pub enum Polonius {
     /// The default value: disabled.
+    #[default]
     Off,
 
     /// Legacy version, using datalog and the `polonius-engine` crate. Historical value for `-Zpolonius`.
@@ -3473,12 +3473,6 @@ pub enum Polonius {
 
     /// In-tree prototype, extending the NLL infrastructure.
     Next,
-}
-
-impl Default for Polonius {
-    fn default() -> Self {
-        Polonius::Off
-    }
 }
 
 impl Polonius {

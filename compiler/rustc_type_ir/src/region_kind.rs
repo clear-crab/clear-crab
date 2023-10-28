@@ -1,12 +1,13 @@
 use rustc_data_structures::stable_hasher::HashStable;
+use rustc_data_structures::stable_hasher::StableHasher;
 use rustc_serialize::{Decodable, Decoder, Encodable};
 use std::cmp::Ordering;
 use std::fmt;
 use std::hash;
 
 use crate::{
-    DebruijnIndex, DebugWithInfcx, HashStableContext, InferCtxtLike, Interner, OptWithInfcx,
-    TyDecoder, TyEncoder,
+    DebruijnIndex, DebugWithInfcx, HashStableContext, InferCtxtLike, Interner, TyDecoder,
+    TyEncoder, WithInfcx,
 };
 
 use self::RegionKind::*;
@@ -274,8 +275,8 @@ impl<I: Interner> hash::Hash for RegionKind<I> {
 }
 
 impl<I: Interner> DebugWithInfcx<I> for RegionKind<I> {
-    fn fmt<InfCtx: InferCtxtLike<I>>(
-        this: OptWithInfcx<'_, I, InfCtx, &Self>,
+    fn fmt<Infcx: InferCtxtLike<Interner = I>>(
+        this: WithInfcx<'_, Infcx, &Self>,
         f: &mut core::fmt::Formatter<'_>,
     ) -> core::fmt::Result {
         match this.data {
@@ -301,12 +302,12 @@ impl<I: Interner> DebugWithInfcx<I> for RegionKind<I> {
 }
 impl<I: Interner> fmt::Debug for RegionKind<I> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        OptWithInfcx::new_no_ctx(self).fmt(f)
+        WithInfcx::with_no_infcx(self).fmt(f)
     }
 }
 
 // This is manually implemented because a derive would require `I: Encodable`
-impl<I: Interner, E: TyEncoder> Encodable<E> for RegionKind<I>
+impl<I: Interner, E: TyEncoder<I = I>> Encodable<E> for RegionKind<I>
 where
     I::EarlyBoundRegion: Encodable<E>,
     I::BoundRegion: Encodable<E>,
@@ -381,11 +382,7 @@ where
     I::PlaceholderRegion: HashStable<CTX>,
 {
     #[inline]
-    fn hash_stable(
-        &self,
-        hcx: &mut CTX,
-        hasher: &mut rustc_data_structures::stable_hasher::StableHasher,
-    ) {
+    fn hash_stable(&self, hcx: &mut CTX, hasher: &mut StableHasher) {
         std::mem::discriminant(self).hash_stable(hcx, hasher);
         match self {
             ReErased | ReStatic | ReError(_) => {

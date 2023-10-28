@@ -92,7 +92,7 @@ pub(crate) fn run(options: RustdocOptions) -> Result<(), ErrorGuaranteed> {
     cfgs.push("doctest".to_owned());
     let config = interface::Config {
         opts: sessopts,
-        crate_cfg: interface::parse_cfgspecs(&early_error_handler, cfgs),
+        crate_cfg: interface::parse_cfg(&early_error_handler, cfgs),
         crate_check_cfg: interface::parse_check_cfg(
             &early_error_handler,
             options.check_cfgs.clone(),
@@ -110,6 +110,7 @@ pub(crate) fn run(options: RustdocOptions) -> Result<(), ErrorGuaranteed> {
         make_codegen_backend: None,
         registry: rustc_driver::diagnostics_registry(),
         ice_file: None,
+        using_internal_features: Arc::default(),
         expanded_args: options.expanded_args.clone(),
     };
 
