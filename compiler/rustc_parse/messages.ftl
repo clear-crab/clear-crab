@@ -278,6 +278,9 @@ parse_found_expr_would_be_stmt = expected expression, found `{$token}`
 parse_function_body_equals_expr = function body cannot be `= expression;`
     .suggestion = surround the expression with `{"{"}` and `{"}"}` instead of `=` and `;`
 
+parse_gen_fn = `gen` functions are not yet implemented
+    .help = for now you can use `gen {"{}"}` blocks and return `impl Iterator` instead
+
 parse_generic_args_in_pat_require_turbofish_syntax = generic args in patterns require the turbofish syntax
 
 parse_generic_parameters_without_angle_brackets = generic parameters without surrounding angle brackets
@@ -522,6 +525,9 @@ parse_missing_fn_for_function_definition = missing `fn` for function definition
 
 parse_missing_fn_for_method_definition = missing `fn` for method definition
     .suggestion = add `fn` here to parse `{$ident}` as a public method
+
+parse_missing_fn_params = missing parameters for function definition
+    .suggestion = add a parameter list
 
 parse_missing_for_in_trait_impl = missing `for` in a trait impl
     .suggestion = add `for` here

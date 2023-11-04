@@ -53,6 +53,7 @@ static ALLOWED_FORMAT_SYMBOLS: &[Symbol] = &[
     sym::float,
     sym::_Self,
     sym::crate_local,
+    sym::Trait,
 ];
 
 impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
@@ -181,6 +182,19 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
 
         if let ObligationCauseCode::MainFunctionType = obligation.cause.code() {
             flags.push((sym::cause, Some("MainFunctionType".to_string())));
+        }
+
+        if let Some(kind) = self.tcx.fn_trait_kind_from_def_id(trait_ref.def_id)
+            && let ty::Tuple(args) = trait_ref.args.type_at(1).kind()
+        {
+            let args = args
+                .iter()
+                .map(|ty| ty.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            flags.push((sym::Trait, Some(format!("{}({args})", kind.as_str()))));
+        } else {
+            flags.push((sym::Trait, Some(trait_ref.print_only_trait_path().to_string())));
         }
 
         // Add all types without trimmed paths or visible paths, ensuring they end up with
@@ -319,7 +333,7 @@ pub struct OnUnimplementedDirective {
     pub subcommands: Vec<OnUnimplementedDirective>,
     pub message: Option<OnUnimplementedFormatString>,
     pub label: Option<OnUnimplementedFormatString>,
-    pub note: Option<OnUnimplementedFormatString>,
+    pub notes: Vec<OnUnimplementedFormatString>,
     pub parent_label: Option<OnUnimplementedFormatString>,
     pub append_const_msg: Option<AppendConstMessage>,
 }
@@ -329,7 +343,7 @@ pub struct OnUnimplementedDirective {
 pub struct OnUnimplementedNote {
     pub message: Option<String>,
     pub label: Option<String>,
-    pub note: Option<String>,
+    pub notes: Vec<String>,
     pub parent_label: Option<String>,
     // If none, should fall back to a generic message
     pub append_const_msg: Option<AppendConstMessage>,
@@ -399,7 +413,7 @@ impl<'tcx> OnUnimplementedDirective {
 
         let mut message = None;
         let mut label = None;
-        let mut note = None;
+        let mut notes = Vec::new();
         let mut parent_label = None;
         let mut subcommands = vec![];
         let mut append_const_msg = None;
@@ -415,10 +429,12 @@ impl<'tcx> OnUnimplementedDirective {
                     label = parse_value(label_)?;
                     continue;
                 }
-            } else if item.has_name(sym::note) && note.is_none() {
+            } else if item.has_name(sym::note) {
                 if let Some(note_) = item.value_str() {
-                    note = parse_value(note_)?;
-                    continue;
+                    if let Some(note) = parse_value(note_)? {
+                        notes.push(note);
+                        continue;
+                    }
                 }
             } else if item.has_name(sym::parent_label)
                 && parent_label.is_none()
@@ -432,7 +448,7 @@ impl<'tcx> OnUnimplementedDirective {
                 && is_root
                 && message.is_none()
                 && label.is_none()
-                && note.is_none()
+                && notes.is_empty()
                 && !is_diagnostic_namespace_variant
             // FIXME(diagnostic_namespace): disallow filters for now
             {
@@ -487,7 +503,7 @@ impl<'tcx> OnUnimplementedDirective {
                 subcommands,
                 message,
                 label,
-                note,
+                notes,
                 parent_label,
                 append_const_msg,
             }))
@@ -505,12 +521,14 @@ impl<'tcx> OnUnimplementedDirective {
                     if let Some(aggr) = aggr {
                         let mut subcommands = aggr.subcommands;
                         subcommands.extend(directive.subcommands);
+                        let mut notes = aggr.notes;
+                        notes.extend(directive.notes);
                         Ok(Some(Self {
                             condition: aggr.condition.or(directive.condition),
                             subcommands,
                             message: aggr.message.or(directive.message),
                             label: aggr.label.or(directive.label),
-                            note: aggr.note.or(directive.note),
+                            notes,
                             parent_label: aggr.parent_label.or(directive.parent_label),
                             append_const_msg: aggr.append_const_msg.or(directive.append_const_msg),
                         }))
@@ -543,7 +561,7 @@ impl<'tcx> OnUnimplementedDirective {
                         value,
                         attr.span,
                     )?),
-                    note: None,
+                    notes: Vec::new(),
                     parent_label: None,
                     append_const_msg: None,
                 }))
@@ -600,7 +618,7 @@ impl<'tcx> OnUnimplementedDirective {
     ) -> OnUnimplementedNote {
         let mut message = None;
         let mut label = None;
-        let mut note = None;
+        let mut notes = Vec::new();
         let mut parent_label = None;
         let mut append_const_msg = None;
         info!("evaluate({:?}, trait_ref={:?}, options={:?})", self, trait_ref, options);
@@ -637,9 +655,7 @@ impl<'tcx> OnUnimplementedDirective {
                 label = Some(label_.clone());
             }
 
-            if let Some(ref note_) = command.note {
-                note = Some(note_.clone());
-            }
+            notes.extend(command.notes.clone());
 
             if let Some(ref parent_label_) = command.parent_label {
                 parent_label = Some(parent_label_.clone());
@@ -651,7 +667,7 @@ impl<'tcx> OnUnimplementedDirective {
         OnUnimplementedNote {
             label: label.map(|l| l.format(tcx, trait_ref, &options_map)),
             message: message.map(|m| m.format(tcx, trait_ref, &options_map)),
-            note: note.map(|n| n.format(tcx, trait_ref, &options_map)),
+            notes: notes.into_iter().map(|n| n.format(tcx, trait_ref, &options_map)).collect(),
             parent_label: parent_label.map(|e_s| e_s.format(tcx, trait_ref, &options_map)),
             append_const_msg,
         }

@@ -14,8 +14,7 @@ use rustc_middle::ty::visit::{TypeVisitable, TypeVisitableExt};
 use rustc_middle::ty::GenericArgs;
 use rustc_middle::ty::{self, Ty, TyCtxt, TypeSuperVisitable, TypeVisitor};
 use rustc_span::def_id::LocalDefId;
-use rustc_span::source_map::Span;
-use rustc_span::sym;
+use rustc_span::{sym, Span};
 use rustc_target::spec::abi::Abi;
 use rustc_trait_selection::traits;
 use rustc_trait_selection::traits::error_reporting::ArgKind;
@@ -302,8 +301,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         let is_fn = tcx.is_fn_trait(trait_def_id);
 
-        let gen_trait = tcx.lang_items().gen_trait();
-        let is_gen = gen_trait == Some(trait_def_id);
+        let coroutine_trait = tcx.lang_items().coroutine_trait();
+        let is_gen = coroutine_trait == Some(trait_def_id);
 
         if !is_fn && !is_gen {
             debug!("not fn or coroutine");
@@ -651,6 +650,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             astconv.ty_infer(None, decl.output.span())
                         },
                     )
+                }
+                Some(hir::CoroutineKind::Gen(hir::CoroutineSource::Fn)) => {
+                    todo!("gen closures do not exist yet")
                 }
 
                 _ => astconv.ty_infer(None, decl.output.span()),

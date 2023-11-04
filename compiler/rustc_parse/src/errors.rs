@@ -521,6 +521,14 @@ pub(crate) struct CatchAfterTry {
 }
 
 #[derive(Diagnostic)]
+#[diag(parse_gen_fn)]
+#[help]
+pub(crate) struct GenFn {
+    #[primary_span]
+    pub span: Span,
+}
+
+#[derive(Diagnostic)]
 #[diag(parse_comma_after_base_struct)]
 #[note]
 pub(crate) struct CommaAfterBaseStruct {
@@ -1541,6 +1549,14 @@ pub(crate) enum AmbiguousMissingKwForItemSub {
     },
     #[help(parse_help)]
     HelpMacro,
+}
+
+#[derive(Diagnostic)]
+#[diag(parse_missing_fn_params)]
+pub(crate) struct MissingFnParams {
+    #[primary_span]
+    #[suggestion(code = "()", applicability = "machine-applicable", style = "short")]
+    pub span: Span,
 }
 
 #[derive(Diagnostic)]

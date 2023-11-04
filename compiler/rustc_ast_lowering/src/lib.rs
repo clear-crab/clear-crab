@@ -71,9 +71,8 @@ use rustc_middle::{
 };
 use rustc_session::parse::{add_feature_diagnostics, feature_err};
 use rustc_span::hygiene::MacroKind;
-use rustc_span::source_map::DesugaringKind;
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
-use rustc_span::{Span, DUMMY_SP};
+use rustc_span::{DesugaringKind, Span, DUMMY_SP};
 use smallvec::SmallVec;
 use std::collections::hash_map::Entry;
 use thin_vec::ThinVec;
@@ -1742,14 +1741,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
     }
 
     fn lower_fn_params_to_names(&mut self, decl: &FnDecl) -> &'hir [Ident] {
-        // Skip the `...` (`CVarArgs`) trailing arguments from the AST,
-        // as they are not explicit in HIR/Ty function signatures.
-        // (instead, the `c_variadic` flag is set to `true`)
-        let mut inputs = &decl.inputs[..];
-        if decl.c_variadic() {
-            inputs = &inputs[..inputs.len() - 1];
-        }
-        self.arena.alloc_from_iter(inputs.iter().map(|param| match param.pat.kind {
+        self.arena.alloc_from_iter(decl.inputs.iter().map(|param| match param.pat.kind {
             PatKind::Ident(_, ident, _) => self.lower_ident(ident),
             _ => Ident::new(kw::Empty, self.lower_span(param.pat.span)),
         }))

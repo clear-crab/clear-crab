@@ -856,7 +856,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             }
 
             PatKind::InlineConstant { ref subpattern, .. } => {
-                self.visit_primary_bindings(subpattern, pattern_user_ty.clone(), f)
+                self.visit_primary_bindings(subpattern, pattern_user_ty, f)
             }
 
             PatKind::Leaf { ref subpatterns } => {
@@ -1035,7 +1035,7 @@ enum TestKind<'tcx> {
         ty: Ty<'tcx>,
     },
 
-    /// Test whether the value falls within an inclusive or exclusive range
+    /// Test whether the value falls within an inclusive or exclusive range.
     Range(Box<PatRange<'tcx>>),
 
     /// Test that the length of the slice is equal to `len`.

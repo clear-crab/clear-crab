@@ -49,13 +49,13 @@ pub fn provide(providers: &mut Providers) {
     const_eval::provide(providers);
     providers.eval_to_const_value_raw = const_eval::eval_to_const_value_raw_provider;
     providers.eval_to_allocation_raw = const_eval::eval_to_allocation_raw_provider;
-    providers.const_caller_location = const_eval::const_caller_location;
+    providers.hooks.const_caller_location = util::caller_location::const_caller_location_provider;
     providers.eval_to_valtree = |tcx, param_env_and_value| {
         let (param_env, raw) = param_env_and_value.into_parts();
         const_eval::eval_to_valtree(tcx, param_env, raw)
     };
-    providers.hooks.try_destructure_mir_constant_for_diagnostics =
-        const_eval::try_destructure_mir_constant_for_diagnostics;
+    providers.hooks.try_destructure_mir_constant_for_user_output =
+        const_eval::try_destructure_mir_constant_for_user_output;
     providers.valtree_to_const_val = |tcx, (ty, valtree)| {
         const_eval::valtree_to_const_value(tcx, ty::ParamEnv::empty().and(ty), valtree)
     };

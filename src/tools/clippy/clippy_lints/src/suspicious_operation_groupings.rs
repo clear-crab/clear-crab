@@ -28,7 +28,7 @@ declare_clippy_lint! {
     /// unusual that happens to look like a typo.
     ///
     /// ### Example
-    /// ```rust
+    /// ```no_run
     /// struct Vec3 {
     ///     x: f64,
     ///     y: f64,
@@ -45,7 +45,7 @@ declare_clippy_lint! {
     /// }
     /// ```
     /// Use instead:
-    /// ```rust
+    /// ```no_run
     /// # struct Vec3 {
     /// #     x: f64,
     /// #     y: f64,
@@ -578,7 +578,7 @@ fn ident_difference_expr_with_base_location(
         | (Assign(_, _, _), Assign(_, _, _))
         | (TryBlock(_), TryBlock(_))
         | (Await(_, _), Await(_, _))
-        | (Async(_, _), Async(_, _))
+        | (Gen(_, _, _), Gen(_, _, _))
         | (Block(_, _), Block(_, _))
         | (Closure(_), Closure(_))
         | (Match(_, _), Match(_, _))

@@ -9,7 +9,7 @@ use super::{
 use crate::errors;
 use crate::maybe_recover_from_interpolated_ty_qpath;
 use ast::mut_visit::{noop_visit_expr, MutVisitor};
-use ast::{Path, PathSegment};
+use ast::{GenBlockKind, Path, PathSegment};
 use core::mem;
 use rustc_ast::ptr::P;
 use rustc_ast::token::{self, Delimiter, Token, TokenKind};
@@ -32,10 +32,10 @@ use rustc_macros::Subdiagnostic;
 use rustc_session::errors::{report_lit_error, ExprParenthesesNeeded};
 use rustc_session::lint::builtin::BREAK_WITH_LABEL_AND_LOOP;
 use rustc_session::lint::BuiltinLintDiagnostics;
-use rustc_span::source_map::{self, Span, Spanned};
+use rustc_span::source_map::{self, Spanned};
 use rustc_span::symbol::kw::PathRoot;
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
-use rustc_span::{BytePos, Pos};
+use rustc_span::{BytePos, Pos, Span};
 use thin_vec::{thin_vec, ThinVec};
 
 /// Possibly accepts an `token::Interpolated` expression (a pre-parsed expression
@@ -1441,14 +1441,20 @@ impl<'a> Parser<'a> {
             } else if this.token.uninterpolated_span().at_least_rust_2018() {
                 // `Span:.at_least_rust_2018()` is somewhat expensive; don't get it repeatedly.
                 if this.check_keyword(kw::Async) {
-                    if this.is_async_block() {
+                    if this.is_gen_block(kw::Async) {
                         // Check for `async {` and `async move {`.
-                        this.parse_async_block()
+                        this.parse_gen_block()
                     } else {
                         this.parse_expr_closure()
                     }
                 } else if this.eat_keyword(kw::Await) {
                     this.recover_incorrect_await_syntax(lo, this.prev_token.span)
+                } else if this.token.uninterpolated_span().at_least_rust_2024() {
+                    if this.is_gen_block(kw::Gen) {
+                        this.parse_gen_block()
+                    } else {
+                        this.parse_expr_lit()
+                    }
                 } else {
                     this.parse_expr_lit()
                 }
@@ -1848,7 +1854,7 @@ impl<'a> Parser<'a> {
         let lo = self.prev_token.span;
         let kind = ExprKind::Yield(self.parse_expr_opt()?);
         let span = lo.to(self.prev_token.span);
-        self.sess.gated_spans.gate(sym::coroutines, span);
+        self.sess.gated_spans.gate(sym::yield_expr, span);
         let expr = self.mk_expr(span, kind);
         self.maybe_recover_from_bad_qpath(expr)
     }
@@ -3059,18 +3065,24 @@ impl<'a> Parser<'a> {
             && self.token.uninterpolated_span().at_least_rust_2018()
     }
 
-    /// Parses an `async move? {...}` expression.
-    fn parse_async_block(&mut self) -> PResult<'a, P<Expr>> {
+    /// Parses an `async move? {...}` or `gen move? {...}` expression.
+    fn parse_gen_block(&mut self) -> PResult<'a, P<Expr>> {
         let lo = self.token.span;
-        self.expect_keyword(kw::Async)?;
+        let kind = if self.eat_keyword(kw::Async) {
+            GenBlockKind::Async
+        } else {
+            assert!(self.eat_keyword(kw::Gen));
+            self.sess.gated_spans.gate(sym::gen_blocks, lo.to(self.token.span));
+            GenBlockKind::Gen
+        };
         let capture_clause = self.parse_capture_clause()?;
         let (attrs, body) = self.parse_inner_attrs_and_block()?;
-        let kind = ExprKind::Async(capture_clause, body);
+        let kind = ExprKind::Gen(capture_clause, body, kind);
         Ok(self.mk_expr_with_attrs(lo.to(self.prev_token.span), kind, attrs))
     }
 
-    fn is_async_block(&self) -> bool {
-        self.token.is_keyword(kw::Async)
+    fn is_gen_block(&self, kw: Symbol) -> bool {
+        self.token.is_keyword(kw)
             && ((
                 // `async move {`
                 self.is_keyword_ahead(1, &[kw::Move])
@@ -3596,7 +3608,7 @@ impl MutVisitor for CondChecker<'_> {
             | ExprKind::Match(_, _)
             | ExprKind::Closure(_)
             | ExprKind::Block(_, _)
-            | ExprKind::Async(_, _)
+            | ExprKind::Gen(_, _, _)
             | ExprKind::TryBlock(_)
             | ExprKind::Underscore
             | ExprKind::Path(_, _)

@@ -18,10 +18,9 @@ use rustc_target::spec::{Target, TargetTriple, TargetWarnings, TARGETS};
 
 use rustc_feature::UnstableFeatures;
 use rustc_span::edition::{Edition, DEFAULT_EDITION, EDITION_NAME_LIST, LATEST_STABLE_EDITION};
-use rustc_span::source_map::{FileName, FilePathMapping};
+use rustc_span::source_map::FilePathMapping;
 use rustc_span::symbol::{sym, Symbol};
-use rustc_span::SourceFileHashAlgorithm;
-use rustc_span::{FileNameDisplayPreference, RealFileName};
+use rustc_span::{FileName, FileNameDisplayPreference, RealFileName, SourceFileHashAlgorithm};
 
 use rustc_errors::emitter::HumanReadableErrorType;
 use rustc_errors::{ColorConfig, DiagnosticArgValue, HandlerFlags, IntoDiagnosticArg};
@@ -1247,8 +1246,8 @@ pub const fn default_lib_output() -> CrateType {
     CrateType::Rlib
 }
 
-fn default_configuration(sess: &Session) -> Cfg<Symbol> {
-    // NOTE: This should be kept in sync with `CheckCfg::<Symbol>::fill_well_known` below.
+fn default_configuration(sess: &Session) -> Cfg {
+    // NOTE: This should be kept in sync with `CheckCfg::fill_well_known` below.
     let end = &sess.target.endian;
     let arch = &sess.target.arch;
     let wordsz = sess.target.pointer_width.to_string();
@@ -1358,56 +1357,21 @@ fn default_configuration(sess: &Session) -> Cfg<Symbol> {
 }
 
 /// The parsed `--cfg` options that define the compilation environment of the
-/// crate, used to drive conditional compilation. `T` is always `String` or
-/// `Symbol`. Strings are used temporarily very early on. Once the the main
-/// symbol interner is running, they are converted to symbols.
+/// crate, used to drive conditional compilation.
 ///
 /// An `FxIndexSet` is used to ensure deterministic ordering of error messages
 /// relating to `--cfg`.
-pub type Cfg<T> = FxIndexSet<(T, Option<T>)>;
+pub type Cfg = FxIndexSet<(Symbol, Option<Symbol>)>;
 
-/// The parsed `--check-cfg` options. The `<T>` structure is similar to `Cfg`.
-pub struct CheckCfg<T> {
+/// The parsed `--check-cfg` options.
+#[derive(Default)]
+pub struct CheckCfg {
     /// Is well known names activated
     pub exhaustive_names: bool,
     /// Is well known values activated
     pub exhaustive_values: bool,
     /// All the expected values for a config name
-    pub expecteds: FxHashMap<T, ExpectedValues<T>>,
-}
-
-impl<T> Default for CheckCfg<T> {
-    fn default() -> Self {
-        CheckCfg {
-            exhaustive_names: false,
-            exhaustive_values: false,
-            expecteds: FxHashMap::default(),
-        }
-    }
-}
-
-impl CheckCfg<String> {
-    pub fn intern(self) -> CheckCfg<Symbol> {
-        CheckCfg {
-            exhaustive_names: self.exhaustive_names,
-            exhaustive_values: self.exhaustive_values,
-            expecteds: self
-                .expecteds
-                .into_iter()
-                .map(|(name, values)| {
-                    (
-                        Symbol::intern(&name),
-                        match values {
-                            ExpectedValues::Some(values) => ExpectedValues::Some(
-                                values.into_iter().map(|b| b.map(|b| Symbol::intern(&b))).collect(),
-                            ),
-                            ExpectedValues::Any => ExpectedValues::Any,
-                        },
-                    )
-                })
-                .collect(),
-        }
-    }
+    pub expecteds: FxHashMap<Symbol, ExpectedValues<Symbol>>,
 }
 
 pub enum ExpectedValues<T> {
@@ -1442,7 +1406,7 @@ impl<'a, T: Eq + Hash + Copy + 'a> Extend<&'a T> for ExpectedValues<T> {
     }
 }
 
-impl CheckCfg<Symbol> {
+impl CheckCfg {
     pub fn fill_well_known(&mut self, current_target: &Target) {
         if !self.exhaustive_values && !self.exhaustive_names {
             return;
@@ -1582,13 +1546,7 @@ impl CheckCfg<Symbol> {
     }
 }
 
-pub fn build_configuration(sess: &Session, user_cfg: Cfg<String>) -> Cfg<Symbol> {
-    // We can now intern these strings.
-    let mut user_cfg: Cfg<Symbol> = user_cfg
-        .into_iter()
-        .map(|(a, b)| (Symbol::intern(&a), b.map(|b| Symbol::intern(&b))))
-        .collect();
-
+pub fn build_configuration(sess: &Session, mut user_cfg: Cfg) -> Cfg {
     // Combine the configuration requested by the session (command line) with
     // some default and generated configuration items.
     let default_cfg = default_configuration(sess);
@@ -2715,28 +2673,19 @@ pub fn build_session_options(
         );
     }
 
-    // Handle both `-Z symbol-mangling-version` and `-C symbol-mangling-version`; the latter takes
-    // precedence.
-    match (cg.symbol_mangling_version, unstable_opts.symbol_mangling_version) {
-        (Some(smv_c), Some(smv_z)) if smv_c != smv_z => {
-            handler.early_error(
-                "incompatible values passed for `-C symbol-mangling-version` \
-                and `-Z symbol-mangling-version`",
-            );
+    // Check for unstable values of `-C symbol-mangling-version`.
+    // This is what prevents them from being used on stable compilers.
+    match cg.symbol_mangling_version {
+        // Stable values:
+        None | Some(SymbolManglingVersion::V0) => {}
+        // Unstable values:
+        Some(SymbolManglingVersion::Legacy) => {
+            if !unstable_opts.unstable_options {
+                handler.early_error(
+                    "`-C symbol-mangling-version=legacy` requires `-Z unstable-options`",
+                );
+            }
         }
-        (Some(SymbolManglingVersion::V0), _) => {}
-        (Some(_), _) if !unstable_opts.unstable_options => {
-            handler
-                .early_error("`-C symbol-mangling-version=legacy` requires `-Z unstable-options`");
-        }
-        (None, None) => {}
-        (None, smv) => {
-            handler.early_warn(
-                "`-Z symbol-mangling-version` is deprecated; use `-C symbol-mangling-version`",
-            );
-            cg.symbol_mangling_version = smv;
-        }
-        _ => {}
     }
 
     // Check for unstable values of `-C instrument-coverage`.

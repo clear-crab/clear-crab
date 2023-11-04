@@ -1750,7 +1750,7 @@ pub(crate) fn markdown_links<'md, R>(
         }
         // do not actually include braces in the span
         let range = (open_brace + 1)..close_brace;
-        MarkdownLinkRange::Destination(range.clone())
+        MarkdownLinkRange::Destination(range)
     };
 
     let span_for_offset_forward = |span: Range<usize>, open: u8, close: u8| {
@@ -1786,7 +1786,7 @@ pub(crate) fn markdown_links<'md, R>(
         }
         // do not actually include braces in the span
         let range = (open_brace + 1)..close_brace;
-        MarkdownLinkRange::Destination(range.clone())
+        MarkdownLinkRange::Destination(range)
     };
 
     let mut broken_link_callback = |link: BrokenLink<'md>| Some((link.reference, "".into()));
@@ -2024,6 +2024,7 @@ fn init_id_map() -> FxHashMap<Cow<'static, str>, usize> {
     map.insert("required-associated-consts".into(), 1);
     map.insert("required-methods".into(), 1);
     map.insert("provided-methods".into(), 1);
+    map.insert("object-safety".into(), 1);
     map.insert("implementors".into(), 1);
     map.insert("synthetic-implementors".into(), 1);
     map.insert("implementations-list".into(), 1);

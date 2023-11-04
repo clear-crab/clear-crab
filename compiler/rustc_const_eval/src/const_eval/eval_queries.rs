@@ -10,7 +10,7 @@ use rustc_middle::traits::Reveal;
 use rustc_middle::ty::layout::LayoutOf;
 use rustc_middle::ty::print::with_no_trimmed_paths;
 use rustc_middle::ty::{self, TyCtxt};
-use rustc_span::source_map::Span;
+use rustc_span::Span;
 use rustc_target::abi::{self, Abi};
 
 use super::{CanAccessStatics, CompileTimeEvalContext, CompileTimeInterpreter};
@@ -90,7 +90,7 @@ fn eval_body_using_ecx<'mir, 'tcx>(
 /// that inform us about the generic bounds of the constant. E.g., using an associated constant
 /// of a function's generic parameter will require knowledge about the bounds on the generic
 /// parameter. These bounds are passed to `mk_eval_cx` via the `ParamEnv` argument.
-pub(super) fn mk_eval_cx<'mir, 'tcx>(
+pub(crate) fn mk_eval_cx<'mir, 'tcx>(
     tcx: TyCtxt<'tcx>,
     root_span: Span,
     param_env: ty::ParamEnv<'tcx>,
@@ -106,10 +106,16 @@ pub(super) fn mk_eval_cx<'mir, 'tcx>(
 }
 
 /// This function converts an interpreter value into a MIR constant.
+///
+/// The `for_diagnostics` flag turns the usual rules for returning `ConstValue::Scalar` into a
+/// best-effort attempt. This is not okay for use in const-eval sine it breaks invariants rustc
+/// relies on, but it is okay for diagnostics which will just give up gracefully when they
+/// encounter an `Indirect` they cannot handle.
 #[instrument(skip(ecx), level = "debug")]
 pub(super) fn op_to_const<'tcx>(
     ecx: &CompileTimeEvalContext<'_, 'tcx>,
     op: &OpTy<'tcx>,
+    for_diagnostics: bool,
 ) -> ConstValue<'tcx> {
     // Handle ZST consistently and early.
     if op.layout.is_zst() {
@@ -133,7 +139,13 @@ pub(super) fn op_to_const<'tcx>(
         _ => false,
     };
     let immediate = if force_as_immediate {
-        Right(ecx.read_immediate(op).expect("normalization works on validated constants"))
+        match ecx.read_immediate(op) {
+            Ok(imm) => Right(imm),
+            Err(err) if !for_diagnostics => {
+                panic!("normalization works on validated constants: {err:?}")
+            }
+            _ => op.as_mplace_or_imm(),
+        }
     } else {
         op.as_mplace_or_imm()
     };
@@ -205,7 +217,7 @@ pub(crate) fn turn_into_const_value<'tcx>(
     );
 
     // Turn this into a proper constant.
-    op_to_const(&ecx, &mplace.into())
+    op_to_const(&ecx, &mplace.into(), /* for diagnostics */ false)
 }
 
 #[instrument(skip(tcx), level = "debug")]

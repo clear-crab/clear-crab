@@ -308,9 +308,13 @@
 use self::ArmType::*;
 use self::Usefulness::*;
 use super::deconstruct_pat::{
-    Constructor, ConstructorSet, DeconstructedPat, IntRange, SplitConstructorSet, WitnessPat,
+    Constructor, ConstructorSet, DeconstructedPat, IntRange, MaybeInfiniteInt, SplitConstructorSet,
+    WitnessPat,
 };
-use crate::errors::{NonExhaustiveOmittedPattern, Overlap, OverlappingRangeEndpoints, Uncovered};
+use crate::errors::{
+    NonExhaustiveOmittedPattern, NonExhaustiveOmittedPatternLintOnArm, Overlap,
+    OverlappingRangeEndpoints, Uncovered,
+};
 
 use rustc_data_structures::captures::Captures;
 
@@ -336,6 +340,8 @@ pub(crate) struct MatchCheckCtxt<'p, 'tcx> {
     pub(crate) module: DefId,
     pub(crate) param_env: ty::ParamEnv<'tcx>,
     pub(crate) pattern_arena: &'p TypedArena<DeconstructedPat<'p, 'tcx>>,
+    /// The span of the whole match, if applicable.
+    pub(crate) match_span: Option<Span>,
     /// Only produce `NON_EXHAUSTIVE_OMITTED_PATTERNS` lint on refutable patterns.
     pub(crate) refutable: bool,
 }
@@ -931,7 +937,7 @@ impl<'p, 'tcx> PatternColumn<'p, 'tcx> {
             let specialized = pat.specialize(pcx, &ctor);
             for (subpat, column) in specialized.iter().zip(&mut specialized_columns) {
                 if subpat.is_or_pat() {
-                    column.patterns.extend(subpat.iter_fields())
+                    column.patterns.extend(subpat.flatten_or_pat())
                 } else {
                     column.patterns.push(subpat)
                 }
@@ -1013,7 +1019,7 @@ fn lint_overlapping_range_endpoints<'p, 'tcx>(
 
     if IntRange::is_integral(ty) {
         let emit_lint = |overlap: &IntRange, this_span: Span, overlapped_spans: &[Span]| {
-            let overlap_as_pat = overlap.to_pat(cx.tcx, ty);
+            let overlap_as_pat = overlap.to_diagnostic_pat(ty, cx.tcx);
             let overlaps: Vec<_> = overlapped_spans
                 .iter()
                 .copied()
@@ -1031,9 +1037,10 @@ fn lint_overlapping_range_endpoints<'p, 'tcx>(
         let split_int_ranges = set.present.iter().filter_map(|c| c.as_int_range());
         for overlap_range in split_int_ranges.clone() {
             if overlap_range.is_singleton() {
-                let overlap: u128 = overlap_range.boundaries().0;
-                // Spans of ranges that start or end with the overlap.
+                let overlap: MaybeInfiniteInt = overlap_range.lo;
+                // Ranges that look like `lo..=overlap`.
                 let mut prefixes: SmallVec<[_; 1]> = Default::default();
+                // Ranges that look like `overlap..=hi`.
                 let mut suffixes: SmallVec<[_; 1]> = Default::default();
                 // Iterate on patterns that contained `overlap`.
                 for pat in column.iter() {
@@ -1043,17 +1050,16 @@ fn lint_overlapping_range_endpoints<'p, 'tcx>(
                         // Don't lint when one of the ranges is a singleton.
                         continue;
                     }
-                    let (start, end) = this_range.boundaries();
-                    if start == overlap {
-                        // `this_range` looks like `overlap..=end`; it overlaps with any ranges that
-                        // look like `start..=overlap`.
+                    if this_range.lo == overlap {
+                        // `this_range` looks like `overlap..=this_range.hi`; it overlaps with any
+                        // ranges that look like `lo..=overlap`.
                         if !prefixes.is_empty() {
                             emit_lint(overlap_range, this_span, &prefixes);
                         }
                         suffixes.push(this_span)
-                    } else if end == overlap {
-                        // `this_range` looks like `start..=overlap`; it overlaps with any ranges
-                        // that look like `overlap..=end`.
+                    } else if this_range.hi == overlap.plus_one() {
+                        // `this_range` looks like `this_range.lo..=overlap`; it overlaps with any
+                        // ranges that look like `overlap..=hi`.
                         if !suffixes.is_empty() {
                             emit_lint(overlap_range, this_span, &suffixes);
                         }
@@ -1148,28 +1154,50 @@ pub(crate) fn compute_match_usefulness<'p, 'tcx>(
 
     // Run the non_exhaustive_omitted_patterns lint. Only run on refutable patterns to avoid hitting
     // `if let`s. Only run if the match is exhaustive otherwise the error is redundant.
-    if cx.refutable
-        && non_exhaustiveness_witnesses.is_empty()
-        && !matches!(
+    if cx.refutable && non_exhaustiveness_witnesses.is_empty() {
+        if !matches!(
             cx.tcx.lint_level_at_node(NON_EXHAUSTIVE_OMITTED_PATTERNS, lint_root).0,
             rustc_session::lint::Level::Allow
-        )
-    {
-        let witnesses = collect_nonexhaustive_missing_variants(cx, &pat_column);
-        if !witnesses.is_empty() {
-            // Report that a match of a `non_exhaustive` enum marked with `non_exhaustive_omitted_patterns`
-            // is not exhaustive enough.
-            //
-            // NB: The partner lint for structs lives in `compiler/rustc_hir_analysis/src/check/pat.rs`.
-            cx.tcx.emit_spanned_lint(
-                NON_EXHAUSTIVE_OMITTED_PATTERNS,
-                lint_root,
-                scrut_span,
-                NonExhaustiveOmittedPattern {
-                    scrut_ty,
-                    uncovered: Uncovered::new(scrut_span, cx, witnesses),
-                },
-            );
+        ) {
+            let witnesses = collect_nonexhaustive_missing_variants(cx, &pat_column);
+
+            if !witnesses.is_empty() {
+                // Report that a match of a `non_exhaustive` enum marked with `non_exhaustive_omitted_patterns`
+                // is not exhaustive enough.
+                //
+                // NB: The partner lint for structs lives in `compiler/rustc_hir_analysis/src/check/pat.rs`.
+                cx.tcx.emit_spanned_lint(
+                    NON_EXHAUSTIVE_OMITTED_PATTERNS,
+                    lint_root,
+                    scrut_span,
+                    NonExhaustiveOmittedPattern {
+                        scrut_ty,
+                        uncovered: Uncovered::new(scrut_span, cx, witnesses),
+                    },
+                );
+            }
+        } else {
+            // We used to allow putting the `#[allow(non_exhaustive_omitted_patterns)]` on a match
+            // arm. This no longer makes sense so we warn users, to avoid silently breaking their
+            // usage of the lint.
+            for arm in arms {
+                let (lint_level, lint_level_source) =
+                    cx.tcx.lint_level_at_node(NON_EXHAUSTIVE_OMITTED_PATTERNS, arm.hir_id);
+                if !matches!(lint_level, rustc_session::lint::Level::Allow) {
+                    let decorator = NonExhaustiveOmittedPatternLintOnArm {
+                        lint_span: lint_level_source.span(),
+                        suggest_lint_on_match: cx.match_span.map(|span| span.shrink_to_lo()),
+                        lint_level: lint_level.as_str(),
+                        lint_name: "non_exhaustive_omitted_patterns",
+                    };
+
+                    use rustc_errors::DecorateLint;
+                    let mut err = cx.tcx.sess.struct_span_warn(arm.pat.span(), "");
+                    err.set_primary_message(decorator.msg());
+                    decorator.decorate_lint(&mut err);
+                    err.emit();
+                }
+            }
         }
     }
 
