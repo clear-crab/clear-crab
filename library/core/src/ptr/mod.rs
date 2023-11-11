@@ -505,6 +505,10 @@ pub unsafe fn drop_in_place<T: ?Sized>(to_drop: *mut T) {
 
 /// Creates a null raw pointer.
 ///
+/// This function is equivalent to zero-initializing the pointer:
+/// `MaybeUninit::<*const T>::zeroed().assume_init()`.
+/// The resulting pointer has the address 0.
+///
 /// # Examples
 ///
 /// ```
@@ -512,6 +516,7 @@ pub unsafe fn drop_in_place<T: ?Sized>(to_drop: *mut T) {
 ///
 /// let p: *const i32 = ptr::null();
 /// assert!(p.is_null());
+/// assert_eq!(p as usize, 0); // this pointer has the address 0
 /// ```
 #[inline(always)]
 #[must_use]
@@ -526,6 +531,10 @@ pub const fn null<T: ?Sized + Thin>() -> *const T {
 
 /// Creates a null mutable raw pointer.
 ///
+/// This function is equivalent to zero-initializing the pointer:
+/// `MaybeUninit::<*mut T>::zeroed().assume_init()`.
+/// The resulting pointer has the address 0.
+///
 /// # Examples
 ///
 /// ```
@@ -533,6 +542,7 @@ pub const fn null<T: ?Sized + Thin>() -> *const T {
 ///
 /// let p: *mut i32 = ptr::null_mut();
 /// assert!(p.is_null());
+/// assert_eq!(p as usize, 0); // this pointer has the address 0
 /// ```
 #[inline(always)]
 #[must_use]
@@ -1989,9 +1999,18 @@ impl<F: FnPtr> fmt::Debug for F {
 /// as all other references. This macro can create a raw pointer *without* creating
 /// a reference first.
 ///
-/// Note, however, that the `expr` in `addr_of!(expr)` is still subject to all
-/// the usual rules. In particular, `addr_of!(*ptr::null())` is Undefined
-/// Behavior because it dereferences a null pointer.
+/// The `expr` in `addr_of!(expr)` is evaluated as a place expression, but never loads
+/// from the place or requires the place to be dereferenceable. This means that
+/// `addr_of!(*ptr)` is defined behavior even if `ptr` is null, dangling, or misaligned.
+/// Note however that `addr_of!((*ptr).field)` still requires the projection to
+/// `field` to be in-bounds, using the same rules as [`offset`].
+///
+/// Note that `Deref`/`Index` coercions (and their mutable counterparts) are applied inside
+/// `addr_of!` like everywhere else, in which case a reference is created to call `Deref::deref` or
+/// `Index::index`, respectively. The statements above only apply when no such coercions are
+/// applied.
+///
+/// [`offset`]: pointer::offset
 ///
 /// # Example
 ///
@@ -2029,9 +2048,18 @@ pub macro addr_of($place:expr) {
 /// as all other references. This macro can create a raw pointer *without* creating
 /// a reference first.
 ///
-/// Note, however, that the `expr` in `addr_of_mut!(expr)` is still subject to all
-/// the usual rules. In particular, `addr_of_mut!(*ptr::null_mut())` is Undefined
-/// Behavior because it dereferences a null pointer.
+/// The `expr` in `addr_of_mut!(expr)` is evaluated as a place expression, but never loads
+/// from the place or requires the place to be dereferenceable. This means that
+/// `addr_of_mut!(*ptr)` is defined behavior even if `ptr` is null, dangling, or misaligned.
+/// Note however that `addr_of_mut!((*ptr).field)` still requires the projection to
+/// `field` to be in-bounds, using the same rules as [`offset`].
+///
+/// Note that `Deref`/`Index` coercions (and their mutable counterparts) are applied inside
+/// `addr_of_mut!` like everywhere else, in which case a reference is created to call `Deref::deref`
+/// or `Index::index`, respectively. The statements above only apply when no such coercions are
+/// applied.
+///
+/// [`offset`]: pointer::offset
 ///
 /// # Examples
 ///

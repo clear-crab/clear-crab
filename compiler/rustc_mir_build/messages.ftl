@@ -247,7 +247,7 @@ mir_build_overlapping_range_endpoints = multiple patterns overlap on their endpo
 mir_build_pattern_not_covered = refutable pattern in {$origin}
     .pattern_ty = the matched value is of type `{$pattern_ty}`
 
-mir_build_pointer_pattern = function pointers and unsized pointers in patterns behave unpredictably and should not be relied upon. See https://github.com/rust-lang/rust/issues/70861 for details.
+mir_build_pointer_pattern = function pointers and raw pointers not derived from integers in patterns behave unpredictably and should not be relied upon. See https://github.com/rust-lang/rust/issues/70861 for details.
 
 mir_build_privately_uninhabited = pattern `{$witness_1}` is currently uninhabited, but this variant contains private fields which may become inhabited in the future
 
@@ -320,6 +320,7 @@ mir_build_unreachable_pattern = unreachable pattern
     .label = unreachable pattern
     .catchall_label = matches any value
 
+mir_build_unsafe_fn_safe_body = an unsafe function restricts its caller, but its body is safe by default
 mir_build_unsafe_not_inherited = items do not inherit unsafety from separate enclosing items
 
 mir_build_unsafe_op_in_unsafe_fn_borrow_of_layout_constrained_field_requires_unsafe =
@@ -386,3 +387,5 @@ mir_build_unused_unsafe = unnecessary `unsafe` block
 mir_build_unused_unsafe_enclosing_block_label = because it's nested under this `unsafe` block
 
 mir_build_variant_defined_here = not covered
+
+mir_build_wrap_suggestion = consider wrapping the function body in an unsafe block
