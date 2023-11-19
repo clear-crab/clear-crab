@@ -375,7 +375,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 // consider a "quick reject". This avoids creating more types
                 // and so forth that we need to.
                 let impl_trait_ref = self.tcx().impl_trait_ref(impl_def_id).unwrap();
-                if !drcx.args_refs_may_unify(obligation_args, impl_trait_ref.skip_binder().args) {
+                if !drcx.args_may_unify(obligation_args, impl_trait_ref.skip_binder().args) {
                     return;
                 }
                 if self.reject_fn_ptr_impls(
@@ -1051,7 +1051,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
     ) {
         // The regions of a type don't affect the size of the type
         let tcx = self.tcx();
-        let self_ty = tcx.erase_late_bound_regions(obligation.predicate.self_ty());
+        let self_ty = tcx.instantiate_bound_regions_with_erased(obligation.predicate.self_ty());
         // We should erase regions from both the param-env and type, since both
         // may have infer regions. Specifically, after canonicalizing and instantiating,
         // early bound regions turn into region vars in both the new and old solver.

@@ -1,7 +1,7 @@
 #![doc(html_root_url = "https://doc.rust-lang.org/nightly/nightly-rustc/")]
-#![cfg_attr(not(bootstrap), doc(rust_logo))]
-#![cfg_attr(not(bootstrap), feature(rustdoc_internals))]
-#![cfg_attr(not(bootstrap), allow(internal_features))]
+#![doc(rust_logo)]
+#![feature(rustdoc_internals)]
+#![allow(internal_features)]
 #![feature(associated_type_defaults)]
 #![feature(rustc_private)]
 #![feature(try_blocks)]
@@ -1756,7 +1756,7 @@ impl<'tcx> PrivateItemsInPublicInterfacesChecker<'tcx, '_> {
                     //     fn from(_: Priv) -> Pub {...}
                     // }
                     //
-                    // lints shouldn't be emmited even if `from` effective visibility
+                    // lints shouldn't be emitted even if `from` effective visibility
                     // is larger than `Priv` nominal visibility and if `Priv` can leak
                     // in some scenarios due to type inference.
                     let impl_ev = EffectiveVisibility::of_impl::<false>(

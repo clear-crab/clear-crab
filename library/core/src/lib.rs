@@ -69,7 +69,7 @@
     test(no_crate_inject, attr(deny(warnings))),
     test(attr(allow(dead_code, deprecated, unused_variables, unused_mut)))
 )]
-#![cfg_attr(not(bootstrap), doc(rust_logo))]
+#![doc(rust_logo)]
 #![doc(cfg_hide(
     not(test),
     any(not(feature = "miri-test-libstd"), test, doctest),
@@ -178,6 +178,8 @@
 #![feature(is_ascii_octdigit)]
 #![feature(isqrt)]
 #![feature(maybe_uninit_uninit_array)]
+#![feature(offset_of)]
+#![feature(offset_of_enum)]
 #![feature(ptr_alignment_type)]
 #![feature(ptr_metadata)]
 #![feature(set_ptr_value)]
@@ -219,6 +221,7 @@
 #![feature(doc_cfg)]
 #![feature(doc_cfg_hide)]
 #![feature(doc_notable_trait)]
+#![feature(effects)]
 #![feature(exhaustive_patterns)]
 #![feature(extern_types)]
 #![feature(fundamental)]

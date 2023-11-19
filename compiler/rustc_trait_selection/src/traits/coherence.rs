@@ -20,6 +20,7 @@ use crate::traits::{
 };
 use rustc_data_structures::fx::FxIndexSet;
 use rustc_errors::Diagnostic;
+use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_infer::infer::{DefineOpaqueTypes, InferCtxt, TyCtxtInferExt};
 use rustc_infer::traits::{util, TraitEngine};
@@ -100,7 +101,7 @@ pub fn overlapping_impls(
     let impl1_ref = tcx.impl_trait_ref(impl1_def_id);
     let impl2_ref = tcx.impl_trait_ref(impl2_def_id);
     let may_overlap = match (impl1_ref, impl2_ref) {
-        (Some(a), Some(b)) => drcx.args_refs_may_unify(a.skip_binder().args, b.skip_binder().args),
+        (Some(a), Some(b)) => drcx.args_may_unify(a.skip_binder().args, b.skip_binder().args),
         (None, None) => {
             let self_ty1 = tcx.type_of(impl1_def_id).skip_binder();
             let self_ty2 = tcx.type_of(impl2_def_id).skip_binder();
@@ -1002,7 +1003,12 @@ impl<'a, 'tcx> ProofTreeVisitor<'tcx> for AmbiguityCausesVisitor<'a> {
         // and then prove the resulting predicate as a nested goal.
         let trait_ref = match predicate.kind().no_bound_vars() {
             Some(ty::PredicateKind::Clause(ty::ClauseKind::Trait(tr))) => tr.trait_ref,
-            Some(ty::PredicateKind::Clause(ty::ClauseKind::Projection(proj))) => {
+            Some(ty::PredicateKind::Clause(ty::ClauseKind::Projection(proj)))
+                if matches!(
+                    infcx.tcx.def_kind(proj.projection_ty.def_id),
+                    DefKind::AssocTy | DefKind::AssocConst
+                ) =>
+            {
                 proj.projection_ty.trait_ref(infcx.tcx)
             }
             _ => return ControlFlow::Continue(()),

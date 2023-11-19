@@ -30,9 +30,9 @@
 //! get confused if the spans from leaf AST nodes occur in multiple places
 //! in the HIR, especially for multiple identifiers.
 
-#![cfg_attr(not(bootstrap), allow(internal_features))]
-#![cfg_attr(not(bootstrap), feature(rustdoc_internals))]
-#![cfg_attr(not(bootstrap), doc(rust_logo))]
+#![allow(internal_features)]
+#![feature(rustdoc_internals)]
+#![doc(rust_logo)]
 #![feature(box_patterns)]
 #![feature(let_chains)]
 #![feature(never_type)]
@@ -443,11 +443,6 @@ pub fn lower_to_hir(tcx: TyCtxt<'_>, (): ()) -> hir::Crate<'_> {
     drop(ast_index);
     sess.time("drop_ast", || drop(krate));
 
-    // Discard hygiene data, which isn't required after lowering to HIR.
-    if !sess.opts.unstable_opts.keep_hygiene_data {
-        rustc_span::hygiene::clear_syntax_context_map();
-    }
-
     // Don't hash unless necessary, because it's expensive.
     let opt_hir_hash =
         if tcx.needs_crate_hash() { Some(compute_hir_hash(tcx, &owners)) } else { None };
@@ -504,7 +499,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
     /// Given the id of some node in the AST, finds the `LocalDefId` associated with it by the name
     /// resolver (if any).
     fn orig_opt_local_def_id(&self, node: NodeId) -> Option<LocalDefId> {
-        self.resolver.node_id_to_def_id.get(&node).map(|local_def_id| *local_def_id)
+        self.resolver.node_id_to_def_id.get(&node).copied()
     }
 
     /// Given the id of some node in the AST, finds the `LocalDefId` associated with it by the name
@@ -547,7 +542,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         self.generics_def_id_map
             .iter()
             .rev()
-            .find_map(|map| map.get(&local_def_id).map(|local_def_id| *local_def_id))
+            .find_map(|map| map.get(&local_def_id).copied())
             .unwrap_or(local_def_id)
     }
 

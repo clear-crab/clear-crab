@@ -928,10 +928,8 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
     }
 
     fn fn_arg_obligation(&self, obligation: &PredicateObligation<'tcx>) -> bool {
-        if let ObligationCauseCode::FunctionArgumentObligation {
-            arg_hir_id,
-            ..
-        } = obligation.cause.code()
+        if let ObligationCauseCode::FunctionArgumentObligation { arg_hir_id, .. } =
+            obligation.cause.code()
             && let Some(Node::Expr(arg)) = self.tcx.hir().find(*arg_hir_id)
             && let arg = arg.peel_borrows()
             && let hir::ExprKind::Path(hir::QPath::Resolved(
@@ -1377,7 +1375,7 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             {
                 let data = self.instantiate_binder_with_fresh_vars(
                     obligation.cause.span,
-                    infer::LateBoundRegionConversionTime::HigherRankedType,
+                    infer::BoundRegionConversionTime::HigherRankedType,
                     bound_predicate.rebind(data),
                 );
                 let unnormalized_term = match data.term.unpack() {
@@ -2731,7 +2729,7 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                         Some(format!("{cannot_do_this} in const contexts"))
                     }
                     // overridden post message
-                    (true, Some(AppendConstMessage::Custom(custom_msg))) => {
+                    (true, Some(AppendConstMessage::Custom(custom_msg, _))) => {
                         Some(format!("{cannot_do_this}{custom_msg}"))
                     }
                     // fallback to generic message
@@ -2752,7 +2750,8 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
         use rustc_transmute::Answer;
 
         // Erase regions because layout code doesn't particularly care about regions.
-        let trait_ref = self.tcx.erase_regions(self.tcx.erase_late_bound_regions(trait_ref));
+        let trait_ref =
+            self.tcx.erase_regions(self.tcx.instantiate_bound_regions_with_erased(trait_ref));
 
         let src_and_dst = rustc_transmute::Types {
             dst: trait_ref.args.type_at(0),

@@ -39,7 +39,7 @@ use rustc_data_structures::profiling::SelfProfilerRef;
 use rustc_data_structures::sharded::{IntoPointer, ShardedHashMap};
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_data_structures::steal::Steal;
-use rustc_data_structures::sync::{self, FreezeReadGuard, Lock, Lrc, WorkerLocal};
+use rustc_data_structures::sync::{FreezeReadGuard, Lock, WorkerLocal};
 use rustc_data_structures::unord::UnordSet;
 use rustc_errors::{
     DecorateLint, DiagnosticBuilder, DiagnosticMessage, ErrorGuaranteed, MultiSpan,
@@ -69,7 +69,6 @@ use rustc_type_ir::TyKind::*;
 use rustc_type_ir::WithCachedTypeInfo;
 use rustc_type_ir::{CollectAndApply, Interner, TypeFlags};
 
-use std::any::Any;
 use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::fmt;
@@ -113,9 +112,9 @@ impl<'tcx> Interner for TyCtxt<'tcx> {
     type ExprConst = ty::Expr<'tcx>;
 
     type Region = Region<'tcx>;
-    type EarlyBoundRegion = ty::EarlyBoundRegion;
+    type EarlyParamRegion = ty::EarlyParamRegion;
     type BoundRegion = ty::BoundRegion;
-    type FreeRegion = ty::FreeRegion;
+    type LateParamRegion = ty::LateParamRegion;
     type InferRegion = ty::RegionVid;
     type PlaceholderRegion = ty::PlaceholderRegion;
 
@@ -327,7 +326,7 @@ pub struct CommonLifetimes<'tcx> {
     pub re_vars: Vec<Region<'tcx>>,
 
     /// Pre-interned values of the form:
-    /// `ReLateBound(DebruijnIndex(i), BoundRegion { var: v, kind: BrAnon })`
+    /// `ReBound(DebruijnIndex(i), BoundRegion { var: v, kind: BrAnon })`
     /// for small values of `i` and `v`.
     pub re_late_bounds: Vec<Vec<Region<'tcx>>>,
 }
@@ -402,7 +401,7 @@ impl<'tcx> CommonLifetimes<'tcx> {
             .map(|i| {
                 (0..NUM_PREINTERNED_RE_LATE_BOUNDS_V)
                     .map(|v| {
-                        mk(ty::ReLateBound(
+                        mk(ty::ReBound(
                             ty::DebruijnIndex::from(i),
                             ty::BoundRegion { var: ty::BoundVar::from(v), kind: ty::BrAnon },
                         ))
@@ -445,14 +444,14 @@ impl<'tcx> CommonConsts<'tcx> {
     }
 }
 
-/// This struct contains information regarding the `ReFree(FreeRegion)` corresponding to a lifetime
-/// conflict.
+/// This struct contains information regarding a free parameter region,
+/// either a `ReEarlyParam` or `ReLateParam`.
 #[derive(Debug)]
 pub struct FreeRegionInfo {
-    /// `LocalDefId` corresponding to FreeRegion
+    /// `LocalDefId` of the free region.
     pub def_id: LocalDefId,
-    /// the bound region corresponding to FreeRegion
-    pub boundregion: ty::BoundRegionKind,
+    /// the bound region corresponding to free region.
+    pub bound_region: ty::BoundRegionKind,
     /// checks if bound region is in Impl Item
     pub is_impl_item: bool,
 }
@@ -543,12 +542,6 @@ pub struct GlobalCtxt<'tcx> {
     /// with the same name to coexist. See the
     /// `rustc_symbol_mangling` crate for more information.
     stable_crate_id: StableCrateId,
-
-    /// This only ever stores a `LintStore` but we don't want a dependency on that type here.
-    ///
-    /// FIXME(Centril): consider `dyn LintStoreMarker` once
-    /// we can upcast to `Any` for some additional type safety.
-    pub lint_store: Lrc<dyn Any + sync::DynSync + sync::DynSend>,
 
     pub dep_graph: DepGraph,
 
@@ -709,7 +702,6 @@ impl<'tcx> TyCtxt<'tcx> {
         s: &'tcx Session,
         crate_types: Vec<CrateType>,
         stable_crate_id: StableCrateId,
-        lint_store: Lrc<dyn Any + sync::DynSend + sync::DynSync>,
         arena: &'tcx WorkerLocal<Arena<'tcx>>,
         hir_arena: &'tcx WorkerLocal<hir::Arena<'tcx>>,
         untracked: Untracked,
@@ -730,7 +722,6 @@ impl<'tcx> TyCtxt<'tcx> {
             sess: s,
             crate_types,
             stable_crate_id,
-            lint_store,
             arena,
             hir_arena,
             interners,
@@ -1080,8 +1071,8 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn is_suitable_region(self, mut region: Region<'tcx>) -> Option<FreeRegionInfo> {
         let (suitable_region_binding_scope, bound_region) = loop {
             let def_id = match region.kind() {
-                ty::ReFree(fr) => fr.bound_region.get_id()?.as_local()?,
-                ty::ReEarlyBound(ebr) => ebr.def_id.expect_local(),
+                ty::ReLateParam(fr) => fr.bound_region.get_id()?.as_local()?,
+                ty::ReEarlyParam(ebr) => ebr.def_id.expect_local(),
                 _ => return None, // not a free region
             };
             let scope = self.local_parent(def_id);
@@ -1102,11 +1093,7 @@ impl<'tcx> TyCtxt<'tcx> {
             _ => false,
         };
 
-        Some(FreeRegionInfo {
-            def_id: suitable_region_binding_scope,
-            boundregion: bound_region,
-            is_impl_item,
-        })
+        Some(FreeRegionInfo { def_id: suitable_region_binding_scope, bound_region, is_impl_item })
     }
 
     /// Given a `DefId` for an `fn`, return all the `dyn` and `impl` traits in its return type.
@@ -1743,7 +1730,7 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn mk_param_from_def(self, param: &ty::GenericParamDef) -> GenericArg<'tcx> {
         match param.kind {
             GenericParamDefKind::Lifetime => {
-                ty::Region::new_early_bound(self, param.to_early_bound_region_data()).into()
+                ty::Region::new_early_param(self, param.to_early_bound_region_data()).into()
             }
             GenericParamDefKind::Type { .. } => Ty::new_param(self, param.index, param.name).into(),
             GenericParamDefKind::Const { .. } => ty::Const::new_param(
@@ -2040,7 +2027,7 @@ impl<'tcx> TyCtxt<'tcx> {
     /// Given the def-id of an early-bound lifetime on an RPIT corresponding to
     /// a duplicated captured lifetime, map it back to the early- or late-bound
     /// lifetime of the function from which it originally as captured. If it is
-    /// a late-bound lifetime, this will represent the liberated (`ReFree`) lifetime
+    /// a late-bound lifetime, this will represent the liberated (`ReLateParam`) lifetime
     /// of the signature.
     // FIXME(RPITIT): if we ever synthesize new lifetimes for RPITITs and not just
     // re-use the generics of the opaque, this function will need to be tweaked slightly.
@@ -2079,9 +2066,9 @@ impl<'tcx> TyCtxt<'tcx> {
                     }
 
                     let generics = self.generics_of(new_parent);
-                    return ty::Region::new_early_bound(
+                    return ty::Region::new_early_param(
                         self,
-                        ty::EarlyBoundRegion {
+                        ty::EarlyParamRegion {
                             def_id: ebv,
                             index: generics
                                 .param_def_id_to_index(self, ebv)
@@ -2092,7 +2079,7 @@ impl<'tcx> TyCtxt<'tcx> {
                 }
                 Some(resolve_bound_vars::ResolvedArg::LateBound(_, _, lbv)) => {
                     let new_parent = self.parent(lbv);
-                    return ty::Region::new_free(
+                    return ty::Region::new_late_param(
                         self,
                         new_parent,
                         ty::BoundRegionKind::BrNamed(

@@ -9,7 +9,7 @@
 use rustc_ast::Mutability;
 use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_hir::lang_items::LangItem;
-use rustc_infer::infer::LateBoundRegionConversionTime::HigherRankedType;
+use rustc_infer::infer::BoundRegionConversionTime::HigherRankedType;
 use rustc_infer::infer::{DefineOpaqueTypes, InferOk};
 use rustc_middle::traits::{BuiltinImplSource, SelectionOutputTypeParameterMismatch};
 use rustc_middle::ty::{
@@ -327,8 +327,9 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         // care about other regions. Erasing late-bound regions is equivalent
         // to instantiating the binder with placeholders then erasing those
         // placeholder regions.
-        let predicate =
-            self.tcx().erase_regions(self.tcx().erase_late_bound_regions(obligation.predicate));
+        let predicate = self
+            .tcx()
+            .erase_regions(self.tcx().instantiate_bound_regions_with_erased(obligation.predicate));
 
         let Some(assume) = rustc_transmute::Assume::from_const(
             self.infcx.tcx,
@@ -592,7 +593,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                             let kind = ty::BoundRegionKind::BrNamed(param.def_id, param.name);
                             let bound_var = ty::BoundVariableKind::Region(kind);
                             bound_vars.push(bound_var);
-                            ty::Region::new_late_bound(
+                            ty::Region::new_bound(
                                 tcx,
                                 ty::INNERMOST,
                                 ty::BoundRegion {
@@ -1277,7 +1278,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                     let tcx = self.tcx();
                     stack.extend(tcx.coroutine_hidden_types(def_id).map(|bty| {
                         let ty = bty.instantiate(tcx, args);
-                        debug_assert!(!ty.has_late_bound_regions());
+                        debug_assert!(!ty.has_bound_regions());
                         ty
                     }))
                 }

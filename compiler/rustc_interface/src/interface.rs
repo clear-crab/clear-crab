@@ -38,21 +38,17 @@ pub type Result<T> = result::Result<T, ErrorGuaranteed>;
 /// Can be used to run `rustc_interface` queries.
 /// Created by passing [`Config`] to [`run_compiler`].
 pub struct Compiler {
-    pub(crate) sess: Lrc<Session>,
-    codegen_backend: Lrc<dyn CodegenBackend>,
-    pub(crate) register_lints: Option<Box<dyn Fn(&Session, &mut LintStore) + Send + Sync>>,
+    sess: Session,
+    codegen_backend: Box<dyn CodegenBackend>,
     pub(crate) override_queries: Option<fn(&Session, &mut Providers)>,
 }
 
 impl Compiler {
-    pub fn session(&self) -> &Lrc<Session> {
+    pub fn session(&self) -> &Session {
         &self.sess
     }
-    pub fn codegen_backend(&self) -> &Lrc<dyn CodegenBackend> {
-        &self.codegen_backend
-    }
-    pub fn register_lints(&self) -> &Option<Box<dyn Fn(&Session, &mut LintStore) + Send + Sync>> {
-        &self.register_lints
+    pub fn codegen_backend(&self) -> &dyn CodegenBackend {
+        &*self.codegen_backend
     }
     pub fn build_output_filenames(
         &self,
@@ -178,7 +174,9 @@ pub(crate) fn parse_check_cfg(handler: &EarlyErrorHandler, specs: Vec<String>) -
 
             check_cfg.exhaustive_names = true;
             for arg in args {
-                if arg.is_word() && let Some(ident) = arg.ident() {
+                if arg.is_word()
+                    && let Some(ident) = arg.ident()
+                {
                     check_cfg.expecteds.entry(ident.name).or_insert(ExpectedValues::Any);
                 } else {
                     error!("`names()` arguments must be simple identifiers");
@@ -188,7 +186,9 @@ pub(crate) fn parse_check_cfg(handler: &EarlyErrorHandler, specs: Vec<String>) -
             set_old_syntax();
 
             if let Some((name, values)) = args.split_first() {
-                if name.is_word() && let Some(ident) = name.ident() {
+                if name.is_word()
+                    && let Some(ident) = name.ident()
+                {
                     let expected_values = check_cfg
                         .expecteds
                         .entry(ident.name)
@@ -236,12 +236,16 @@ pub(crate) fn parse_check_cfg(handler: &EarlyErrorHandler, specs: Vec<String>) -
             let mut values_any_specified = false;
 
             for arg in args {
-                if arg.is_word() && let Some(ident) = arg.ident() {
+                if arg.is_word()
+                    && let Some(ident) = arg.ident()
+                {
                     if values_specified {
                         error!("`cfg()` names cannot be after values");
                     }
                     names.push(ident);
-                } else if arg.has_name(sym::any) && let Some(args) = arg.meta_item_list() {
+                } else if arg.has_name(sym::any)
+                    && let Some(args) = arg.meta_item_list()
+                {
                     if any_specified {
                         error!("`any()` cannot be specified multiple times");
                     }
@@ -249,7 +253,9 @@ pub(crate) fn parse_check_cfg(handler: &EarlyErrorHandler, specs: Vec<String>) -
                     if !args.is_empty() {
                         error!("`any()` must be empty");
                     }
-                } else if arg.has_name(sym::values) && let Some(args) = arg.meta_item_list() {
+                } else if arg.has_name(sym::values)
+                    && let Some(args) = arg.meta_item_list()
+                {
                     if names.is_empty() {
                         error!("`values()` cannot be specified before the names");
                     } else if values_specified {
@@ -260,7 +266,9 @@ pub(crate) fn parse_check_cfg(handler: &EarlyErrorHandler, specs: Vec<String>) -
                     for arg in args {
                         if let Some(LitKind::Str(s, _)) = arg.lit().map(|lit| &lit.kind) {
                             values.insert(Some(*s));
-                        } else if arg.has_name(sym::any) && let Some(args) = arg.meta_item_list() {
+                        } else if arg.has_name(sym::any)
+                            && let Some(args) = arg.meta_item_list()
+                        {
                             if values_any_specified {
                                 error!("`any()` in `values()` cannot be specified multiple times");
                             }
@@ -473,12 +481,18 @@ pub fn run_compiler<R: Send>(config: Config, f: impl FnOnce(&Compiler) -> R + Se
                 sess.opts.untracked_state_hash = hasher.finish()
             }
 
-            let compiler = Compiler {
-                sess: Lrc::new(sess),
-                codegen_backend: Lrc::from(codegen_backend),
-                register_lints: config.register_lints,
-                override_queries: config.override_queries,
-            };
+            // Even though the session holds the lint store, we can't build the
+            // lint store until after the session exists. And we wait until now
+            // so that `register_lints` sees the fully initialized session.
+            let mut lint_store = rustc_lint::new_lint_store(sess.enable_internal_lints());
+            if let Some(register_lints) = config.register_lints.as_deref() {
+                register_lints(&sess, &mut lint_store);
+                sess.registered_lints = true;
+            }
+            sess.lint_store = Some(Lrc::new(lint_store));
+
+            let compiler =
+                Compiler { sess, codegen_backend, override_queries: config.override_queries };
 
             rustc_span::set_source_map(compiler.sess.parse_sess.clone_source_map(), move || {
                 let r = {

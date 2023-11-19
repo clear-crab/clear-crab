@@ -95,6 +95,12 @@ impl<'tcx> RegionErrors<'tcx> {
     }
 }
 
+impl std::fmt::Debug for RegionErrors<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("RegionErrors").field(&self.0).finish()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum RegionErrorKind<'tcx> {
     /// A generic bound failure for a type test (`T: 'a`).
@@ -181,8 +187,8 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
 
     /// Returns `true` if a closure is inferred to be an `FnMut` closure.
     fn is_closure_fn_mut(&self, fr: RegionVid) -> bool {
-        if let Some(ty::ReFree(free_region)) = self.to_error_region(fr).as_deref()
-            && let ty::BoundRegionKind::BrEnv = free_region.bound_region
+        if let Some(ty::ReLateParam(late_param)) = self.to_error_region(fr).as_deref()
+            && let ty::BoundRegionKind::BrEnv = late_param.bound_region
             && let DefiningTy::Closure(_, args) = self.regioncx.universal_regions().defining_ty
         {
             return args.as_closure().kind() == ty::ClosureKind::FnMut;
@@ -995,7 +1001,7 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
             .infcx
             .tcx
             .is_suitable_region(sub)
-            .and_then(|anon_reg| find_anon_type(self.infcx.tcx, sub, &anon_reg.boundregion))
+            .and_then(|anon_reg| find_anon_type(self.infcx.tcx, sub, &anon_reg.bound_region))
         else {
             return;
         };
@@ -1004,7 +1010,7 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, 'tcx> {
             .infcx
             .tcx
             .is_suitable_region(sup)
-            .and_then(|anon_reg| find_anon_type(self.infcx.tcx, sup, &anon_reg.boundregion))
+            .and_then(|anon_reg| find_anon_type(self.infcx.tcx, sup, &anon_reg.bound_region))
         else {
             return;
         };

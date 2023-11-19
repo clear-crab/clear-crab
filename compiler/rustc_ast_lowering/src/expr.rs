@@ -42,8 +42,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
                     }
                     // Merge attributes into the inner expression.
                     if !e.attrs.is_empty() {
-                        let old_attrs =
-                            self.attrs.get(&ex.hir_id.local_id).map(|la| *la).unwrap_or(&[]);
+                        let old_attrs = self.attrs.get(&ex.hir_id.local_id).copied().unwrap_or(&[]);
                         self.attrs.insert(
                             ex.hir_id.local_id,
                             &*self.arena.alloc_from_iter(
@@ -792,8 +791,11 @@ impl<'hir> LoweringContext<'_, 'hir> {
         // debuggers and debugger extensions expect it to be called `__awaitee`. They use
         // this name to identify what is being awaited by a suspended async functions.
         let awaitee_ident = Ident::with_dummy_span(sym::__awaitee);
-        let (awaitee_pat, awaitee_pat_hid) =
-            self.pat_ident_binding_mode(span, awaitee_ident, hir::BindingAnnotation::MUT);
+        let (awaitee_pat, awaitee_pat_hid) = self.pat_ident_binding_mode(
+            gen_future_span,
+            awaitee_ident,
+            hir::BindingAnnotation::MUT,
+        );
 
         let task_context_ident = Ident::with_dummy_span(sym::_task_context);
 

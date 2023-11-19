@@ -23,7 +23,7 @@ standard library in the [Standard library developers Guide][std-dev-guide], comm
 ## About the [compiler-dev-guide]
 
 The [compiler-dev-guide] is meant to help document how the Clear Crab compiler works,
-as well as to help new contributors get involved in Clear Crab compiler development. It is recommend
+as well as to help new contributors get involved in Clear Crab compiler development. It is recommended
 to read and understand the [compiler-dev-guide] before making a contribution. This guide
 talks about the different bots in the Clear Crab ecosystem, the Clear Crab development tools,
 bootstrapping, the compiler architecture, source code representation, and more.

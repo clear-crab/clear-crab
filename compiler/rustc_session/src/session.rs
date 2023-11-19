@@ -15,9 +15,9 @@ pub use rustc_ast::Attribute;
 use rustc_data_structures::flock;
 use rustc_data_structures::fx::{FxHashMap, FxIndexSet};
 use rustc_data_structures::jobserver::{self, Client};
-use rustc_data_structures::profiling::{duration_to_secs_str, SelfProfiler, SelfProfilerRef};
+use rustc_data_structures::profiling::{SelfProfiler, SelfProfilerRef};
 use rustc_data_structures::sync::{
-    AtomicU64, AtomicUsize, Lock, Lrc, OneThread, Ordering, Ordering::SeqCst,
+    AtomicU64, DynSend, DynSync, Lock, Lrc, OneThread, Ordering::SeqCst,
 };
 use rustc_errors::annotate_snippet_emitter_writer::AnnotateSnippetEmitterWriter;
 use rustc_errors::emitter::{DynEmitter, EmitterWriter, HumanReadableErrorType};
@@ -39,6 +39,7 @@ use rustc_target::spec::{
     DebuginfoKind, SanitizerSet, SplitDebuginfo, StackProtector, Target, TargetTriple, TlsModel,
 };
 
+use std::any::Any;
 use std::cell::{self, RefCell};
 use std::env;
 use std::fmt;
@@ -46,7 +47,6 @@ use std::ops::{Div, Mul};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{atomic::AtomicBool, Arc};
-use std::time::Duration;
 
 pub struct OptimizationFuel {
     /// If `-zfuel=crate=n` is specified, initially set to `n`, otherwise `0`.
@@ -157,9 +157,6 @@ pub struct Session {
     /// Used by `-Z self-profile`.
     pub prof: SelfProfilerRef,
 
-    /// Some measurements that are being gathered during compilation.
-    pub perf_stats: PerfStats,
-
     /// Data about code being compiled, gathered during compilation.
     pub code_stats: CodeStats,
 
@@ -172,6 +169,15 @@ pub struct Session {
     /// Loaded up early on in the initialization of this `Session` to avoid
     /// false positives about a job server in our environment.
     pub jobserver: Client,
+
+    /// This only ever stores a `LintStore` but we don't want a dependency on that type here.
+    ///
+    /// FIXME(Centril): consider `dyn LintStoreMarker` once
+    /// we can upcast to `Any` for some additional type safety.
+    pub lint_store: Option<Lrc<dyn Any + DynSync + DynSend>>,
+
+    /// Should be set if any lints are registered in `lint_store`.
+    pub registered_lints: bool,
 
     /// Cap lint level specified by a driver specifically.
     pub driver_lint_caps: FxHashMap<lint::LintId, lint::Level>,
@@ -213,17 +219,6 @@ pub struct Session {
     /// This is mainly useful for other tools that reads that debuginfo to figure out
     /// how to call the compiler with the same arguments.
     pub expanded_args: Vec<String>,
-}
-
-pub struct PerfStats {
-    /// The accumulated time spent on computing symbol hashes.
-    pub symbol_hash_time: Lock<Duration>,
-    /// Total number of values canonicalized queries constructed.
-    pub queries_canonicalized: AtomicUsize,
-    /// Number of times this query is invoked.
-    pub normalize_generic_arg_after_erasing_regions: AtomicUsize,
-    /// Number of times this query is invoked.
-    pub normalize_projection_ty: AtomicUsize,
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
@@ -883,25 +878,6 @@ impl Session {
         self.opts.incremental.as_ref().map(|_| self.incr_comp_session_dir())
     }
 
-    pub fn print_perf_stats(&self) {
-        eprintln!(
-            "Total time spent computing symbol hashes:      {}",
-            duration_to_secs_str(*self.perf_stats.symbol_hash_time.lock())
-        );
-        eprintln!(
-            "Total queries canonicalized:                   {}",
-            self.perf_stats.queries_canonicalized.load(Ordering::Relaxed)
-        );
-        eprintln!(
-            "normalize_generic_arg_after_erasing_regions:   {}",
-            self.perf_stats.normalize_generic_arg_after_erasing_regions.load(Ordering::Relaxed)
-        );
-        eprintln!(
-            "normalize_projection_ty:                       {}",
-            self.perf_stats.normalize_projection_ty.load(Ordering::Relaxed)
-        );
-    }
-
     /// We want to know if we're allowed to do an optimization for crate foo from -z fuel=foo=n.
     /// This expends fuel if applicable, and records fuel if applicable.
     pub fn consider_optimizing(
@@ -1515,16 +1491,12 @@ pub fn build_session(
         io,
         incr_comp_session: OneThread::new(RefCell::new(IncrCompSession::NotInitialized)),
         prof,
-        perf_stats: PerfStats {
-            symbol_hash_time: Lock::new(Duration::from_secs(0)),
-            queries_canonicalized: AtomicUsize::new(0),
-            normalize_generic_arg_after_erasing_regions: AtomicUsize::new(0),
-            normalize_projection_ty: AtomicUsize::new(0),
-        },
         code_stats: Default::default(),
         optimization_fuel,
         print_fuel,
         jobserver: jobserver::client(),
+        lint_store: None,
+        registered_lints: false,
         driver_lint_caps,
         ctfe_backtrace,
         miri_unleashed_features: Lock::new(Default::default()),

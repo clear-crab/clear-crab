@@ -203,6 +203,16 @@ pub fn prepare_tool_cargo(
     if !features.is_empty() {
         cargo.arg("--features").arg(&features.join(", "));
     }
+
+    // Enable internal lints for clippy and rustdoc
+    // NOTE: this doesn't enable lints for any other tools unless they explicitly add `#![warn(rustc::internal)]`
+    // See https://github.com/rust-lang/rust/pull/80573#issuecomment-754010776
+    //
+    // NOTE: We unconditionally set this here to avoid recompiling tools between `x check $tool`
+    // and `x test $tool` executions.
+    // See https://github.com/rust-lang/rust/issues/116538
+    cargo.rustflag("-Zunstable-options");
+
     cargo
 }
 
@@ -603,8 +613,7 @@ pub struct RustAnalyzer {
 }
 
 impl RustAnalyzer {
-    pub const ALLOW_FEATURES: &'static str =
-        "proc_macro_internals,proc_macro_diagnostic,proc_macro_span,proc_macro_span_shrink";
+    pub const ALLOW_FEATURES: &'static str = "rustc_private,proc_macro_internals,proc_macro_diagnostic,proc_macro_span,proc_macro_span_shrink";
 }
 
 impl Step for RustAnalyzer {
@@ -636,7 +645,7 @@ impl Step for RustAnalyzer {
             compiler: self.compiler,
             target: self.target,
             tool: "rust-analyzer",
-            mode: Mode::ToolStd,
+            mode: Mode::ToolRustc,
             path: "src/tools/rust-analyzer",
             extra_features: vec!["rust-analyzer/in-rust-tree".to_owned()],
             is_optional_tool: false,

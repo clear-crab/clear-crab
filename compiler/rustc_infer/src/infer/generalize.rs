@@ -327,7 +327,7 @@ where
         match *r {
             // Never make variables for regions bound within the type itself,
             // nor for erased regions.
-            ty::ReLateBound(..) | ty::ReErased => {
+            ty::ReBound(..) | ty::ReErased => {
                 return Ok(r);
             }
 
@@ -340,8 +340,8 @@ where
             ty::RePlaceholder(..)
             | ty::ReVar(..)
             | ty::ReStatic
-            | ty::ReEarlyBound(..)
-            | ty::ReFree(..) => {
+            | ty::ReEarlyParam(..)
+            | ty::ReLateParam(..) => {
                 // see common code below
             }
         }
