@@ -30,7 +30,7 @@
 #
 # If `change-id` does not match the version that is currently running,
 # `x.py` will prompt you to update it and check the related PR for more details.
-change-id = 116881
+change-id = 117813
 
 # =============================================================================
 # Tweaking how LLVM is compiled
@@ -685,6 +685,10 @@ change-id = 116881
 # Enable Windows Control Flow Guard checks in the standard library.
 # This only applies from stage 1 onwards, and only for Windows targets.
 #control-flow-guard = false
+
+# Enable Windows EHCont Guard checks in the standard library.
+# This only applies from stage 1 onwards, and only for Windows targets.
+#ehcont-guard = false
 
 # Enable symbol-mangling-version v0. This can be helpful when profiling rustc,
 # as generics will be preserved in symbols (rather than erased into opaque T).

@@ -31,6 +31,7 @@ use build_helper::exit;
 use build_helper::util::fail;
 use filetime::FileTime;
 use once_cell::sync::OnceCell;
+use sha2::digest::Digest;
 use termcolor::{ColorChoice, StandardStream, WriteColor};
 use utils::channel::GitInfo;
 
@@ -46,9 +47,10 @@ use crate::utils::helpers::{self, dir_is_empty, exe, libdir, mtime, output, syml
 mod core;
 mod utils;
 
-pub use crate::core::builder::PathSet;
-pub use crate::core::config::flags::Subcommand;
-pub use crate::core::config::Config;
+pub use core::builder::PathSet;
+pub use core::config::flags::Subcommand;
+pub use core::config::Config;
+pub use utils::change_tracker::{find_recent_config_change_ids, CONFIG_CHANGE_HISTORY};
 
 const LLVM_TOOLS: &[&str] = &[
     "llvm-cov",      // used to generate coverage report
@@ -68,17 +70,6 @@ const LLVM_TOOLS: &[&str] = &[
 
 /// LLD file names for all flavors.
 const LLD_FILE_NAMES: &[&str] = &["ld.lld", "ld64.lld", "lld-link", "wasm-ld"];
-
-/// Keeps track of major changes made to the bootstrap configuration.
-///
-/// These values also represent the IDs of the PRs that caused major changes.
-/// You can visit `https://github.com/rust-lang/rust/pull/{any-id-from-the-list}` to
-/// check for more details regarding each change.
-///
-/// If you make any major changes (such as adding new values or changing default values),
-/// please ensure that the associated PR ID is added to the end of this list.
-/// This is necessary because the list must be sorted by the merge date.
-pub const CONFIG_CHANGE_HISTORY: &[usize] = &[115898, 116998, 117435, 116881];
 
 /// Extra --check-cfg to add when building
 /// (Mode restriction, config name, config values (if any))
@@ -1849,26 +1840,44 @@ fn envify(s: &str) -> String {
         .collect()
 }
 
-pub fn find_recent_config_change_ids(current_id: usize) -> Vec<usize> {
-    if !CONFIG_CHANGE_HISTORY.contains(&current_id) {
-        // If the current change-id is greater than the most recent one, return
-        // an empty list (it may be due to switching from a recent branch to an
-        // older one); otherwise, return the full list (assuming the user provided
-        // the incorrect change-id by accident).
-        if let Some(max_id) = CONFIG_CHANGE_HISTORY.iter().max() {
-            if &current_id > max_id {
-                return Vec::new();
-            }
-        }
+/// Computes a hash representing the state of a repository/submodule and additional input.
+///
+/// It uses `git diff` for the actual changes, and `git status` for including the untracked
+/// files in the specified directory. The additional input is also incorporated into the
+/// computation of the hash.
+///
+/// # Parameters
+///
+/// - `dir`: A reference to the directory path of the target repository/submodule.
+/// - `additional_input`: An additional input to be included in the hash.
+///
+/// # Panics
+///
+/// In case of errors during `git` command execution (e.g., in tarball sources), default values
+/// are used to prevent panics.
+pub fn generate_smart_stamp_hash(dir: &Path, additional_input: &str) -> String {
+    let diff = Command::new("git")
+        .current_dir(dir)
+        .arg("diff")
+        .output()
+        .map(|o| String::from_utf8(o.stdout).unwrap_or_default())
+        .unwrap_or_default();
 
-        return CONFIG_CHANGE_HISTORY.to_vec();
-    }
+    let status = Command::new("git")
+        .current_dir(dir)
+        .arg("status")
+        .arg("--porcelain")
+        .arg("-z")
+        .arg("--untracked-files=normal")
+        .output()
+        .map(|o| String::from_utf8(o.stdout).unwrap_or_default())
+        .unwrap_or_default();
 
-    let index = CONFIG_CHANGE_HISTORY.iter().position(|&id| id == current_id).unwrap();
+    let mut hasher = sha2::Sha256::new();
 
-    CONFIG_CHANGE_HISTORY
-        .iter()
-        .skip(index + 1) // Skip the current_id and IDs before it
-        .cloned()
-        .collect()
+    hasher.update(diff);
+    hasher.update(status);
+    hasher.update(additional_input);
+
+    hex::encode(hasher.finalize().as_slice())
 }

@@ -22,7 +22,6 @@ use rustc_target::{
 };
 
 use super::backtrace::EvalContextExt as _;
-use crate::helpers::target_os_is_unix;
 use crate::*;
 
 /// Type of dynamic symbols (for `dlsym` et al)
@@ -459,6 +458,10 @@ trait EvalContextExtPriv<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
         // shim, add it to the corresponding submodule.
         match link_name.as_str() {
             // Miri-specific extern functions
+            "miri_run_provenance_gc" => {
+                let [] = this.check_shim(abi, Abi::Rust, link_name, args)?;
+                this.run_provenance_gc();
+            }
             "miri_get_alloc_id" => {
                 let [ptr] = this.check_shim(abi, Abi::Rust, link_name, args)?;
                 let ptr = this.read_pointer(ptr)?;
@@ -1008,9 +1011,11 @@ trait EvalContextExtPriv<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
             "llvm.arm.hint" if this.tcx.sess.target.arch == "arm" => {
                 let [arg] = this.check_shim(abi, Abi::Unadjusted, link_name, args)?;
                 let arg = this.read_scalar(arg)?.to_i32()?;
+                // Note that different arguments might have different target feature requirements.
                 match arg {
                     // YIELD
                     1 => {
+                        this.expect_target_feature_for_intrinsic(link_name, "v6")?;
                         this.yield_active_thread();
                     }
                     _ => {
@@ -1054,7 +1059,7 @@ trait EvalContextExtPriv<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
             // Platform-specific shims
             _ =>
                 return match this.tcx.sess.target.os.as_ref() {
-                    target_os if target_os_is_unix(target_os) =>
+                    _ if this.target_os_is_unix() =>
                         shims::unix::foreign_items::EvalContextExt::emulate_foreign_item_inner(
                             this, link_name, abi, args, dest,
                         ),

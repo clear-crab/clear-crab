@@ -51,6 +51,7 @@
 //! Otherwise it drops all the values in scope at the last suspension point.
 
 use crate::abort_unwinding_calls;
+use crate::add_call_guards;
 use crate::deref_separator::deref_finder;
 use crate::errors;
 use crate::pass_manager as pm;
@@ -617,6 +618,22 @@ fn replace_resume_ty_local<'tcx>(
     }
 }
 
+/// Transforms the `body` of the coroutine applying the following transform:
+///
+/// - Remove the `resume` argument.
+///
+/// Ideally the async lowering would not add the `resume` argument.
+///
+/// The async lowering step and the type / lifetime inference / checking are
+/// still using the `resume` argument for the time being. After this transform,
+/// the coroutine body doesn't have the `resume` argument.
+fn transform_gen_context<'tcx>(_tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
+    // This leaves the local representing the `resume` argument in place,
+    // but turns it into a regular local variable. This is cheaper than
+    // adjusting all local references in the body after removing it.
+    body.arg_count = 1;
+}
+
 struct LivenessInfo {
     /// Which locals are live across any suspension point.
     saved_locals: CoroutineSavedLocals,
@@ -651,36 +668,34 @@ fn locals_live_across_suspend_points<'tcx>(
     always_live_locals: &BitSet<Local>,
     movable: bool,
 ) -> LivenessInfo {
-    let body_ref: &Body<'_> = &body;
-
     // Calculate when MIR locals have live storage. This gives us an upper bound of their
     // lifetimes.
     let mut storage_live = MaybeStorageLive::new(std::borrow::Cow::Borrowed(always_live_locals))
-        .into_engine(tcx, body_ref)
+        .into_engine(tcx, body)
         .iterate_to_fixpoint()
-        .into_results_cursor(body_ref);
+        .into_results_cursor(body);
 
     // Calculate the MIR locals which have been previously
     // borrowed (even if they are still active).
     let borrowed_locals_results =
-        MaybeBorrowedLocals.into_engine(tcx, body_ref).pass_name("coroutine").iterate_to_fixpoint();
+        MaybeBorrowedLocals.into_engine(tcx, body).pass_name("coroutine").iterate_to_fixpoint();
 
-    let mut borrowed_locals_cursor = borrowed_locals_results.cloned_results_cursor(body_ref);
+    let mut borrowed_locals_cursor = borrowed_locals_results.cloned_results_cursor(body);
 
     // Calculate the MIR locals that we actually need to keep storage around
     // for.
     let mut requires_storage_results =
         MaybeRequiresStorage::new(borrowed_locals_results.cloned_results_cursor(body))
-            .into_engine(tcx, body_ref)
+            .into_engine(tcx, body)
             .iterate_to_fixpoint();
-    let mut requires_storage_cursor = requires_storage_results.as_results_cursor(body_ref);
+    let mut requires_storage_cursor = requires_storage_results.as_results_cursor(body);
 
     // Calculate the liveness of MIR locals ignoring borrows.
     let mut liveness = MaybeLiveLocals
-        .into_engine(tcx, body_ref)
+        .into_engine(tcx, body)
         .pass_name("coroutine")
         .iterate_to_fixpoint()
-        .into_results_cursor(body_ref);
+        .into_results_cursor(body);
 
     let mut storage_liveness_map = IndexVec::from_elem(None, &body.basic_blocks);
     let mut live_locals_at_suspension_points = Vec::new();
@@ -742,11 +757,11 @@ fn locals_live_across_suspend_points<'tcx>(
     // saving.
     let live_locals_at_suspension_points = live_locals_at_suspension_points
         .iter()
-        .map(|live_here| saved_locals.renumber_bitset(&live_here))
+        .map(|live_here| saved_locals.renumber_bitset(live_here))
         .collect();
 
     let storage_conflicts = compute_storage_conflicts(
-        body_ref,
+        body,
         &saved_locals,
         always_live_locals.clone(),
         requires_storage_results,
@@ -778,7 +793,7 @@ impl CoroutineSavedLocals {
     /// Transforms a `BitSet<Local>` that contains only locals saved across yield points to the
     /// equivalent `BitSet<CoroutineSavedLocal>`.
     fn renumber_bitset(&self, input: &BitSet<Local>) -> BitSet<CoroutineSavedLocal> {
-        assert!(self.superset(&input), "{:?} not a superset of {:?}", self.0, input);
+        assert!(self.superset(input), "{:?} not a superset of {:?}", self.0, input);
         let mut out = BitSet::new_empty(self.count());
         for (saved_local, local) in self.iter_enumerated() {
             if input.contains(local) {
@@ -829,7 +844,7 @@ fn compute_storage_conflicts<'mir, 'tcx>(
     // Compute the storage conflicts for all eligible locals.
     let mut visitor = StorageConflictVisitor {
         body,
-        saved_locals: &saved_locals,
+        saved_locals: saved_locals,
         local_conflicts: BitMatrix::from_row_n(&ineligible_locals, body.local_decls.len()),
     };
 
@@ -1128,7 +1143,7 @@ fn create_coroutine_drop_shim<'tcx>(
     // The returned state and the poisoned state fall through to the default
     // case which is just to return
 
-    insert_switch(&mut body, cases, &transform, TerminatorKind::Return);
+    insert_switch(&mut body, cases, transform, TerminatorKind::Return);
 
     for block in body.basic_blocks_mut() {
         let kind = &mut block.terminator_mut().kind;
@@ -1162,7 +1177,7 @@ fn create_coroutine_drop_shim<'tcx>(
     pm::run_passes_no_validate(
         tcx,
         &mut body,
-        &[&abort_unwinding_calls::AbortUnwindingCalls],
+        &[&abort_unwinding_calls::AbortUnwindingCalls, &add_call_guards::CriticalCallEdges],
         None,
     );
 
@@ -1337,7 +1352,15 @@ fn create_coroutine_resume_function<'tcx>(
     insert_switch(body, cases, &transform, TerminatorKind::Unreachable);
 
     make_coroutine_state_argument_indirect(tcx, body);
-    make_coroutine_state_argument_pinned(tcx, body);
+
+    match coroutine_kind {
+        // Iterator::next doesn't accept a pinned argument,
+        // unlike for all other coroutine kinds.
+        CoroutineKind::Gen(_) => {}
+        _ => {
+            make_coroutine_state_argument_pinned(tcx, body);
+        }
+    }
 
     // Make sure we remove dead blocks to remove
     // unrelated code from the drop part of the function
@@ -1465,7 +1488,7 @@ pub(crate) fn mir_coroutine_witnesses<'tcx>(
 
     // The witness simply contains all locals live across suspend points.
 
-    let always_live_locals = always_storage_live_locals(&body);
+    let always_live_locals = always_storage_live_locals(body);
     let liveness_info = locals_live_across_suspend_points(tcx, body, &always_live_locals, movable);
 
     // Extract locals which are live across suspension point into `layout`
@@ -1473,7 +1496,7 @@ pub(crate) fn mir_coroutine_witnesses<'tcx>(
     // `storage_liveness` tells us which locals have live storage at suspension points
     let (_, coroutine_layout, _) = compute_layout(liveness_info, body);
 
-    check_suspend_tys(tcx, &coroutine_layout, &body);
+    check_suspend_tys(tcx, &coroutine_layout, body);
 
     Some(coroutine_layout)
 }
@@ -1504,6 +1527,7 @@ impl<'tcx> MirPass<'tcx> for StateTransform {
         };
 
         let is_async_kind = matches!(body.coroutine_kind(), Some(CoroutineKind::Async(_)));
+        let is_gen_kind = matches!(body.coroutine_kind(), Some(CoroutineKind::Gen(_)));
         let (state_adt_ref, state_args) = match body.coroutine_kind().unwrap() {
             CoroutineKind::Async(_) => {
                 // Compute Poll<return_ty>
@@ -1564,7 +1588,7 @@ impl<'tcx> MirPass<'tcx> for StateTransform {
             },
         );
 
-        let always_live_locals = always_storage_live_locals(&body);
+        let always_live_locals = always_storage_live_locals(body);
 
         let liveness_info =
             locals_live_across_suspend_points(tcx, body, &always_live_locals, movable);
@@ -1608,6 +1632,11 @@ impl<'tcx> MirPass<'tcx> for StateTransform {
         // Update our MIR struct to reflect the changes we've made
         body.arg_count = 2; // self, resume arg
         body.spread_arg = None;
+
+        // Remove the context argument within generator bodies.
+        if is_gen_kind {
+            transform_gen_context(tcx, body);
+        }
 
         // The original arguments to the function are no longer arguments, mark them as such.
         // Otherwise they'll conflict with our new arguments, which although they don't have

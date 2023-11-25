@@ -2060,9 +2060,9 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.10.5"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
+checksum = "b1c173a5686ce8bfa551b3563d0c2170bf24ca44da99c7ca4bfdab5418c3fe57"
 dependencies = [
  "either",
 ]
@@ -2591,9 +2591,9 @@ checksum = "830b246a0e5f20af87141b25c173cd1b609bd7779a4617d6ec582abaf90870f3"
 
 [[package]]
 name = "object"
-version = "0.32.0"
+version = "0.32.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77ac5bbd07aea88c60a577a1ce218075ffd59208b2d7ca97adf9bfc5aeb21ebe"
+checksum = "9cf5f9dd3933bd50a9e1f149ec995f39ae2c496d31fd772c1fd45ebc27e902b0"
 dependencies = [
  "compiler_builtins",
  "crc32fast",
@@ -3471,6 +3471,7 @@ dependencies = [
 name = "rustc_ast_pretty"
 version = "0.0.0"
 dependencies = [
+ "itertools",
  "rustc_ast",
  "rustc_span",
  "thin-vec",
@@ -3523,7 +3524,6 @@ dependencies = [
  "rustc_macros",
  "rustc_middle",
  "rustc_mir_dataflow",
- "rustc_serialize",
  "rustc_session",
  "rustc_span",
  "rustc_target",
@@ -3934,7 +3934,6 @@ dependencies = [
  "rustc_lint",
  "rustc_macros",
  "rustc_middle",
- "rustc_serialize",
  "rustc_session",
  "rustc_span",
  "rustc_target",
@@ -3970,9 +3969,20 @@ name = "rustc_index"
 version = "0.0.0"
 dependencies = [
  "arrayvec",
+ "rustc_index_macros",
  "rustc_macros",
  "rustc_serialize",
  "smallvec",
+]
+
+[[package]]
+name = "rustc_index_macros"
+version = "0.0.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.29",
+ "synstructure",
 ]
 
 [[package]]
@@ -3986,7 +3996,6 @@ dependencies = [
  "rustc_index",
  "rustc_macros",
  "rustc_middle",
- "rustc_serialize",
  "rustc_span",
  "rustc_target",
  "smallvec",
@@ -4204,7 +4213,6 @@ dependencies = [
  "rustc_infer",
  "rustc_macros",
  "rustc_middle",
- "rustc_serialize",
  "rustc_session",
  "rustc_span",
  "rustc_target",
@@ -4228,7 +4236,6 @@ dependencies = [
  "rustc_index",
  "rustc_macros",
  "rustc_middle",
- "rustc_serialize",
  "rustc_span",
  "rustc_target",
  "smallvec",
@@ -4255,7 +4262,6 @@ dependencies = [
  "rustc_middle",
  "rustc_mir_build",
  "rustc_mir_dataflow",
- "rustc_serialize",
  "rustc_session",
  "rustc_span",
  "rustc_target",
@@ -4329,7 +4335,6 @@ dependencies = [
  "rustc_lexer",
  "rustc_macros",
  "rustc_middle",
- "rustc_serialize",
  "rustc_session",
  "rustc_span",
  "rustc_target",
@@ -4553,7 +4558,6 @@ dependencies = [
  "rustc_middle",
  "rustc_parse_format",
  "rustc_query_system",
- "rustc_serialize",
  "rustc_session",
  "rustc_span",
  "rustc_target",
@@ -5763,9 +5767,9 @@ dependencies = [
 
 [[package]]
 name = "unicase"
-version = "2.6.0"
+version = "2.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "50f37be617794602aabbeee0be4f259dc1778fabe05e2d67ee8f79326d5cb4f6"
+checksum = "f7d2d4dafb69621809a81864c9c1b864479e1235c0dd4e199924b9742439ed89"
 dependencies = [
  "version_check",
 ]
@@ -6068,9 +6072,9 @@ dependencies = [
 
 [[package]]
 name = "windows-bindgen"
-version = "0.51.1"
+version = "0.52.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc1f16b778125675feee0d15d6dd9f6af0e3ac52b3233d63a10aa39230c1cd75"
+checksum = "970efb0b6849eb8a87a898f586af7cc167567b070014c7434514c0bde0ca341c"
 dependencies = [
  "proc-macro2",
  "rayon",
@@ -6080,9 +6084,9 @@ dependencies = [
 
 [[package]]
 name = "windows-metadata"
-version = "0.51.1"
+version = "0.52.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "753135d996f9da437c0b31dbde3032489a61708361929bcc07d4fba0b161000e"
+checksum = "218fd59201e26acdbb894fa2b302d1de84bf3eec7d0eb894ac8e9c5a854ee4ef"
 
 [[package]]
 name = "windows-sys"

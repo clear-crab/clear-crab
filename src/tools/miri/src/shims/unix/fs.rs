@@ -288,8 +288,8 @@ pub struct FileHandler {
     pub handles: BTreeMap<i32, Box<dyn FileDescriptor>>,
 }
 
-impl VisitTags for FileHandler {
-    fn visit_tags(&self, _visit: &mut dyn FnMut(BorTag)) {
+impl VisitProvenance for FileHandler {
+    fn visit_provenance(&self, _visit: &mut VisitWith<'_>) {
         // All our FileDescriptor do not have any tags.
     }
 }
@@ -490,12 +490,12 @@ impl Default for DirHandler {
     }
 }
 
-impl VisitTags for DirHandler {
-    fn visit_tags(&self, visit: &mut dyn FnMut(BorTag)) {
+impl VisitProvenance for DirHandler {
+    fn visit_provenance(&self, visit: &mut VisitWith<'_>) {
         let DirHandler { streams, next_id: _ } = self;
 
         for dir in streams.values() {
-            dir.entry.visit_tags(visit);
+            dir.entry.visit_provenance(visit);
         }
     }
 }
@@ -1504,15 +1504,8 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
         }
     }
 
-    fn ftruncate64(
-        &mut self,
-        fd_op: &OpTy<'tcx, Provenance>,
-        length_op: &OpTy<'tcx, Provenance>,
-    ) -> InterpResult<'tcx, Scalar<Provenance>> {
+    fn ftruncate64(&mut self, fd: i32, length: i128) -> InterpResult<'tcx, Scalar<Provenance>> {
         let this = self.eval_context_mut();
-
-        let fd = this.read_scalar(fd_op)?.to_i32()?;
-        let length = this.read_scalar(length_op)?.to_i64()?;
 
         // Reject if isolation is enabled.
         if let IsolatedOp::Reject(reject_with) = this.machine.isolated_op {

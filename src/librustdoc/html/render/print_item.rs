@@ -369,8 +369,8 @@ fn item_module(w: &mut Buffer, cx: &mut Context<'_>, item: &clean::Item, items: 
         if let (Some(a), Some(b)) = (s1, s2) {
             match (a.is_stable(), b.is_stable()) {
                 (true, true) | (false, false) => {}
-                (false, true) => return Ordering::Less,
-                (true, false) => return Ordering::Greater,
+                (false, true) => return Ordering::Greater,
+                (true, false) => return Ordering::Less,
             }
         }
         let lhs = i1.name.unwrap_or(kw::Empty);
@@ -596,8 +596,10 @@ fn extra_info_tags<'a, 'tcx: 'a>(
 
         // The "rustc_private" crates are permanently unstable so it makes no sense
         // to render "unstable" everywhere.
-        if item.stability(tcx).as_ref().map(|s| s.is_unstable() && s.feature != sym::rustc_private)
-            == Some(true)
+        if item
+            .stability(tcx)
+            .as_ref()
+            .is_some_and(|s| s.is_unstable() && s.feature != sym::rustc_private)
         {
             write!(f, "{}", tag_html("unstable", "", "Experimental"))?;
         }
@@ -1501,8 +1503,10 @@ fn print_tuple_struct_fields<'a, 'cx: 'a>(
     s: &'a [clean::Item],
 ) -> impl fmt::Display + 'a + Captures<'cx> {
     display_fn(|f| {
-        if s.iter()
-            .all(|field| matches!(*field.kind, clean::StrippedItem(box clean::StructFieldItem(..))))
+        if !s.is_empty()
+            && s.iter().all(|field| {
+                matches!(*field.kind, clean::StrippedItem(box clean::StructFieldItem(..)))
+            })
         {
             return f.write_str("/* private fields */");
         }
@@ -2275,9 +2279,11 @@ fn render_struct_fields(
         }
         Some(CtorKind::Fn) => {
             w.write_str("(");
-            if fields.iter().all(|field| {
-                matches!(*field.kind, clean::StrippedItem(box clean::StructFieldItem(..)))
-            }) {
+            if !fields.is_empty()
+                && fields.iter().all(|field| {
+                    matches!(*field.kind, clean::StrippedItem(box clean::StructFieldItem(..)))
+                })
+            {
                 write!(w, "/* private fields */");
             } else {
                 for (i, field) in fields.iter().enumerate() {

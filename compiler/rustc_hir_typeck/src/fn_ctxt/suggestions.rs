@@ -79,16 +79,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             return false;
         }
         if let Some((fn_id, fn_decl, can_suggest)) = self.get_fn_decl(blk_id) {
-            pointing_at_return_type = self.suggest_missing_return_type(
-                err,
-                &fn_decl,
-                expected,
-                found,
-                can_suggest,
-                fn_id,
-            );
+            pointing_at_return_type =
+                self.suggest_missing_return_type(err, fn_decl, expected, found, can_suggest, fn_id);
             self.suggest_missing_break_or_return_expr(
-                err, expr, &fn_decl, expected, found, blk_id, fn_id,
+                err, expr, fn_decl, expected, found, blk_id, fn_id,
             );
         }
         pointing_at_return_type
@@ -2139,7 +2133,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     /// opt.map(|param| { takes_ref(param) });
     /// ```
     fn can_use_as_ref(&self, expr: &hir::Expr<'_>) -> Option<(Vec<(Span, String)>, &'static str)> {
-        let hir::ExprKind::Path(hir::QPath::Resolved(_, ref path)) = expr.kind else {
+        let hir::ExprKind::Path(hir::QPath::Resolved(_, path)) = expr.kind else {
             return None;
         };
 
@@ -2295,16 +2289,18 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 };
                 if self.can_coerce(ref_ty, expected) {
                     let mut sugg_sp = sp;
-                    if let hir::ExprKind::MethodCall(ref segment, receiver, args, _) = expr.kind {
+                    if let hir::ExprKind::MethodCall(segment, receiver, args, _) = expr.kind {
                         let clone_trait =
                             self.tcx.require_lang_item(LangItem::Clone, Some(segment.ident.span));
                         if args.is_empty()
-                            && self.typeck_results.borrow().type_dependent_def_id(expr.hir_id).map(
-                                |did| {
+                            && self
+                                .typeck_results
+                                .borrow()
+                                .type_dependent_def_id(expr.hir_id)
+                                .is_some_and(|did| {
                                     let ai = self.tcx.associated_item(did);
                                     ai.trait_container(self.tcx) == Some(clone_trait)
-                                },
-                            ) == Some(true)
+                                })
                             && segment.ident.name == sym::clone
                         {
                             // If this expression had a clone call when suggesting borrowing
@@ -2313,7 +2309,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         }
                     }
 
-                    if let hir::ExprKind::Unary(hir::UnOp::Deref, ref inner) = expr.kind
+                    if let hir::ExprKind::Unary(hir::UnOp::Deref, inner) = expr.kind
                         && let Some(1) = self.deref_steps(expected, checked_ty)
                     {
                         // We have `*&T`, check if what was expected was `&T`.
@@ -2406,11 +2402,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     ));
                 }
             }
-            (
-                hir::ExprKind::AddrOf(hir::BorrowKind::Ref, _, ref expr),
-                _,
-                &ty::Ref(_, checked, _),
-            ) if self.can_sub(self.param_env, checked, expected) => {
+            (hir::ExprKind::AddrOf(hir::BorrowKind::Ref, _, expr), _, &ty::Ref(_, checked, _))
+                if self.can_sub(self.param_env, checked, expected) =>
+            {
                 let make_sugg = |start: Span, end: BytePos| {
                     // skip `(` for tuples such as `(c) = (&123)`.
                     // make sure we won't suggest like `(c) = 123)` which is incorrect.

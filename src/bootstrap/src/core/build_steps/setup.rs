@@ -1,6 +1,7 @@
 use crate::core::builder::{Builder, RunConfig, ShouldRun, Step};
+use crate::t;
+use crate::utils::change_tracker::CONFIG_CHANGE_HISTORY;
 use crate::Config;
-use crate::{t, CONFIG_CHANGE_HISTORY};
 use sha2::Digest;
 use std::env::consts::EXE_SUFFIX;
 use std::fmt::Write as _;
@@ -226,7 +227,7 @@ fn setup_config_toml(path: &PathBuf, profile: Profile, config: &Config) {
         return;
     }
 
-    let latest_change_id = CONFIG_CHANGE_HISTORY.last().unwrap();
+    let latest_change_id = CONFIG_CHANGE_HISTORY.last().unwrap().change_id;
     let settings = format!(
         "# Includes one of the default files in src/bootstrap/defaults\n\
     profile = \"{profile}\"\n\

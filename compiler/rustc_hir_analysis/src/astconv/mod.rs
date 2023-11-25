@@ -945,7 +945,11 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 Applicability::MachineApplicable,
             );
         } else {
-            match (types, traits) {
+            let mut types = types.to_vec();
+            types.sort();
+            let mut traits = traits.to_vec();
+            traits.sort();
+            match (&types[..], &traits[..]) {
                 ([], []) => {
                     err.span_suggestion_verbose(
                         span,
@@ -1662,7 +1666,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 .copied()
                 .filter(|&(impl_, _)| {
                     infcx.probe(|_| {
-                        let ocx = ObligationCtxt::new(&infcx);
+                        let ocx = ObligationCtxt::new(infcx);
                         ocx.register_obligations(obligations.clone());
 
                         let impl_args = infcx.fresh_args_for_item(span, impl_);
@@ -1670,10 +1674,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                         let impl_ty = ocx.normalize(&cause, param_env, impl_ty);
 
                         // Check that the self types can be related.
-                        // FIXME(inherent_associated_types): Should we use `eq` here? Method probing uses
-                        // `sup` for this situtation, too. What for? To constrain inference variables?
-                        if ocx.sup(&ObligationCause::dummy(), param_env, impl_ty, self_ty).is_err()
-                        {
+                        if ocx.eq(&ObligationCause::dummy(), param_env, impl_ty, self_ty).is_err() {
                             return false;
                         }
 
@@ -1975,7 +1976,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                     types_and_spans[..types_and_spans.len() - 1]
                         .iter()
                         .map(|(x, _)| x.as_str())
-                        .intersperse(&", ")
+                        .intersperse(", ")
                         .collect::<String>()
                 ),
                 [(only, _)] => only.to_string(),

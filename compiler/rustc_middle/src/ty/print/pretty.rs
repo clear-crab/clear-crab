@@ -8,6 +8,7 @@ use crate::ty::{
 };
 use crate::ty::{GenericArg, GenericArgKind};
 use rustc_apfloat::ieee::{Double, Single};
+use rustc_apfloat::Float;
 use rustc_data_structures::fx::{FxHashMap, FxIndexMap};
 use rustc_data_structures::sso::SsoHashSet;
 use rustc_hir as hir;
@@ -322,7 +323,7 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
             && let Some(symbol) = self.tcx().trimmed_def_paths(()).get(&def_id)
         {
             // If `Assoc` is unique, we don't want to talk about `Trait::Assoc`.
-            self.write_str(get_local_name(&self, *symbol, def_id, key).as_str())?;
+            self.write_str(get_local_name(self, *symbol, def_id, key).as_str())?;
             return Ok(true);
         }
         if let Some(symbol) = key.get_opt_name() {
@@ -332,7 +333,7 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
                 && let Some(symbol) = parent_key.get_opt_name()
             {
                 // Trait
-                self.write_str(get_local_name(&self, symbol, parent, parent_key).as_str())?;
+                self.write_str(get_local_name(self, symbol, parent, parent_key).as_str())?;
                 self.write_str("::")?;
             } else if let DefKind::Variant = kind
                 && let Some(parent) = self.tcx().opt_parent(def_id)
@@ -343,7 +344,7 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
 
                 // For associated items and variants, we want the "full" path, namely, include
                 // the parent type in the path. For example, `Iterator::Item`.
-                self.write_str(get_local_name(&self, symbol, parent, parent_key).as_str())?;
+                self.write_str(get_local_name(self, symbol, parent, parent_key).as_str())?;
                 self.write_str("::")?;
             } else if let DefKind::Struct
             | DefKind::Union
@@ -358,7 +359,7 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
                 // If not covered above, like for example items out of `impl` blocks, fallback.
                 return Ok(false);
             }
-            self.write_str(get_local_name(&self, symbol, def_id, key).as_str())?;
+            self.write_str(get_local_name(self, symbol, def_id, key).as_str())?;
             return Ok(true);
         }
         Ok(false)
@@ -660,7 +661,7 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
                 p!(print(ty::TypeAndMut { ty, mutbl }))
             }
             ty::Never => p!("!"),
-            ty::Tuple(ref tys) => {
+            ty::Tuple(tys) => {
                 p!("(", comma_sep(tys.iter()));
                 if tys.len() == 1 {
                     p!(",");
@@ -1477,10 +1478,12 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
             ty::Bool if int == ScalarInt::TRUE => p!("true"),
             // Float
             ty::Float(ty::FloatTy::F32) => {
-                p!(write("{}f32", Single::try_from(int).unwrap()))
+                let val = Single::try_from(int).unwrap();
+                p!(write("{}{}f32", val, if val.is_finite() { "" } else { "_" }))
             }
             ty::Float(ty::FloatTy::F64) => {
-                p!(write("{}f64", Double::try_from(int).unwrap()))
+                let val = Double::try_from(int).unwrap();
+                p!(write("{}{}f64", val, if val.is_finite() { "" } else { "_" }))
             }
             // Int
             ty::Uint(_) | ty::Int(_) => {
@@ -2399,7 +2402,7 @@ impl<'tcx> FmtPrinter<'_, 'tcx> {
         let possible_names = ('a'..='z').rev().map(|s| Symbol::intern(&format!("'{s}")));
 
         let mut available_names = possible_names
-            .filter(|name| !self.used_region_names.contains(&name))
+            .filter(|name| !self.used_region_names.contains(name))
             .collect::<Vec<_>>();
         debug!(?available_names);
         let num_available = available_names.len();
@@ -2445,7 +2448,7 @@ impl<'tcx> FmtPrinter<'_, 'tcx> {
                             br: ty::BoundRegion| {
                 let (name, kind) = match br.kind {
                     ty::BrAnon | ty::BrEnv => {
-                        let name = next_name(&self);
+                        let name = next_name(self);
 
                         if let Some(lt_idx) = lifetime_idx {
                             if lt_idx > binder_level_idx {
@@ -2461,7 +2464,7 @@ impl<'tcx> FmtPrinter<'_, 'tcx> {
                         (name, ty::BrNamed(CRATE_DEF_ID.to_def_id(), name))
                     }
                     ty::BrNamed(def_id, kw::UnderscoreLifetime | kw::Empty) => {
-                        let name = next_name(&self);
+                        let name = next_name(self);
 
                         if let Some(lt_idx) = lifetime_idx {
                             if lt_idx > binder_level_idx {
@@ -2781,11 +2784,6 @@ define_print! {
             ty::PredicateKind::ObjectSafe(trait_def_id) => {
                 p!("the trait `", print_def_path(trait_def_id, &[]), "` is object-safe")
             }
-            ty::PredicateKind::ClosureKind(closure_def_id, _closure_args, kind) => p!(
-                "the closure `",
-                print_value_path(closure_def_id, &[]),
-                write("` implements the trait `{}`", kind)
-            ),
             ty::PredicateKind::ConstEquate(c1, c2) => {
                 p!("the constant `", print(c1), "` equals `", print(c2), "`")
             }
@@ -3018,7 +3016,8 @@ fn for_each_def(tcx: TyCtxt<'_>, mut collect_fn: impl for<'b> FnMut(&'b Ident, N
 /// The implementation uses similar import discovery logic to that of 'use' suggestions.
 ///
 /// See also [`DelayDm`](rustc_error_messages::DelayDm) and [`with_no_trimmed_paths!`].
-fn trimmed_def_paths(tcx: TyCtxt<'_>, (): ()) -> FxHashMap<DefId, Symbol> {
+// this is pub to be able to intra-doc-link it
+pub fn trimmed_def_paths(tcx: TyCtxt<'_>, (): ()) -> FxHashMap<DefId, Symbol> {
     let mut map: FxHashMap<DefId, Symbol> = FxHashMap::default();
 
     if let TrimmedDefPaths::GoodPath = tcx.sess.opts.trimmed_def_paths {

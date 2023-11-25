@@ -196,7 +196,7 @@ impl Direction for Backward {
     {
         results.reset_to_block_entry(state, block);
 
-        vis.visit_block_end(results, &state, block_data, block);
+        vis.visit_block_end(results, state, block_data, block);
 
         // Terminator
         let loc = Location { block, statement_index: block_data.statements.len() };
@@ -287,12 +287,12 @@ impl Direction for Backward {
     }
 }
 
-struct BackwardSwitchIntEdgeEffectsApplier<'a, 'tcx, D, F> {
-    body: &'a mir::Body<'tcx>,
+struct BackwardSwitchIntEdgeEffectsApplier<'mir, 'tcx, D, F> {
+    body: &'mir mir::Body<'tcx>,
     pred: BasicBlock,
-    exit_state: &'a mut D,
+    exit_state: &'mir mut D,
     bb: BasicBlock,
-    propagate: &'a mut F,
+    propagate: &'mir mut F,
     effects_applied: bool,
 }
 
@@ -523,9 +523,9 @@ impl Direction for Forward {
     }
 }
 
-struct ForwardSwitchIntEdgeEffectsApplier<'a, D, F> {
-    exit_state: &'a mut D,
-    targets: &'a SwitchTargets,
+struct ForwardSwitchIntEdgeEffectsApplier<'mir, D, F> {
+    exit_state: &'mir mut D,
+    targets: &'mir SwitchTargets,
     propagate: F,
 
     effects_applied: bool,
