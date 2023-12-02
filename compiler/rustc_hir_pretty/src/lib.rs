@@ -1623,7 +1623,7 @@ impl<'a> State<'a> {
                 self.print_ident(item_segment.ident);
                 self.print_generic_args(item_segment.args(), colons_before_params)
             }
-            hir::QPath::LangItem(lang_item, span, _) => {
+            hir::QPath::LangItem(lang_item, span) => {
                 self.word("#[lang = \"");
                 self.print_ident(Ident::new(lang_item.name(), span));
                 self.word("\"]");
@@ -1724,6 +1724,7 @@ impl<'a> State<'a> {
         // is that it doesn't matter
         match pat.kind {
             PatKind::Wild => self.word("_"),
+            PatKind::Never => self.word("!"),
             PatKind::Binding(BindingAnnotation(by_ref, mutbl), _, ident, sub) => {
                 if by_ref == ByRef::Yes {
                     self.word_nbsp("ref");

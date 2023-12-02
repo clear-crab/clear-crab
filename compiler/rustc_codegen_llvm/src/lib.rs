@@ -40,8 +40,7 @@ use rustc_codegen_ssa::traits::*;
 use rustc_codegen_ssa::ModuleCodegen;
 use rustc_codegen_ssa::{CodegenResults, CompiledModule};
 use rustc_data_structures::fx::FxIndexMap;
-use rustc_errors::{DiagnosticMessage, ErrorGuaranteed, FatalError, Handler, SubdiagnosticMessage};
-use rustc_fluent_macro::fluent_messages;
+use rustc_errors::{ErrorGuaranteed, FatalError, Handler};
 use rustc_metadata::EncodedMetadata;
 use rustc_middle::dep_graph::{WorkProduct, WorkProductId};
 use rustc_middle::ty::TyCtxt;
@@ -53,6 +52,7 @@ use rustc_span::symbol::Symbol;
 use std::any::Any;
 use std::ffi::CStr;
 use std::io::Write;
+use std::mem::ManuallyDrop;
 
 mod back {
     pub mod archive;
@@ -92,7 +92,7 @@ mod type_of;
 mod va_arg;
 mod value;
 
-fluent_messages! { "../messages.ftl" }
+rustc_fluent_macro::fluent_messages! { "../messages.ftl" }
 
 #[derive(Clone)]
 pub struct LlvmCodegenBackend(());
@@ -408,8 +408,9 @@ pub struct ModuleLlvm {
     llcx: &'static mut llvm::Context,
     llmod_raw: *const llvm::Module,
 
-    // independent from llcx and llmod_raw, resources get disposed by drop impl
-    tm: OwnedTargetMachine,
+    // This field is `ManuallyDrop` because it is important that the `TargetMachine`
+    // is disposed prior to the `Context` being disposed otherwise UAFs can occur.
+    tm: ManuallyDrop<OwnedTargetMachine>,
 }
 
 unsafe impl Send for ModuleLlvm {}
@@ -420,7 +421,11 @@ impl ModuleLlvm {
         unsafe {
             let llcx = llvm::LLVMRustContextCreate(tcx.sess.fewer_names());
             let llmod_raw = context::create_module(tcx, llcx, mod_name) as *const _;
-            ModuleLlvm { llmod_raw, llcx, tm: create_target_machine(tcx, mod_name) }
+            ModuleLlvm {
+                llmod_raw,
+                llcx,
+                tm: ManuallyDrop::new(create_target_machine(tcx, mod_name)),
+            }
         }
     }
 
@@ -428,7 +433,11 @@ impl ModuleLlvm {
         unsafe {
             let llcx = llvm::LLVMRustContextCreate(tcx.sess.fewer_names());
             let llmod_raw = context::create_module(tcx, llcx, mod_name) as *const _;
-            ModuleLlvm { llmod_raw, llcx, tm: create_informational_target_machine(tcx.sess) }
+            ModuleLlvm {
+                llmod_raw,
+                llcx,
+                tm: ManuallyDrop::new(create_informational_target_machine(tcx.sess)),
+            }
         }
     }
 
@@ -449,7 +458,7 @@ impl ModuleLlvm {
                 }
             };
 
-            Ok(ModuleLlvm { llmod_raw, llcx, tm })
+            Ok(ModuleLlvm { llmod_raw, llcx, tm: ManuallyDrop::new(tm) })
         }
     }
 
@@ -461,6 +470,7 @@ impl ModuleLlvm {
 impl Drop for ModuleLlvm {
     fn drop(&mut self) {
         unsafe {
+            ManuallyDrop::drop(&mut self.tm);
             llvm::LLVMContextDispose(&mut *(self.llcx as *mut _));
         }
     }

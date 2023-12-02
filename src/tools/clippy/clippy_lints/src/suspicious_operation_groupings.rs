@@ -6,7 +6,7 @@ use rustc_ast::ast::{BinOpKind, Expr, ExprKind, StmtKind};
 use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::Applicability;
 use rustc_lint::{EarlyContext, EarlyLintPass};
-use rustc_session::{declare_lint_pass, declare_tool_lint};
+use rustc_session::declare_lint_pass;
 use rustc_span::source_map::Spanned;
 use rustc_span::symbol::Ident;
 use rustc_span::Span;
@@ -298,7 +298,7 @@ fn replace_left_sugg(
 ) -> String {
     format!(
         "{left_suggestion} {} {}",
-        binop.op.to_string(),
+        binop.op.as_str(),
         snippet_with_applicability(cx, binop.right.span, "..", applicability),
     )
 }
@@ -312,7 +312,7 @@ fn replace_right_sugg(
     format!(
         "{} {} {right_suggestion}",
         snippet_with_applicability(cx, binop.left.span, "..", applicability),
-        binop.op.to_string(),
+        binop.op.as_str(),
     )
 }
 

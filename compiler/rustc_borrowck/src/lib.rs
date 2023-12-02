@@ -22,8 +22,7 @@ extern crate tracing;
 
 use rustc_data_structures::fx::{FxIndexMap, FxIndexSet};
 use rustc_data_structures::graph::dominators::Dominators;
-use rustc_errors::{Diagnostic, DiagnosticBuilder, DiagnosticMessage, SubdiagnosticMessage};
-use rustc_fluent_macro::fluent_messages;
+use rustc_errors::{Diagnostic, DiagnosticBuilder};
 use rustc_hir as hir;
 use rustc_hir::def_id::LocalDefId;
 use rustc_index::bit_set::{BitSet, ChunkedBitSet};
@@ -35,7 +34,7 @@ use rustc_middle::mir::tcx::PlaceTy;
 use rustc_middle::mir::*;
 use rustc_middle::query::Providers;
 use rustc_middle::traits::DefiningAnchor;
-use rustc_middle::ty::{self, CapturedPlace, ParamEnv, RegionVid, TyCtxt};
+use rustc_middle::ty::{self, ParamEnv, RegionVid, TyCtxt};
 use rustc_session::lint::builtin::UNUSED_MUT;
 use rustc_span::{Span, Symbol};
 use rustc_target::abi::FieldIdx;
@@ -43,6 +42,7 @@ use rustc_target::abi::FieldIdx;
 use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::marker::PhantomData;
 use std::ops::Deref;
 use std::rc::Rc;
 
@@ -65,19 +65,18 @@ use self::path_utils::*;
 
 pub mod borrow_set;
 mod borrowck_errors;
-mod constraint_generation;
 mod constraints;
 mod dataflow;
 mod def_use;
 mod diagnostics;
 mod facts;
-mod invalidation;
 mod location;
 mod member_constraints;
 mod nll;
 mod path_utils;
 mod place_ext;
 mod places_conflict;
+mod polonius;
 mod prefixes;
 mod region_infer;
 mod renumber;
@@ -98,19 +97,10 @@ use places_conflict::{places_conflict, PlaceConflictBias};
 use region_infer::RegionInferenceContext;
 use renumber::RegionCtxt;
 
-fluent_messages! { "../messages.ftl" }
-
-// FIXME(eddyb) perhaps move this somewhere more centrally.
-#[derive(Debug)]
-struct Upvar<'tcx> {
-    place: CapturedPlace<'tcx>,
-
-    /// If true, the capture is behind a reference.
-    by_ref: bool,
-}
+rustc_fluent_macro::fluent_messages! { "../messages.ftl" }
 
 /// Associate some local constants with the `'tcx` lifetime
-struct TyCtxtConsts<'tcx>(TyCtxt<'tcx>);
+struct TyCtxtConsts<'tcx>(PhantomData<&'tcx ()>);
 impl<'tcx> TyCtxtConsts<'tcx> {
     const DEREF_PROJECTION: &'tcx [PlaceElem<'tcx>; 1] = &[ProjectionElem::Deref];
 }
@@ -135,7 +125,7 @@ fn mir_borrowck(tcx: TyCtxt<'_>, def: LocalDefId) -> &BorrowCheckResult<'_> {
         return tcx.arena.alloc(result);
     }
 
-    let hir_owner = tcx.hir().local_def_id_to_hir_id(def).owner;
+    let hir_owner = tcx.local_def_id_to_hir_id(def).owner;
 
     let infcx =
         tcx.infer_ctxt().with_opaque_type_inference(DefiningAnchor::Bind(hir_owner.def_id)).build();
@@ -193,18 +183,6 @@ fn do_mir_borrowck<'tcx>(
         infcx.set_tainted_by_errors(e);
         errors.set_tainted_by_errors(e);
     }
-    let upvars: Vec<_> = tcx
-        .closure_captures(def)
-        .iter()
-        .map(|&captured_place| {
-            let capture = captured_place.info.capture_kind;
-            let by_ref = match capture {
-                ty::UpvarCapture::ByValue => false,
-                ty::UpvarCapture::ByRef(..) => true,
-            };
-            Upvar { place: captured_place.clone(), by_ref }
-        })
-        .collect();
 
     // Replace all regions with fresh inference variables. This
     // requires first making our own copy of the MIR. This copy will
@@ -216,8 +194,7 @@ fn do_mir_borrowck<'tcx>(
         nll::replace_regions_in_mir(&infcx, param_env, &mut body_owned, &mut promoted);
     let body = &body_owned; // no further changes
 
-    let location_table_owned = LocationTable::new(body);
-    let location_table = &location_table_owned;
+    let location_table = LocationTable::new(body);
 
     let move_data = MoveData::gather_moves(body, tcx, param_env, |_| true);
     let promoted_move_data = promoted
@@ -249,12 +226,12 @@ fn do_mir_borrowck<'tcx>(
         free_regions,
         body,
         &promoted,
-        location_table,
+        &location_table,
         param_env,
         &mut flow_inits,
         &mdpe.move_data,
         &borrow_set,
-        &upvars,
+        tcx.closure_captures(def),
         consumer_options,
     );
 
@@ -313,7 +290,7 @@ fn do_mir_borrowck<'tcx>(
             param_env,
             body: promoted_body,
             move_data: &move_data,
-            location_table, // no need to create a real one for the promoted, it is not used
+            location_table: &location_table, // no need to create a real one for the promoted, it is not used
             movable_coroutine,
             fn_self_span_reported: Default::default(),
             locals_are_invalidated_at_exit,
@@ -324,7 +301,7 @@ fn do_mir_borrowck<'tcx>(
             used_mut: Default::default(),
             used_mut_upvars: SmallVec::new(),
             borrow_set: Rc::clone(&borrow_set),
-            upvars: Vec::new(),
+            upvars: &[],
             local_names: IndexVec::from_elem(None, &promoted_body.local_decls),
             region_names: RefCell::default(),
             next_region_name: RefCell::new(1),
@@ -354,7 +331,7 @@ fn do_mir_borrowck<'tcx>(
         param_env,
         body,
         move_data: &mdpe.move_data,
-        location_table,
+        location_table: &location_table,
         movable_coroutine,
         locals_are_invalidated_at_exit,
         fn_self_span_reported: Default::default(),
@@ -365,7 +342,7 @@ fn do_mir_borrowck<'tcx>(
         used_mut: Default::default(),
         used_mut_upvars: SmallVec::new(),
         borrow_set: Rc::clone(&borrow_set),
-        upvars,
+        upvars: tcx.closure_captures(def),
         local_names,
         region_names: RefCell::default(),
         next_region_name: RefCell::new(1),
@@ -456,7 +433,7 @@ fn do_mir_borrowck<'tcx>(
             promoted,
             borrow_set,
             region_inference_context: regioncx,
-            location_table: polonius_input.as_ref().map(|_| location_table_owned),
+            location_table: polonius_input.as_ref().map(|_| location_table),
             input_facts: polonius_input,
             output_facts,
         }))
@@ -584,7 +561,7 @@ struct MirBorrowckCtxt<'cx, 'tcx> {
     borrow_set: Rc<BorrowSet<'tcx>>,
 
     /// Information about upvars not necessarily preserved in types or MIR
-    upvars: Vec<Upvar<'tcx>>,
+    upvars: &'tcx [&'tcx ty::CapturedPlace<'tcx>],
 
     /// Names of local (user) variables (extracted from `var_debug_info`).
     local_names: IndexVec<Local, Option<Symbol>>,
@@ -1041,9 +1018,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         flow_state: &Flows<'cx, 'tcx>,
     ) -> bool {
         let mut error_reported = false;
-        let tcx = self.infcx.tcx;
-        let body = self.body;
-        let borrow_set = self.borrow_set.clone();
+        let borrow_set = Rc::clone(&self.borrow_set);
 
         // Use polonius output if it has been enabled.
         let mut polonius_output;
@@ -1060,8 +1035,8 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
 
         each_borrow_involving_path(
             self,
-            tcx,
-            body,
+            self.infcx.tcx,
+            self.body,
             location,
             (sd, place_span.0),
             &borrow_set,
@@ -2155,11 +2130,11 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                     && !self.has_buffered_errors()
                 {
                     // rust-lang/rust#46908: In pure NLL mode this code path should be
-                    // unreachable, but we use `delay_span_bug` because we can hit this when
+                    // unreachable, but we use `span_delayed_bug` because we can hit this when
                     // dereferencing a non-Copy raw pointer *and* have `-Ztreat-err-as-bug`
                     // enabled. We don't want to ICE for that case, as other errors will have
                     // been emitted (#52262).
-                    self.infcx.tcx.sess.delay_span_bug(
+                    self.infcx.tcx.sess.span_delayed_bug(
                         span,
                         format!(
                             "Accessing `{place:?}` with the kind `{kind:?}` shouldn't be possible",
@@ -2294,7 +2269,9 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                                     // unique path to the `&mut`
                                     hir::Mutability::Mut => {
                                         let mode = match self.is_upvar_field_projection(place) {
-                                            Some(field) if self.upvars[field.index()].by_ref => {
+                                            Some(field)
+                                                if self.upvars[field.index()].is_by_ref() =>
+                                            {
                                                 is_local_mutation_allowed
                                             }
                                             _ => LocalMutationIsAllowed::Yes,
@@ -2342,7 +2319,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                                  place={:?}, place_base={:?}",
                                 upvar, is_local_mutation_allowed, place, place_base
                             );
-                            match (upvar.place.mutability, is_local_mutation_allowed) {
+                            match (upvar.mutability, is_local_mutation_allowed) {
                                 (
                                     Mutability::Not,
                                     LocalMutationIsAllowed::No
@@ -2451,7 +2428,7 @@ mod error {
 
         pub fn buffer_error(&mut self, t: DiagnosticBuilder<'_, ErrorGuaranteed>) {
             if let None = self.tainted_by_errors {
-                self.tainted_by_errors = Some(self.tcx.sess.delay_span_bug(
+                self.tainted_by_errors = Some(self.tcx.sess.span_delayed_bug(
                     t.span.clone_ignoring_labels(),
                     "diagnostic buffered but not emitted",
                 ))

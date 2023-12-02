@@ -50,6 +50,8 @@ macro_rules! declare_features {
             }),+
         ];
 
+        const NUM_FEATURES: usize = UNSTABLE_FEATURES.len();
+
         /// A set of features to be used by later passes.
         #[derive(Clone, Default, Debug)]
         pub struct Features {
@@ -82,8 +84,14 @@ macro_rules! declare_features {
                 self.declared_features.insert(symbol);
             }
 
-            pub fn walk_feature_fields(&self, mut f: impl FnMut(&str, bool)) {
-                $(f(stringify!($feature), self.$feature);)+
+            /// This is intended for hashing the set of active features.
+            ///
+            /// The expectation is that this produces much smaller code than other alternatives.
+            ///
+            /// Note that the total feature count is pretty small, so this is not a huge array.
+            #[inline]
+            pub fn all_features(&self) -> [u8; NUM_FEATURES] {
+                [$(self.$feature as u8),+]
             }
 
             /// Is the given feature explicitly declared, i.e. named in a
@@ -147,7 +155,7 @@ macro_rules! declare_features {
 // was set.
 //
 // Note that the features are grouped into internal/user-facing and then
-// sorted by version inside those groups. This is enforced with tidy.
+// sorted alphabetically inside those groups. This is enforced with tidy.
 //
 // N.B., `tools/tidy/src/features.rs` parses this information directly out of the
 // source, so take care when modifying it.
@@ -346,8 +354,6 @@ declare_features! (
     (unstable, async_fn_track_caller, "1.73.0", Some(110011), None),
     /// Allows builtin # foo() syntax
     (unstable, builtin_syntax, "1.71.0", Some(110680), None),
-    /// Allows `c"foo"` literals.
-    (unstable, c_str_literals, "1.71.0", Some(105723), None),
     /// Treat `extern "C"` function as nounwind.
     (unstable, c_unwind, "1.52.0", Some(74990), None),
     /// Allows using C-variadics.
@@ -492,6 +498,9 @@ declare_features! (
     (incomplete, lazy_type_alias, "1.72.0", Some(112792), None),
     /// Allows `if/while p && let q = r && ...` chains.
     (unstable, let_chains, "1.37.0", Some(53667), None),
+    /// Allows using `#[link(kind = "link-arg", name = "...")]`
+    /// to pass custom arguments to the linker.
+    (unstable, link_arg_attribute, "CURRENT_RUSTC_VERSION", Some(99427), None),
     /// Allows using `reason` in lint attributes and the `#[expect(lint)]` lint check.
     (unstable, lint_reasons, "1.31.0", Some(54503), None),
     /// Give access to additional metadata about declarative macro meta-variables.
@@ -512,6 +521,8 @@ declare_features! (
     (unstable, native_link_modifiers_as_needed, "1.53.0", Some(81490), None),
     /// Allow negative trait implementations.
     (unstable, negative_impls, "1.44.0", Some(68318), None),
+    /// Allows the `!` pattern.
+    (incomplete, never_patterns, "CURRENT_RUSTC_VERSION", Some(118155), None),
     /// Allows the `!` type. Does not imply 'exhaustive_patterns' (below) any more.
     (unstable, never_type, "1.13.0", Some(35121), None),
     /// Allows diverging expressions to fall back to `!` rather than `()`.

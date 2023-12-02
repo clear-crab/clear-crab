@@ -91,7 +91,7 @@ pub(super) fn check_refining_return_position_impl_trait_in_trait<'tcx>(
 
         // This opaque also needs to be from the impl method -- otherwise,
         // it's a refinement to a TAIT.
-        if !tcx.hir().get_if_local(impl_opaque.def_id).map_or(false, |node| {
+        if !tcx.hir().get_if_local(impl_opaque.def_id).is_some_and(|node| {
             matches!(
                 node.expect_item().expect_opaque_ty().origin,
                 hir::OpaqueTyOrigin::AsyncFn(def_id)  | hir::OpaqueTyOrigin::FnReturn(def_id)
@@ -153,7 +153,7 @@ pub(super) fn check_refining_return_position_impl_trait_in_trait<'tcx>(
         trait_m_sig.inputs_and_output,
     ));
     if !ocx.select_all_or_error().is_empty() {
-        tcx.sess.delay_span_bug(
+        tcx.sess.span_delayed_bug(
             DUMMY_SP,
             "encountered errors when checking RPITIT refinement (selection)",
         );
@@ -165,7 +165,7 @@ pub(super) fn check_refining_return_position_impl_trait_in_trait<'tcx>(
     );
     let errors = infcx.resolve_regions(&outlives_env);
     if !errors.is_empty() {
-        tcx.sess.delay_span_bug(
+        tcx.sess.span_delayed_bug(
             DUMMY_SP,
             "encountered errors when checking RPITIT refinement (regions)",
         );
@@ -173,7 +173,7 @@ pub(super) fn check_refining_return_position_impl_trait_in_trait<'tcx>(
     }
     // Resolve any lifetime variables that may have been introduced during normalization.
     let Ok((trait_bounds, impl_bounds)) = infcx.fully_resolve((trait_bounds, impl_bounds)) else {
-        tcx.sess.delay_span_bug(
+        tcx.sess.span_delayed_bug(
             DUMMY_SP,
             "encountered errors when checking RPITIT refinement (resolution)",
         );

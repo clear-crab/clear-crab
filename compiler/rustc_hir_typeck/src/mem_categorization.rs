@@ -66,24 +66,17 @@ use rustc_trait_selection::infer::InferCtxtExt;
 
 pub(crate) trait HirNode {
     fn hir_id(&self) -> hir::HirId;
-    fn span(&self) -> Span;
 }
 
 impl HirNode for hir::Expr<'_> {
     fn hir_id(&self) -> hir::HirId {
         self.hir_id
     }
-    fn span(&self) -> Span {
-        self.span
-    }
 }
 
 impl HirNode for hir::Pat<'_> {
     fn hir_id(&self) -> hir::HirId {
         self.hir_id
-    }
-    fn span(&self) -> Span {
-        self.span
     }
 }
 
@@ -547,7 +540,7 @@ impl<'a, 'tcx> MemCategorizationContext<'a, 'tcx> {
         let ty::Adt(adt_def, _) = ty.kind() else {
             self.tcx()
                 .sess
-                .delay_span_bug(span, "struct or tuple struct pattern not applied to an ADT");
+                .span_delayed_bug(span, "struct or tuple struct pattern not applied to an ADT");
             return Err(());
         };
 
@@ -582,7 +575,7 @@ impl<'a, 'tcx> MemCategorizationContext<'a, 'tcx> {
             _ => {
                 self.tcx()
                     .sess
-                    .delay_span_bug(span, "struct or tuple struct pattern not applied to an ADT");
+                    .span_delayed_bug(span, "struct or tuple struct pattern not applied to an ADT");
                 Err(())
             }
         }
@@ -595,7 +588,7 @@ impl<'a, 'tcx> MemCategorizationContext<'a, 'tcx> {
         match ty.kind() {
             ty::Tuple(args) => Ok(args.len()),
             _ => {
-                self.tcx().sess.delay_span_bug(span, "tuple pattern not applied to a tuple");
+                self.tcx().sess.span_delayed_bug(span, "tuple pattern not applied to a tuple");
                 Err(())
             }
         }
@@ -773,6 +766,7 @@ impl<'a, 'tcx> MemCategorizationContext<'a, 'tcx> {
             | PatKind::Binding(.., None)
             | PatKind::Lit(..)
             | PatKind::Range(..)
+            | PatKind::Never
             | PatKind::Wild => {
                 // always ok
             }

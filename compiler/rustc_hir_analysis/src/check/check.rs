@@ -130,7 +130,7 @@ fn check_union_fields(tcx: TyCtxt<'_>, span: Span, item_def_id: LocalDefId) -> b
         for field in &def.non_enum_variant().fields {
             let Ok(field_ty) = tcx.try_normalize_erasing_regions(param_env, field.ty(tcx, args))
             else {
-                tcx.sess.delay_span_bug(span, "could not normalize field type");
+                tcx.sess.span_delayed_bug(span, "could not normalize field type");
                 continue;
             };
 
@@ -151,7 +151,8 @@ fn check_union_fields(tcx: TyCtxt<'_>, span: Span, item_def_id: LocalDefId) -> b
                 return false;
             } else if field_ty.needs_drop(tcx, param_env) {
                 // This should never happen. But we can get here e.g. in case of name resolution errors.
-                tcx.sess.delay_span_bug(span, "we should never accept maybe-dropping union fields");
+                tcx.sess
+                    .span_delayed_bug(span, "we should never accept maybe-dropping union fields");
             }
         }
     } else {
@@ -181,14 +182,14 @@ fn check_static_inhabited(tcx: TyCtxt<'_>, def_id: LocalDefId) {
         }
         // Generic statics are rejected, but we still reach this case.
         Err(e) => {
-            tcx.sess.delay_span_bug(span, format!("{e:?}"));
+            tcx.sess.span_delayed_bug(span, format!("{e:?}"));
             return;
         }
     };
     if layout.abi.is_uninhabited() {
         tcx.struct_span_lint_hir(
             UNINHABITED_STATIC,
-            tcx.hir().local_def_id_to_hir_id(def_id),
+            tcx.local_def_id_to_hir_id(def_id),
             span,
             "static of uninhabited type",
             |lint| {
@@ -204,7 +205,7 @@ fn check_static_inhabited(tcx: TyCtxt<'_>, def_id: LocalDefId) {
 fn check_opaque(tcx: TyCtxt<'_>, id: hir::ItemId) {
     let item = tcx.hir().item(id);
     let hir::ItemKind::OpaqueTy(hir::OpaqueTy { origin, .. }) = item.kind else {
-        tcx.sess.delay_span_bug(item.span, "expected opaque item");
+        tcx.sess.span_delayed_bug(item.span, "expected opaque item");
         return;
     };
 
@@ -313,7 +314,7 @@ fn check_opaque_meets_bounds<'tcx>(
         Ok(()) => {}
         Err(ty_err) => {
             let ty_err = ty_err.to_string(tcx);
-            return Err(tcx.sess.delay_span_bug(
+            return Err(tcx.sess.span_delayed_bug(
                 span,
                 format!("could not unify `{hidden_ty}` with revealed type:\n{ty_err}"),
             ));
@@ -655,7 +656,7 @@ pub(super) fn check_specialization_validity<'tcx>(
         if !tcx.is_impl_trait_in_trait(impl_item) {
             report_forbidden_specialization(tcx, impl_item, parent_impl);
         } else {
-            tcx.sess.delay_span_bug(
+            tcx.sess.span_delayed_bug(
                 DUMMY_SP,
                 format!("parent item: {parent_impl:?} not marked as default"),
             );
@@ -703,7 +704,7 @@ fn check_impl_items_against_trait<'tcx>(
             tcx.associated_item(trait_item_id)
         } else {
             // Checked in `associated_item`.
-            tcx.sess.delay_span_bug(tcx.def_span(impl_item), "missing associated item in trait");
+            tcx.sess.span_delayed_bug(tcx.def_span(impl_item), "missing associated item in trait");
             continue;
         };
         match ty_impl_item.kind {
@@ -753,8 +754,7 @@ fn check_impl_items_against_trait<'tcx>(
                 leaf_def.as_ref().is_some_and(|node_item| !node_item.defining_node.is_from_trait());
 
             if !is_implemented_here {
-                let full_impl_span =
-                    tcx.hir().span_with_body(tcx.hir().local_def_id_to_hir_id(impl_id));
+                let full_impl_span = tcx.hir().span_with_body(tcx.local_def_id_to_hir_id(impl_id));
                 match tcx.eval_default_body_stability(trait_item_id, full_impl_span) {
                     EvalResult::Deny { feature, reason, issue, .. } => default_body_is_unstable(
                         tcx,
@@ -811,8 +811,7 @@ fn check_impl_items_against_trait<'tcx>(
         }
 
         if !missing_items.is_empty() {
-            let full_impl_span =
-                tcx.hir().span_with_body(tcx.hir().local_def_id_to_hir_id(impl_id));
+            let full_impl_span = tcx.hir().span_with_body(tcx.local_def_id_to_hir_id(impl_id));
             missing_items_err(tcx, impl_id, &missing_items, full_impl_span);
         }
 
@@ -1083,7 +1082,7 @@ pub(super) fn check_transparent<'tcx>(tcx: TyCtxt<'tcx>, adt: ty::AdtDef<'tcx>) 
             if non_trivial_count > 0 || prev_non_exhaustive_1zst {
                 tcx.struct_span_lint_hir(
                     REPR_TRANSPARENT_EXTERNAL_PRIVATE_FIELDS,
-                    tcx.hir().local_def_id_to_hir_id(adt.did().expect_local()),
+                    tcx.local_def_id_to_hir_id(adt.did().expect_local()),
                     span,
                     "zero-sized fields in `repr(transparent)` cannot \
                     contain external non-exhaustive types",
@@ -1451,7 +1450,7 @@ fn opaque_type_cycle_error(
                         label_match(capture.place.ty(), capture.get_path_span(tcx));
                     }
                     // Label any coroutine locals that capture the opaque
-                    if let DefKind::Coroutine = tcx.def_kind(closure_def_id)
+                    if tcx.is_coroutine(closure_def_id)
                         && let Some(coroutine_layout) = tcx.mir_coroutine_witnesses(closure_def_id)
                     {
                         for interior_ty in &coroutine_layout.field_tys {
@@ -1472,7 +1471,7 @@ pub(super) fn check_coroutine_obligations(
     tcx: TyCtxt<'_>,
     def_id: LocalDefId,
 ) -> Result<(), ErrorGuaranteed> {
-    debug_assert!(matches!(tcx.def_kind(def_id), DefKind::Coroutine));
+    debug_assert!(tcx.is_coroutine(def_id.to_def_id()));
 
     let typeck = tcx.typeck(def_id);
     let param_env = tcx.param_env(def_id);

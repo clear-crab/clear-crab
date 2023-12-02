@@ -501,6 +501,9 @@ impl<'tcx> TyCtxt<'tcx> {
     pub fn feed_local_crate(self) -> TyCtxtFeed<'tcx, CrateNum> {
         TyCtxtFeed { tcx: self, key: LOCAL_CRATE }
     }
+    pub fn feed_local_def_id(self, key: LocalDefId) -> TyCtxtFeed<'tcx, LocalDefId> {
+        TyCtxtFeed { tcx: self, key }
+    }
 
     /// In order to break cycles involving `AnonConst`, we need to set the expected type by side
     /// effect. However, we do not want this as a general capability, so this interface restricts
@@ -629,6 +632,10 @@ impl<'tcx> GlobalCtxt<'tcx> {
         let icx = tls::ImplicitCtxt::new(self);
         tls::enter_context(&icx, || f(icx.tcx))
     }
+
+    pub fn finish(&self) -> FileEncodeResult {
+        self.dep_graph.finish_encoding(&self.sess.prof)
+    }
 }
 
 impl<'tcx> TyCtxt<'tcx> {
@@ -707,8 +714,10 @@ impl<'tcx> TyCtxt<'tcx> {
             {
                 Bound::Included(a)
             } else {
-                self.sess
-                    .delay_span_bug(attr.span, "invalid rustc_layout_scalar_valid_range attribute");
+                self.sess.span_delayed_bug(
+                    attr.span,
+                    "invalid rustc_layout_scalar_valid_range attribute",
+                );
                 Bound::Unbounded
             }
         };
@@ -798,6 +807,10 @@ impl<'tcx> TyCtxt<'tcx> {
     /// Check whether the diagnostic item with the given `name` has the given `DefId`.
     pub fn is_diagnostic_item(self, name: Symbol, did: DefId) -> bool {
         self.diagnostic_items(did.krate).name_to_id.get(&name) == Some(&did)
+    }
+
+    pub fn is_coroutine(self, def_id: DefId) -> bool {
+        self.coroutine_kind(def_id).is_some()
     }
 
     /// Returns `true` if the node pointed to by `def_id` is a coroutine for an async construct.
@@ -965,6 +978,7 @@ impl<'tcx> TyCtxtAt<'tcx> {
         self,
         parent: LocalDefId,
         data: hir::definitions::DefPathData,
+        def_kind: DefKind,
     ) -> TyCtxtFeed<'tcx, LocalDefId> {
         // This function modifies `self.definitions` using a side-effect.
         // We need to ensure that these side effects are re-run by the incr. comp. engine.
@@ -989,6 +1003,7 @@ impl<'tcx> TyCtxtAt<'tcx> {
         let key = self.untracked.definitions.write().create_def(parent, data);
 
         let feed = TyCtxtFeed { tcx: self.tcx, key };
+        feed.def_kind(def_kind);
         feed.def_span(self.span);
         feed
     }
@@ -1131,7 +1146,7 @@ impl<'tcx> TyCtxt<'tcx> {
         self,
         scope_def_id: LocalDefId,
     ) -> Vec<&'tcx hir::Ty<'tcx>> {
-        let hir_id = self.hir().local_def_id_to_hir_id(scope_def_id);
+        let hir_id = self.local_def_id_to_hir_id(scope_def_id);
         let Some(hir::FnDecl { output: hir::FnRetTy::Return(hir_output), .. }) =
             self.hir().fn_decl_by_hir_id(hir_id)
         else {
@@ -1150,7 +1165,7 @@ impl<'tcx> TyCtxt<'tcx> {
         self,
         scope_def_id: LocalDefId,
     ) -> Option<(Vec<&'tcx hir::Ty<'tcx>>, Span, Option<Span>)> {
-        let hir_id = self.hir().local_def_id_to_hir_id(scope_def_id);
+        let hir_id = self.local_def_id_to_hir_id(scope_def_id);
         let mut v = TraitObjectVisitor(vec![], self.hir());
         // when the return type is a type alias
         if let Some(hir::FnDecl { output: hir::FnRetTy::Return(hir_output), .. }) = self.hir().fn_decl_by_hir_id(hir_id)

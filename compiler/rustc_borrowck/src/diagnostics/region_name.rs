@@ -199,7 +199,7 @@ impl<'tcx> MirBorrowckCtxt<'_, 'tcx> {
     }
 
     pub(crate) fn mir_hir_id(&self) -> hir::HirId {
-        self.infcx.tcx.hir().local_def_id_to_hir_id(self.mir_def_id())
+        self.infcx.tcx.local_def_id_to_hir_id(self.mir_def_id())
     }
 
     /// Generate a synthetic region named `'N`, where `N` is the next value of the counter. Then,
@@ -619,8 +619,8 @@ impl<'tcx> MirBorrowckCtxt<'_, 'tcx> {
                     _,
                 ) => {
                     // HIR lowering sometimes doesn't catch this in erroneous
-                    // programs, so we need to use delay_span_bug here. See #82126.
-                    self.infcx.tcx.sess.delay_span_bug(
+                    // programs, so we need to use span_delayed_bug here. See #82126.
+                    self.infcx.tcx.sess.span_delayed_bug(
                         hir_arg.span(),
                         format!("unmatched arg and hir arg: found {kind:?} vs {hir_arg:?}"),
                     );

@@ -37,8 +37,6 @@ pub(super) trait GoalKind<'tcx>:
 
     fn trait_ref(self, tcx: TyCtxt<'tcx>) -> ty::TraitRef<'tcx>;
 
-    fn polarity(self) -> ty::ImplPolarity;
-
     fn with_self_ty(self, tcx: TyCtxt<'tcx>, self_ty: Ty<'tcx>) -> Self;
 
     fn trait_def_id(self, tcx: TyCtxt<'tcx>) -> DefId;
@@ -492,6 +490,7 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
         }
     }
 
+    #[instrument(level = "debug", skip_all)]
     fn assemble_unsize_to_dyn_candidate<G: GoalKind<'tcx>>(
         &mut self,
         goal: Goal<'tcx, G>,
@@ -509,6 +508,7 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
         }
     }
 
+    #[instrument(level = "debug", skip_all)]
     fn assemble_blanket_impl_candidates<G: GoalKind<'tcx>>(
         &mut self,
         goal: Goal<'tcx, G>,

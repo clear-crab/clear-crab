@@ -10,7 +10,7 @@ use rustc_middle::ty::TyCtxt;
 use rustc_span::{Span, DUMMY_SP};
 
 /// A visitor that walks over the HIR and collects `Node`s into a HIR map.
-pub(super) struct NodeCollector<'a, 'hir> {
+struct NodeCollector<'a, 'hir> {
     tcx: TyCtxt<'hir>,
 
     bodies: &'a SortedMap<ItemLocalId, &'hir Body<'hir>>,
@@ -89,7 +89,7 @@ impl<'a, 'hir> NodeCollector<'a, 'hir> {
             }
         }
 
-        self.nodes.insert(hir_id.local_id, ParentedNode { parent: self.parent_node, node: node });
+        self.nodes.insert(hir_id.local_id, ParentedNode { parent: self.parent_node, node });
     }
 
     fn with_parent<F: FnOnce(&mut Self)>(&mut self, parent_node_id: HirId, f: F) {

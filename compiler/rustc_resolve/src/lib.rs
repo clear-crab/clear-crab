@@ -37,12 +37,9 @@ use rustc_data_structures::fx::{FxHashMap, FxHashSet, FxIndexMap, FxIndexSet};
 use rustc_data_structures::intern::Interned;
 use rustc_data_structures::steal::Steal;
 use rustc_data_structures::sync::{FreezeReadGuard, Lrc};
-use rustc_errors::{
-    Applicability, DiagnosticBuilder, DiagnosticMessage, ErrorGuaranteed, SubdiagnosticMessage,
-};
+use rustc_errors::{Applicability, DiagnosticBuilder, ErrorGuaranteed};
 use rustc_expand::base::{DeriveResolutions, SyntaxExtension, SyntaxExtensionKind};
 use rustc_feature::BUILTIN_ATTRIBUTES;
-use rustc_fluent_macro::fluent_messages;
 use rustc_hir::def::Namespace::{self, *};
 use rustc_hir::def::NonMacroAttrKind;
 use rustc_hir::def::{self, CtorOf, DefKind, DocLinkResMap, LifetimeRes, PartialRes, PerNS};
@@ -90,7 +87,7 @@ mod late;
 mod macros;
 pub mod rustdoc;
 
-fluent_messages! { "../messages.ftl" }
+rustc_fluent_macro::fluent_messages! { "../messages.ftl" }
 
 #[derive(Debug)]
 enum Weak {
@@ -175,7 +172,7 @@ impl<'a> ParentScope<'a> {
 #[derive(Copy, Debug, Clone)]
 enum ImplTraitContext {
     Existential,
-    Universal(LocalDefId),
+    Universal,
 }
 
 #[derive(Debug)]
@@ -927,7 +924,14 @@ struct DeriveData {
 #[derive(Clone)]
 struct MacroData {
     ext: Lrc<SyntaxExtension>,
+    rule_spans: Vec<(usize, Span)>,
     macro_rules: bool,
+}
+
+impl MacroData {
+    fn new(ext: Lrc<SyntaxExtension>) -> MacroData {
+        MacroData { ext, rule_spans: Vec::new(), macro_rules: false }
+    }
 }
 
 /// The main resolver class.
@@ -1030,15 +1034,12 @@ pub struct Resolver<'a, 'tcx> {
     used_extern_options: FxHashSet<Symbol>,
     macro_names: FxHashSet<Ident>,
     builtin_macros: FxHashMap<Symbol, BuiltinMacroState>,
-    /// A small map keeping true kinds of built-in macros that appear to be fn-like on
-    /// the surface (`macro` items in libcore), but are actually attributes or derives.
-    builtin_macro_kinds: FxHashMap<LocalDefId, MacroKind>,
     registered_tools: &'tcx RegisteredTools,
     macro_use_prelude: FxHashMap<Symbol, NameBinding<'a>>,
     macro_map: FxHashMap<DefId, MacroData>,
     dummy_ext_bang: Lrc<SyntaxExtension>,
     dummy_ext_derive: Lrc<SyntaxExtension>,
-    non_macro_attr: Lrc<SyntaxExtension>,
+    non_macro_attr: MacroData,
     local_macro_def_scopes: FxHashMap<LocalDefId, Module<'a>>,
     ast_transform_scopes: FxHashMap<LocalExpnId, Module<'a>>,
     unused_macros: FxHashMap<LocalDefId, (NodeId, Ident)>,
@@ -1212,6 +1213,7 @@ impl<'tcx> Resolver<'_, 'tcx> {
         parent: LocalDefId,
         node_id: ast::NodeId,
         data: DefPathData,
+        def_kind: DefKind,
         expn_id: ExpnId,
         span: Span,
     ) -> LocalDefId {
@@ -1225,6 +1227,9 @@ impl<'tcx> Resolver<'_, 'tcx> {
 
         // FIXME: remove `def_span` body, pass in the right spans here and call `tcx.at().create_def()`
         let def_id = self.tcx.untracked().definitions.write().create_def(parent, data);
+
+        let feed = self.tcx.feed_local_def_id(def_id);
+        feed.def_kind(def_kind);
 
         // Create the definition.
         if expn_id != ExpnId::root() {
@@ -1321,6 +1326,7 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
 
         let features = tcx.features();
         let pub_vis = ty::Visibility::<DefId>::Public;
+        let edition = tcx.sess.edition();
 
         let mut resolver = Resolver {
             tcx,
@@ -1398,13 +1404,12 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
             used_extern_options: Default::default(),
             macro_names: FxHashSet::default(),
             builtin_macros: Default::default(),
-            builtin_macro_kinds: Default::default(),
             registered_tools,
             macro_use_prelude: FxHashMap::default(),
             macro_map: FxHashMap::default(),
-            dummy_ext_bang: Lrc::new(SyntaxExtension::dummy_bang(tcx.sess.edition())),
-            dummy_ext_derive: Lrc::new(SyntaxExtension::dummy_derive(tcx.sess.edition())),
-            non_macro_attr: Lrc::new(SyntaxExtension::non_macro_attr(tcx.sess.edition())),
+            dummy_ext_bang: Lrc::new(SyntaxExtension::dummy_bang(edition)),
+            dummy_ext_derive: Lrc::new(SyntaxExtension::dummy_derive(edition)),
+            non_macro_attr: MacroData::new(Lrc::new(SyntaxExtension::non_macro_attr(edition))),
             invocation_parent_scopes: Default::default(),
             output_macro_rules_scopes: Default::default(),
             macro_rules_scopes: Default::default(),
@@ -1537,7 +1542,6 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
             node_id_to_def_id: self.node_id_to_def_id,
             def_id_to_node_id: self.def_id_to_node_id,
             trait_map: self.trait_map,
-            builtin_macro_kinds: self.builtin_macro_kinds,
             lifetime_elision_allowed: self.lifetime_elision_allowed,
             lint_buffer: Steal::new(self.lint_buffer),
         };
@@ -1564,7 +1568,7 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
         match macro_kind {
             MacroKind::Bang => self.dummy_ext_bang.clone(),
             MacroKind::Derive => self.dummy_ext_derive.clone(),
-            MacroKind::Attr => self.non_macro_attr.clone(),
+            MacroKind::Attr => self.non_macro_attr.ext.clone(),
         }
     }
 

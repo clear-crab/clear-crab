@@ -1,7 +1,10 @@
+use std::borrow::Cow;
+
 use crate::build::ExprCategory;
 use crate::errors::*;
 use rustc_middle::thir::visit::{self, Visitor};
 
+use rustc_errors::DiagnosticArgValue;
 use rustc_hir as hir;
 use rustc_middle::mir::BorrowKind;
 use rustc_middle::thir::*;
@@ -138,7 +141,7 @@ impl<'tcx> UnsafetyVisitor<'_, 'tcx> {
             // Runs all other queries that depend on THIR.
             self.tcx.ensure_with_value().mir_built(def);
             let inner_thir = &inner_thir.steal();
-            let hir_context = self.tcx.hir().local_def_id_to_hir_id(def);
+            let hir_context = self.tcx.local_def_id_to_hir_id(def);
             let safety_context = mem::replace(&mut self.safety_context, SafetyContext::Safe);
             let mut inner_visitor = UnsafetyVisitor {
                 thir: inner_thir,
@@ -247,8 +250,9 @@ impl<'a, 'tcx> Visitor<'a, 'tcx> for UnsafetyVisitor<'a, 'tcx> {
                     self.requires_unsafe(pat.span, AccessToUnionField);
                     return; // we can return here since this already requires unsafe
                 }
-                // wildcard doesn't take anything
+                // wildcard/never don't take anything
                 PatKind::Wild |
+                PatKind::Never |
                 // these just wrap other patterns
                 PatKind::Or { .. } |
                 PatKind::InlineConstant { .. } |
@@ -392,15 +396,29 @@ impl<'a, 'tcx> Visitor<'a, 'tcx> for UnsafetyVisitor<'a, 'tcx> {
                     // the call requires `unsafe`. Don't check this on wasm
                     // targets, though. For more information on wasm see the
                     // is_like_wasm check in hir_analysis/src/collect.rs
+                    let callee_features = &self.tcx.codegen_fn_attrs(func_did).target_features;
                     if !self.tcx.sess.target.options.is_like_wasm
-                        && !self
-                            .tcx
-                            .codegen_fn_attrs(func_did)
-                            .target_features
+                        && !callee_features
                             .iter()
                             .all(|feature| self.body_target_features.contains(feature))
                     {
-                        self.requires_unsafe(expr.span, CallToFunctionWith(func_did));
+                        let missing: Vec<_> = callee_features
+                            .iter()
+                            .copied()
+                            .filter(|feature| !self.body_target_features.contains(feature))
+                            .collect();
+                        let build_enabled = self
+                            .tcx
+                            .sess
+                            .target_features
+                            .iter()
+                            .copied()
+                            .filter(|feature| missing.contains(feature))
+                            .collect();
+                        self.requires_unsafe(
+                            expr.span,
+                            CallToFunctionWith { function: func_did, missing, build_enabled },
+                        );
                     }
                 }
             }
@@ -452,7 +470,7 @@ impl<'a, 'tcx> Visitor<'a, 'tcx> for UnsafetyVisitor<'a, 'tcx> {
                     if let Some((assigned_ty, assignment_span)) = self.assignment_info {
                         if assigned_ty.needs_drop(self.tcx, self.param_env) {
                             // This would be unsafe, but should be outright impossible since we reject such unions.
-                            self.tcx.sess.delay_span_bug(assignment_span, format!("union fields that need dropping should be impossible: {assigned_ty}"));
+                            self.tcx.sess.span_delayed_bug(assignment_span, format!("union fields that need dropping should be impossible: {assigned_ty}"));
                         }
                     } else {
                         self.requires_unsafe(expr.span, AccessToUnionField);
@@ -526,7 +544,7 @@ struct UnusedUnsafeWarning {
     enclosing_unsafe: Option<UnusedUnsafeEnclosing>,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, PartialEq)]
 enum UnsafeOpKind {
     CallToUnsafeFunction(Option<DefId>),
     UseOfInlineAssembly,
@@ -537,7 +555,15 @@ enum UnsafeOpKind {
     AccessToUnionField,
     MutationOfLayoutConstrainedField,
     BorrowOfLayoutConstrainedField,
-    CallToFunctionWith(DefId),
+    CallToFunctionWith {
+        function: DefId,
+        /// Target features enabled in callee's `#[target_feature]` but missing in
+        /// caller's `#[target_feature]`.
+        missing: Vec<Symbol>,
+        /// Target features in `missing` that are enabled at compile time
+        /// (e.g., with `-C target-feature`).
+        build_enabled: Vec<Symbol>,
+    },
 }
 
 use UnsafeOpKind::*;
@@ -552,7 +578,7 @@ impl UnsafeOpKind {
     ) {
         let parent_id = tcx.hir().get_parent_item(hir_id);
         let parent_owner = tcx.hir().owner(parent_id);
-        let should_suggest = parent_owner.fn_sig().map_or(false, |sig| sig.header.is_unsafe());
+        let should_suggest = parent_owner.fn_sig().is_some_and(|sig| sig.header.is_unsafe());
         let unsafe_not_inherited_note = if should_suggest {
             suggest_unsafe_block.then(|| {
                 let body_span = tcx.hir().body(parent_owner.body_id().unwrap()).value.span;
@@ -658,13 +684,22 @@ impl UnsafeOpKind {
                     unsafe_not_inherited_note,
                 },
             ),
-            CallToFunctionWith(did) => tcx.emit_spanned_lint(
+            CallToFunctionWith { function, missing, build_enabled } => tcx.emit_spanned_lint(
                 UNSAFE_OP_IN_UNSAFE_FN,
                 hir_id,
                 span,
                 UnsafeOpInUnsafeFnCallToFunctionWithRequiresUnsafe {
                     span,
-                    function: &with_no_trimmed_paths!(tcx.def_path_str(*did)),
+                    function: &with_no_trimmed_paths!(tcx.def_path_str(*function)),
+                    missing_target_features: DiagnosticArgValue::StrListSepByAnd(
+                        missing.iter().map(|feature| Cow::from(feature.as_str())).collect(),
+                    ),
+                    missing_target_features_count: missing.len(),
+                    note: if build_enabled.is_empty() { None } else { Some(()) },
+                    build_target_features: DiagnosticArgValue::StrListSepByAnd(
+                        build_enabled.iter().map(|feature| Cow::from(feature.as_str())).collect(),
+                    ),
+                    build_target_features_count: build_enabled.len(),
                     unsafe_not_inherited_note,
                 },
             ),
@@ -821,18 +856,38 @@ impl UnsafeOpKind {
                     unsafe_not_inherited_note,
                 });
             }
-            CallToFunctionWith(did) if unsafe_op_in_unsafe_fn_allowed => {
+            CallToFunctionWith { function, missing, build_enabled }
+                if unsafe_op_in_unsafe_fn_allowed =>
+            {
                 tcx.sess.emit_err(CallToFunctionWithRequiresUnsafeUnsafeOpInUnsafeFnAllowed {
                     span,
+                    missing_target_features: DiagnosticArgValue::StrListSepByAnd(
+                        missing.iter().map(|feature| Cow::from(feature.as_str())).collect(),
+                    ),
+                    missing_target_features_count: missing.len(),
+                    note: if build_enabled.is_empty() { None } else { Some(()) },
+                    build_target_features: DiagnosticArgValue::StrListSepByAnd(
+                        build_enabled.iter().map(|feature| Cow::from(feature.as_str())).collect(),
+                    ),
+                    build_target_features_count: build_enabled.len(),
                     unsafe_not_inherited_note,
-                    function: &tcx.def_path_str(*did),
+                    function: &tcx.def_path_str(*function),
                 });
             }
-            CallToFunctionWith(did) => {
+            CallToFunctionWith { function, missing, build_enabled } => {
                 tcx.sess.emit_err(CallToFunctionWithRequiresUnsafe {
                     span,
+                    missing_target_features: DiagnosticArgValue::StrListSepByAnd(
+                        missing.iter().map(|feature| Cow::from(feature.as_str())).collect(),
+                    ),
+                    missing_target_features_count: missing.len(),
+                    note: if build_enabled.is_empty() { None } else { Some(()) },
+                    build_target_features: DiagnosticArgValue::StrListSepByAnd(
+                        build_enabled.iter().map(|feature| Cow::from(feature.as_str())).collect(),
+                    ),
+                    build_target_features_count: build_enabled.len(),
                     unsafe_not_inherited_note,
-                    function: &tcx.def_path_str(*did),
+                    function: &tcx.def_path_str(*function),
                 });
             }
         }
@@ -859,7 +914,7 @@ pub fn thir_check_unsafety(tcx: TyCtxt<'_>, def: LocalDefId) {
         return;
     }
 
-    let hir_id = tcx.hir().local_def_id_to_hir_id(def);
+    let hir_id = tcx.local_def_id_to_hir_id(def);
     let safety_context = tcx.hir().fn_sig_by_hir_id(hir_id).map_or(SafetyContext::Safe, |fn_sig| {
         if fn_sig.header.unsafety == hir::Unsafety::Unsafe {
             SafetyContext::UnsafeFn

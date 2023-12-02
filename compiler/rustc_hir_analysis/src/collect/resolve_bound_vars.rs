@@ -295,7 +295,7 @@ fn late_arg_as_bound_arg<'tcx>(
 ) -> ty::BoundVariableKind {
     match arg {
         ResolvedArg::LateBound(_, _, def_id) => {
-            let name = tcx.hir().name(tcx.hir().local_def_id_to_hir_id(def_id.expect_local()));
+            let name = tcx.hir().name(tcx.local_def_id_to_hir_id(def_id.expect_local()));
             match param.kind {
                 GenericParamKind::Lifetime { .. } => {
                     ty::BoundVariableKind::Region(ty::BrNamed(*def_id, name))
@@ -335,7 +335,7 @@ impl<'a, 'tcx> BoundVarContext<'a, 'tcx> {
                     // though this may happen when we call `poly_trait_ref_binder_info` with
                     // an (erroneous, #113423) associated return type bound in an impl header.
                     if !supertrait_bound_vars.is_empty() {
-                        self.tcx.sess.delay_span_bug(
+                        self.tcx.sess.span_delayed_bug(
                             DUMMY_SP,
                             format!(
                                 "found supertrait lifetimes without a binder to append \
@@ -733,7 +733,7 @@ impl<'a, 'tcx> Visitor<'tcx> for BoundVarContext<'a, 'tcx> {
                     let def = self.map.defs.get(&lifetime.hir_id).cloned();
                     let Some(ResolvedArg::LateBound(_, _, def_id)) = def else { continue };
                     let Some(def_id) = def_id.as_local() else { continue };
-                    let hir_id = self.tcx.hir().local_def_id_to_hir_id(def_id);
+                    let hir_id = self.tcx.local_def_id_to_hir_id(def_id);
                     // Ensure that the parent of the def is an item, not HRTB
                     let parent_id = self.tcx.hir().parent_id(hir_id);
                     if !parent_id.is_owner() {
@@ -1363,7 +1363,7 @@ impl<'a, 'tcx> BoundVarContext<'a, 'tcx> {
             }
         }
 
-        self.tcx.sess.delay_span_bug(
+        self.tcx.sess.span_delayed_bug(
             lifetime_ref.ident.span,
             format!("Could not resolve {:?} in scope {:#?}", lifetime_ref, self.scope,),
         );
@@ -1493,7 +1493,7 @@ impl<'a, 'tcx> BoundVarContext<'a, 'tcx> {
             }
         }
 
-        self.tcx.sess.delay_span_bug(
+        self.tcx.sess.span_delayed_bug(
             self.tcx.hir().span(hir_id),
             format!("could not resolve {param_def_id:?}"),
         );
@@ -1724,7 +1724,7 @@ impl<'a, 'tcx> BoundVarContext<'a, 'tcx> {
                 } else {
                     self.tcx
                         .sess
-                        .delay_span_bug(binding.ident.span, "bad return type notation here");
+                        .span_delayed_bug(binding.ident.span, "bad return type notation here");
                     vec![]
                 };
                 self.with(scope, |this| {
@@ -2057,7 +2057,7 @@ fn is_late_bound_map(
                                         Some(true) => Some(arg),
                                         Some(false) => None,
                                         None => {
-                                            tcx.sess.delay_span_bug(
+                                            tcx.sess.span_delayed_bug(
                                                 *span,
                                                 format!(
                                                     "Incorrect generic arg count for alias {alias_def:?}"

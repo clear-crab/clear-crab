@@ -36,7 +36,7 @@ use rustc_middle::ty::{self, print::Printer, GenericArg, RegisteredTools, Ty, Ty
 use rustc_session::config::ExpectedValues;
 use rustc_session::lint::{BuiltinLintDiagnostics, LintExpectationId};
 use rustc_session::lint::{FutureIncompatibleInfo, Level, Lint, LintBuffer, LintId};
-use rustc_session::Session;
+use rustc_session::{LintStoreMarker, Session};
 use rustc_span::edit_distance::find_best_match_for_name;
 use rustc_span::symbol::{sym, Ident, Symbol};
 use rustc_span::{BytePos, Span};
@@ -76,6 +76,8 @@ pub struct LintStore {
     /// Map of registered lint groups to what lints they expand to.
     lint_groups: FxHashMap<&'static str, LintGroup>,
 }
+
+impl LintStoreMarker for LintStore {}
 
 /// The target of the `by_name` map, which accounts for renaming/deprecation.
 #[derive(Debug)]
@@ -924,6 +926,10 @@ pub trait LintContext {
                         if elided { "'static " } else { "'static" },
                         Applicability::MachineApplicable
                     );
+                },
+                BuiltinLintDiagnostics::RedundantImportVisibility { max_vis, span } => {
+                    db.span_note(span, format!("the most public imported item is `{max_vis}`"));
+                    db.help("reduce the glob import's visibility or increase visibility of imported items");
                 }
             }
             // Rewrap `db`, and pass control to the user.

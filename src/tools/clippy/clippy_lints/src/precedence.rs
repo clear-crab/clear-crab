@@ -4,7 +4,7 @@ use rustc_ast::ast::{BinOpKind, Expr, ExprKind, MethodCall, UnOp};
 use rustc_ast::token;
 use rustc_errors::Applicability;
 use rustc_lint::{EarlyContext, EarlyLintPass};
-use rustc_session::{declare_lint_pass, declare_tool_lint};
+use rustc_session::declare_lint_pass;
 use rustc_span::source_map::Spanned;
 
 const ALLOWED_ODD_FUNCTIONS: [&str; 14] = [
@@ -78,7 +78,7 @@ impl EarlyLintPass for Precedence {
                     let sugg = format!(
                         "({}) {} ({})",
                         snippet_with_applicability(cx, left.span, "..", &mut applicability),
-                        op.to_string(),
+                        op.as_str(),
                         snippet_with_applicability(cx, right.span, "..", &mut applicability)
                     );
                     span_sugg(expr, sugg, applicability);
@@ -87,7 +87,7 @@ impl EarlyLintPass for Precedence {
                     let sugg = format!(
                         "({}) {} {}",
                         snippet_with_applicability(cx, left.span, "..", &mut applicability),
-                        op.to_string(),
+                        op.as_str(),
                         snippet_with_applicability(cx, right.span, "..", &mut applicability)
                     );
                     span_sugg(expr, sugg, applicability);
@@ -96,7 +96,7 @@ impl EarlyLintPass for Precedence {
                     let sugg = format!(
                         "{} {} ({})",
                         snippet_with_applicability(cx, left.span, "..", &mut applicability),
-                        op.to_string(),
+                        op.as_str(),
                         snippet_with_applicability(cx, right.span, "..", &mut applicability)
                     );
                     span_sugg(expr, sugg, applicability);

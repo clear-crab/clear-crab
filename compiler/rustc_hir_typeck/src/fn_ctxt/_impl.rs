@@ -159,7 +159,13 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     }
 
     #[instrument(level = "debug", skip(self))]
-    pub fn write_method_call(&self, hir_id: hir::HirId, method: MethodCallee<'tcx>) {
+    pub fn write_method_call_and_enforce_effects(
+        &self,
+        hir_id: hir::HirId,
+        span: Span,
+        method: MethodCallee<'tcx>,
+    ) {
+        self.enforce_context_effects(span, method.def_id, method.args);
         self.write_resolution(hir_id, Ok((DefKind::AssocFn, method.def_id)));
         self.write_args(hir_id, method.args);
     }
@@ -271,7 +277,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     // FIXME: currently we never try to compose autoderefs
                     // and ReifyFnPointer/UnsafeFnPointer, but we could.
                     _ => {
-                        self.tcx.sess.delay_span_bug(
+                        self.tcx.sess.span_delayed_bug(
                             expr.span,
                             format!(
                                 "while adjusting {:?}, can't compose {:?} and {:?}",
@@ -753,7 +759,6 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         lang_item: hir::LangItem,
         span: Span,
         hir_id: hir::HirId,
-        expr_hir_id: Option<hir::HirId>,
     ) -> (Res, Ty<'tcx>) {
         let def_id = self.tcx.require_lang_item(lang_item, Some(span));
         let def_kind = self.tcx.def_kind(def_id);
@@ -770,7 +775,13 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         let code = match lang_item {
             hir::LangItem::IntoFutureIntoFuture => {
-                Some(ObligationCauseCode::AwaitableExpr(expr_hir_id))
+                if let hir::Node::Expr(into_future_call) = self.tcx.hir().get_parent(hir_id)
+                    && let hir::ExprKind::Call(_, [arg0]) = &into_future_call.kind
+                {
+                    Some(ObligationCauseCode::AwaitableExpr(arg0.hir_id))
+                } else {
+                    None
+                }
             }
             hir::LangItem::IteratorNext | hir::LangItem::IntoIterIntoIter => {
                 Some(ObligationCauseCode::ForLoopIterator)
@@ -855,7 +866,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 let guar = self
                     .tcx
                     .sess
-                    .delay_span_bug(span, "method resolution should've emitted an error");
+                    .span_delayed_bug(span, "method resolution should've emitted an error");
                 let result = match error {
                     method::MethodError::PrivateMatch(kind, def_id, _) => Ok((kind, def_id)),
                     _ => Err(guar),
@@ -1429,7 +1440,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             ) {
                 Ok(ok) => self.register_infer_ok_obligations(ok),
                 Err(_) => {
-                    self.tcx.sess.delay_span_bug(
+                    self.tcx.sess.span_delayed_bug(
                         span,
                         format!(
                         "instantiate_value_path: (UFCS) {self_ty:?} was a subtype of {impl_ty:?} but now is not?",

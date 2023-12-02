@@ -25,11 +25,11 @@ fn diagnostic_hir_wf_check<'tcx>(
         WellFormedLoc::Ty(def_id) => def_id,
         WellFormedLoc::Param { function, param_idx: _ } => function,
     };
-    let hir_id = hir.local_def_id_to_hir_id(def_id);
+    let hir_id = tcx.local_def_id_to_hir_id(def_id);
 
     // HIR wfcheck should only ever happen as part of improving an existing error
     tcx.sess
-        .delay_span_bug(tcx.def_span(def_id), "Performed HIR wfcheck without an existing error!");
+        .span_delayed_bug(tcx.def_span(def_id), "Performed HIR wfcheck without an existing error!");
 
     let icx = ItemCtxt::new(tcx, def_id);
 

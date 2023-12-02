@@ -32,7 +32,7 @@ use rustc_middle::ty::error::{ExpectedFound, TypeError};
 use rustc_middle::ty::fold::BoundVarReplacerDelegate;
 use rustc_middle::ty::fold::{TypeFoldable, TypeFolder, TypeSuperFoldable};
 use rustc_middle::ty::relate::RelateResult;
-use rustc_middle::ty::visit::{TypeVisitable, TypeVisitableExt};
+use rustc_middle::ty::visit::TypeVisitableExt;
 pub use rustc_middle::ty::IntVarValue;
 use rustc_middle::ty::{self, GenericParamDefKind, InferConst, InferTy, Ty, TyCtxt};
 use rustc_middle::ty::{ConstVid, EffectVid, FloatVid, IntVid, TyVid};
@@ -384,7 +384,6 @@ pub enum ValuePairs<'tcx> {
     Regions(ExpectedFound<ty::Region<'tcx>>),
     Terms(ExpectedFound<ty::Term<'tcx>>),
     Aliases(ExpectedFound<ty::AliasTy<'tcx>>),
-    TraitRefs(ExpectedFound<ty::TraitRef<'tcx>>),
     PolyTraitRefs(ExpectedFound<ty::PolyTraitRef<'tcx>>),
     PolySigs(ExpectedFound<ty::PolyFnSig<'tcx>>),
     ExistentialTraitRef(ExpectedFound<ty::PolyExistentialTraitRef<'tcx>>),
@@ -1406,17 +1405,6 @@ impl<'tcx> InferCtxt<'tcx> {
         value.fold_with(&mut r)
     }
 
-    /// Returns the first unresolved type or const variable contained in `T`.
-    pub fn first_unresolved_const_or_ty_var<T>(
-        &self,
-        value: &T,
-    ) -> Option<(ty::Term<'tcx>, Option<Span>)>
-    where
-        T: TypeVisitable<TyCtxt<'tcx>>,
-    {
-        value.visit_with(&mut resolve::UnresolvedTypeOrConstFinder::new(self)).break_value()
-    }
-
     pub fn probe_const_var(&self, vid: ty::ConstVid) -> Result<ty::Const<'tcx>, ty::UniverseIndex> {
         match self.inner.borrow_mut().const_unification_table().probe_value(vid).val {
             ConstVariableValue::Known { value } => Ok(value),
@@ -1445,7 +1433,7 @@ impl<'tcx> InferCtxt<'tcx> {
                     let guar = self
                         .tcx
                         .sess
-                        .delay_span_bug(DUMMY_SP, format!("`{value:?}` is not fully resolved"));
+                        .span_delayed_bug(DUMMY_SP, format!("`{value:?}` is not fully resolved"));
                     Ok(self.tcx.fold_regions(value, |re, _| {
                         if re.is_var() { ty::Region::new_error(self.tcx, guar) } else { re }
                     }))

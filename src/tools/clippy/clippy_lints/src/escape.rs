@@ -6,7 +6,7 @@ use rustc_lint::{LateContext, LateLintPass};
 use rustc_middle::mir::FakeReadCause;
 use rustc_middle::ty::layout::LayoutOf;
 use rustc_middle::ty::{self, TraitRef, Ty};
-use rustc_session::{declare_tool_lint, impl_lint_pass};
+use rustc_session::impl_lint_pass;
 use rustc_span::def_id::LocalDefId;
 use rustc_span::symbol::kw;
 use rustc_span::Span;
@@ -74,7 +74,7 @@ impl<'tcx> LateLintPass<'tcx> for BoxedLocal {
         let parent_id = cx
             .tcx
             .hir()
-            .get_parent_item(cx.tcx.hir().local_def_id_to_hir_id(fn_def_id))
+            .get_parent_item(cx.tcx.local_def_id_to_hir_id(fn_def_id))
             .def_id;
         let parent_node = cx.tcx.hir().find_by_def_id(parent_id);
 

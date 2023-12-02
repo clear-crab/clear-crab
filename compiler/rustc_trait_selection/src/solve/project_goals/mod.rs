@@ -101,10 +101,6 @@ impl<'tcx> assembly::GoalKind<'tcx> for ProjectionPredicate<'tcx> {
         self.projection_ty.trait_ref(tcx)
     }
 
-    fn polarity(self) -> ty::ImplPolarity {
-        ty::ImplPolarity::Positive
-    }
-
     fn with_self_ty(self, tcx: TyCtxt<'tcx>, self_ty: Ty<'tcx>) -> Self {
         self.with_self_ty(tcx, self_ty)
     }
@@ -200,7 +196,7 @@ impl<'tcx> assembly::GoalKind<'tcx> for ProjectionPredicate<'tcx> {
             };
 
             let error_response = |ecx: &mut EvalCtxt<'_, 'tcx>, reason| {
-                let guar = tcx.sess.delay_span_bug(tcx.def_span(assoc_def.item.def_id), reason);
+                let guar = tcx.sess.span_delayed_bug(tcx.def_span(assoc_def.item.def_id), reason);
                 let error_term = match assoc_def.item.kind {
                     ty::AssocKind::Const => ty::Const::new_error(
                         tcx,
@@ -290,7 +286,7 @@ impl<'tcx> assembly::GoalKind<'tcx> for ProjectionPredicate<'tcx> {
         ecx: &mut EvalCtxt<'_, 'tcx>,
         goal: Goal<'tcx, Self>,
     ) -> QueryResult<'tcx> {
-        ecx.tcx().sess.delay_span_bug(
+        ecx.tcx().sess.span_delayed_bug(
             ecx.tcx().def_span(goal.predicate.def_id()),
             "associated types not allowed on auto traits",
         );

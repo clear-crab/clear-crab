@@ -8,7 +8,7 @@ use rustc_hir::LangItem::{OptionSome, ResultOk};
 use rustc_hir::{Body, ExprKind, FnDecl, Impl, ItemKind, Node};
 use rustc_lint::{LateContext, LateLintPass};
 use rustc_middle::ty;
-use rustc_session::{declare_tool_lint, impl_lint_pass};
+use rustc_session::impl_lint_pass;
 use rustc_span::def_id::LocalDefId;
 use rustc_span::symbol::sym;
 use rustc_span::Span;
@@ -91,7 +91,7 @@ impl<'tcx> LateLintPass<'tcx> for UnnecessaryWraps {
         }
 
         // Abort if the method is implementing a trait or of it a trait method.
-        let hir_id = cx.tcx.hir().local_def_id_to_hir_id(def_id);
+        let hir_id = cx.tcx.local_def_id_to_hir_id(def_id);
         if let Some(Node::Item(item)) = cx.tcx.hir().find_parent(hir_id) {
             if matches!(
                 item.kind,

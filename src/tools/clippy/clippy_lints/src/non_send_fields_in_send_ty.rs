@@ -8,7 +8,7 @@ use rustc_hir::{FieldDef, Item, ItemKind, Node};
 use rustc_lint::{LateContext, LateLintPass};
 use rustc_middle::lint::in_external_macro;
 use rustc_middle::ty::{self, GenericArgKind, Ty};
-use rustc_session::{declare_tool_lint, impl_lint_pass};
+use rustc_session::impl_lint_pass;
 use rustc_span::sym;
 
 declare_clippy_lint! {
@@ -100,7 +100,7 @@ impl<'tcx> LateLintPass<'tcx> for NonSendFieldInSendTy {
                     if let Some(field_hir_id) = field
                         .did
                         .as_local()
-                        .map(|local_def_id| hir_map.local_def_id_to_hir_id(local_def_id))
+                        .map(|local_def_id| cx.tcx.local_def_id_to_hir_id(local_def_id))
                         && !is_lint_allowed(cx, NON_SEND_FIELDS_IN_SEND_TY, field_hir_id)
                         && let field_ty = field.ty(cx.tcx, impl_trait_args)
                         && !ty_allowed_in_send(cx, field_ty, send_trait)

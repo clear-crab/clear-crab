@@ -6,7 +6,7 @@ use rustc_hir::intravisit::FnKind;
 use rustc_hir::{Body, FnDecl, OwnerId, TraitItem, TraitItemKind};
 use rustc_lint::{LateContext, LateLintPass, LintContext};
 use rustc_middle::lint::in_external_macro;
-use rustc_session::{declare_lint_pass, declare_tool_lint};
+use rustc_session::declare_lint_pass;
 use rustc_span::{sym, Span};
 
 declare_clippy_lint! {
@@ -115,7 +115,7 @@ impl<'tcx> LateLintPass<'tcx> for ReturnSelfNotMustUse {
             // `#[must_use]` should be put on the trait definition directly.
             && cx.tcx.trait_id_of_impl(impl_def).is_none()
         {
-            let hir_id = cx.tcx.hir().local_def_id_to_hir_id(fn_def);
+            let hir_id = cx.tcx.local_def_id_to_hir_id(fn_def);
             check_method(cx, decl, fn_def, span, hir_id.expect_owner());
         }
     }

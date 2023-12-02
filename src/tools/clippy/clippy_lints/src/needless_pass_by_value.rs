@@ -17,7 +17,7 @@ use rustc_infer::infer::TyCtxtInferExt;
 use rustc_lint::{LateContext, LateLintPass};
 use rustc_middle::mir::FakeReadCause;
 use rustc_middle::ty::{self, Ty, TypeVisitableExt};
-use rustc_session::{declare_lint_pass, declare_tool_lint};
+use rustc_session::declare_lint_pass;
 use rustc_span::def_id::LocalDefId;
 use rustc_span::symbol::kw;
 use rustc_span::{sym, Span};
@@ -86,7 +86,7 @@ impl<'tcx> LateLintPass<'tcx> for NeedlessPassByValue {
             return;
         }
 
-        let hir_id = cx.tcx.hir().local_def_id_to_hir_id(fn_def_id);
+        let hir_id = cx.tcx.local_def_id_to_hir_id(fn_def_id);
 
         match kind {
             FnKind::ItemFn(.., header) => {

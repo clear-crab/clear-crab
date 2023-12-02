@@ -1549,7 +1549,9 @@ impl<'tcx, 'exprs, E: AsCoercionSite> CoerceMany<'tcx, 'exprs, E> {
                 // any superfluous errors we might encounter while trying to
                 // emit or provide suggestions on how to fix the initial error.
                 fcx.set_tainted_by_errors(
-                    fcx.tcx.sess.delay_span_bug(cause.span, "coercion error but no error emitted"),
+                    fcx.tcx
+                        .sess
+                        .span_delayed_bug(cause.span, "coercion error but no error emitted"),
                 );
                 let (expected, found) = if label_expression_as_expected {
                     // In the case where this is a "forced unit", like
@@ -1715,6 +1717,7 @@ impl<'tcx, 'exprs, E: AsCoercionSite> CoerceMany<'tcx, 'exprs, E> {
         // label pointing out the cause for the type coercion will be wrong
         // as prior return coercions would not be relevant (#57664).
         let fn_decl = if let (Some(expr), Some(blk_id)) = (expression, blk_id) {
+            fcx.suggest_missing_semicolon(&mut err, expr, expected, false);
             let pointing_at_return_type =
                 fcx.suggest_mismatched_types_on_tail(&mut err, expr, expected, found, blk_id);
             if let (Some(cond_expr), true, false) = (

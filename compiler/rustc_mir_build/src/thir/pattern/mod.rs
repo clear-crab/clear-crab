@@ -18,17 +18,14 @@ use rustc_hir::pat_util::EnumerateAndAdjustIterator;
 use rustc_hir::RangeEnd;
 use rustc_index::Idx;
 use rustc_middle::mir::interpret::{ErrorHandled, GlobalId, LitToConstError, LitToConstInput};
-use rustc_middle::mir::{self, BorrowKind, Const, Mutability, UserTypeProjection};
+use rustc_middle::mir::{self, BorrowKind, Const, Mutability};
 use rustc_middle::thir::{
     Ascription, BindingMode, FieldPat, LocalVarId, Pat, PatKind, PatRange, PatRangeBoundary,
 };
 use rustc_middle::ty::layout::IntegerExt;
-use rustc_middle::ty::{
-    self, AdtDef, CanonicalUserTypeAnnotation, GenericArg, GenericArgsRef, Region, Ty, TyCtxt,
-    TypeVisitableExt, UserType,
-};
+use rustc_middle::ty::{self, CanonicalUserTypeAnnotation, Ty, TyCtxt, TypeVisitableExt};
 use rustc_span::def_id::LocalDefId;
-use rustc_span::{ErrorGuaranteed, Span, Symbol};
+use rustc_span::{ErrorGuaranteed, Span};
 use rustc_target::abi::{FieldIdx, Integer};
 
 use std::cmp::Ordering;
@@ -111,7 +108,7 @@ impl<'a, 'tcx> PatCtxt<'a, 'tcx> {
                     let msg = format!(
                         "found bad range pattern endpoint `{expr:?}` outside of error recovery"
                     );
-                    return Err(self.tcx.sess.delay_span_bug(expr.span, msg));
+                    return Err(self.tcx.sess.span_delayed_bug(expr.span, msg));
                 };
                 Ok((Some(PatRangeBoundary::Finite(value)), ascr, inline_const))
             }
@@ -181,7 +178,7 @@ impl<'a, 'tcx> PatCtxt<'a, 'tcx> {
     ) -> Result<PatKind<'tcx>, ErrorGuaranteed> {
         if lo_expr.is_none() && hi_expr.is_none() {
             let msg = format!("found twice-open range pattern (`..`) outside of error recovery");
-            return Err(self.tcx.sess.delay_span_bug(span, msg));
+            return Err(self.tcx.sess.span_delayed_bug(span, msg));
         }
 
         let (lo, lo_ascr, lo_inline) = self.lower_pattern_range_endpoint(lo_expr)?;
@@ -253,6 +250,8 @@ impl<'a, 'tcx> PatCtxt<'a, 'tcx> {
 
         let kind = match pat.kind {
             hir::PatKind::Wild => PatKind::Wild,
+
+            hir::PatKind::Never => PatKind::Never,
 
             hir::PatKind::Lit(value) => self.lower_lit(value),
 
@@ -699,148 +698,5 @@ impl<'tcx> UserAnnotatedTyHelpers<'tcx> for PatCtxt<'_, 'tcx> {
 
     fn typeck_results(&self) -> &ty::TypeckResults<'tcx> {
         self.typeck_results
-    }
-}
-
-trait PatternFoldable<'tcx>: Sized {
-    fn fold_with<F: PatternFolder<'tcx>>(&self, folder: &mut F) -> Self {
-        self.super_fold_with(folder)
-    }
-
-    fn super_fold_with<F: PatternFolder<'tcx>>(&self, folder: &mut F) -> Self;
-}
-
-trait PatternFolder<'tcx>: Sized {
-    fn fold_pattern(&mut self, pattern: &Pat<'tcx>) -> Pat<'tcx> {
-        pattern.super_fold_with(self)
-    }
-
-    fn fold_pattern_kind(&mut self, kind: &PatKind<'tcx>) -> PatKind<'tcx> {
-        kind.super_fold_with(self)
-    }
-}
-
-impl<'tcx, T: PatternFoldable<'tcx>> PatternFoldable<'tcx> for Box<T> {
-    fn super_fold_with<F: PatternFolder<'tcx>>(&self, folder: &mut F) -> Self {
-        let content: T = (**self).fold_with(folder);
-        Box::new(content)
-    }
-}
-
-impl<'tcx, T: PatternFoldable<'tcx>> PatternFoldable<'tcx> for Vec<T> {
-    fn super_fold_with<F: PatternFolder<'tcx>>(&self, folder: &mut F) -> Self {
-        self.iter().map(|t| t.fold_with(folder)).collect()
-    }
-}
-
-impl<'tcx, T: PatternFoldable<'tcx>> PatternFoldable<'tcx> for Box<[T]> {
-    fn super_fold_with<F: PatternFolder<'tcx>>(&self, folder: &mut F) -> Self {
-        self.iter().map(|t| t.fold_with(folder)).collect()
-    }
-}
-
-impl<'tcx, T: PatternFoldable<'tcx>> PatternFoldable<'tcx> for Option<T> {
-    fn super_fold_with<F: PatternFolder<'tcx>>(&self, folder: &mut F) -> Self {
-        self.as_ref().map(|t| t.fold_with(folder))
-    }
-}
-
-macro_rules! ClonePatternFoldableImpls {
-    (<$lt_tcx:tt> $($ty:ty),+) => {
-        $(
-            impl<$lt_tcx> PatternFoldable<$lt_tcx> for $ty {
-                fn super_fold_with<F: PatternFolder<$lt_tcx>>(&self, _: &mut F) -> Self {
-                    Clone::clone(self)
-                }
-            }
-        )+
-    }
-}
-
-ClonePatternFoldableImpls! { <'tcx>
-    Span, FieldIdx, Mutability, Symbol, LocalVarId, usize,
-    Region<'tcx>, Ty<'tcx>, BindingMode, AdtDef<'tcx>,
-    GenericArgsRef<'tcx>, &'tcx GenericArg<'tcx>, UserType<'tcx>,
-    UserTypeProjection, CanonicalUserTypeAnnotation<'tcx>
-}
-
-impl<'tcx> PatternFoldable<'tcx> for FieldPat<'tcx> {
-    fn super_fold_with<F: PatternFolder<'tcx>>(&self, folder: &mut F) -> Self {
-        FieldPat { field: self.field.fold_with(folder), pattern: self.pattern.fold_with(folder) }
-    }
-}
-
-impl<'tcx> PatternFoldable<'tcx> for Pat<'tcx> {
-    fn fold_with<F: PatternFolder<'tcx>>(&self, folder: &mut F) -> Self {
-        folder.fold_pattern(self)
-    }
-
-    fn super_fold_with<F: PatternFolder<'tcx>>(&self, folder: &mut F) -> Self {
-        Pat {
-            ty: self.ty.fold_with(folder),
-            span: self.span.fold_with(folder),
-            kind: self.kind.fold_with(folder),
-        }
-    }
-}
-
-impl<'tcx> PatternFoldable<'tcx> for PatKind<'tcx> {
-    fn fold_with<F: PatternFolder<'tcx>>(&self, folder: &mut F) -> Self {
-        folder.fold_pattern_kind(self)
-    }
-
-    fn super_fold_with<F: PatternFolder<'tcx>>(&self, folder: &mut F) -> Self {
-        match *self {
-            PatKind::Wild => PatKind::Wild,
-            PatKind::Error(e) => PatKind::Error(e),
-            PatKind::AscribeUserType {
-                ref subpattern,
-                ascription: Ascription { ref annotation, variance },
-            } => PatKind::AscribeUserType {
-                subpattern: subpattern.fold_with(folder),
-                ascription: Ascription { annotation: annotation.fold_with(folder), variance },
-            },
-            PatKind::Binding { mutability, name, mode, var, ty, ref subpattern, is_primary } => {
-                PatKind::Binding {
-                    mutability: mutability.fold_with(folder),
-                    name: name.fold_with(folder),
-                    mode: mode.fold_with(folder),
-                    var: var.fold_with(folder),
-                    ty: ty.fold_with(folder),
-                    subpattern: subpattern.fold_with(folder),
-                    is_primary,
-                }
-            }
-            PatKind::Variant { adt_def, args, variant_index, ref subpatterns } => {
-                PatKind::Variant {
-                    adt_def: adt_def.fold_with(folder),
-                    args: args.fold_with(folder),
-                    variant_index,
-                    subpatterns: subpatterns.fold_with(folder),
-                }
-            }
-            PatKind::Leaf { ref subpatterns } => {
-                PatKind::Leaf { subpatterns: subpatterns.fold_with(folder) }
-            }
-            PatKind::Deref { ref subpattern } => {
-                PatKind::Deref { subpattern: subpattern.fold_with(folder) }
-            }
-            PatKind::Constant { value } => PatKind::Constant { value },
-            PatKind::InlineConstant { def, subpattern: ref pattern } => {
-                PatKind::InlineConstant { def, subpattern: pattern.fold_with(folder) }
-            }
-            PatKind::Range(ref range) => PatKind::Range(range.clone()),
-            PatKind::Slice { ref prefix, ref slice, ref suffix } => PatKind::Slice {
-                prefix: prefix.fold_with(folder),
-                slice: slice.fold_with(folder),
-                suffix: suffix.fold_with(folder),
-            },
-            PatKind::Array { ref prefix, ref slice, ref suffix } => PatKind::Array {
-                prefix: prefix.fold_with(folder),
-                slice: slice.fold_with(folder),
-                suffix: suffix.fold_with(folder),
-            },
-            PatKind::Or { ref pats } => PatKind::Or { pats: pats.fold_with(folder) },
-        }
     }
 }

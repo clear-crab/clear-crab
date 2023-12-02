@@ -84,8 +84,7 @@ impl<'tcx> MirPass<'tcx> for ConstProp {
 
         // FIXME(welseywiser) const prop doesn't work on coroutines because of query cycles
         // computing their layout.
-        let is_coroutine = def_kind == DefKind::Coroutine;
-        if is_coroutine {
+        if tcx.is_coroutine(def_id.to_def_id()) {
             trace!("ConstProp skipped for coroutine {:?}", def_id);
             return;
         }
@@ -440,6 +439,7 @@ impl<'mir, 'tcx> ConstPropagator<'mir, 'tcx> {
 
         // FIXME we need to revisit this for #67176
         if rvalue.has_param() {
+            trace!("skipping, has param");
             return None;
         }
         if !rvalue
@@ -708,7 +708,11 @@ impl<'tcx> Visitor<'tcx> for ConstPropagator<'_, 'tcx> {
     fn visit_assign(&mut self, place: &Place<'tcx>, rvalue: &Rvalue<'tcx>, location: Location) {
         self.super_assign(place, rvalue, location);
 
-        let Some(()) = self.check_rvalue(rvalue) else { return };
+        let Some(()) = self.check_rvalue(rvalue) else {
+            trace!("rvalue check failed, removing const");
+            Self::remove_const(&mut self.ecx, place.local);
+            return;
+        };
 
         match self.ecx.machine.can_const_prop[place.local] {
             // Do nothing if the place is indirect.

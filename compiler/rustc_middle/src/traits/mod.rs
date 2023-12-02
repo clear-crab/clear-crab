@@ -250,9 +250,6 @@ pub enum ObligationCauseCode<'tcx> {
     /// A tuple is WF only if its middle elements are `Sized`.
     TupleElem,
 
-    /// This is the trait reference from the given projection.
-    ProjectionWf(ty::AliasTy<'tcx>),
-
     /// Must satisfy all of the where-clause predicates of the
     /// given item.
     ItemObligation(DefId),
@@ -343,7 +340,8 @@ pub enum ObligationCauseCode<'tcx> {
         parent_code: InternedObligationCauseCode<'tcx>,
     },
 
-    /// Error derived when matching traits/impls; see ObligationCause for more details
+    /// Error derived when checking an impl item is compatible with
+    /// its corresponding trait item's definition
     CompareImplItemObligation {
         impl_item_def_id: LocalDefId,
         trait_item_def_id: DefId,
@@ -371,9 +369,6 @@ pub enum ObligationCauseCode<'tcx> {
         /// Whether the `Span` came from an expression or a type expression.
         origin_expr: bool,
     },
-
-    /// Constants in patterns must have `Structural` type.
-    ConstPatternStructural,
 
     /// Computing common supertype in an if expression
     IfExpression(Box<IfExpressionCause<'tcx>>),
@@ -407,9 +402,6 @@ pub enum ObligationCauseCode<'tcx> {
     /// `return` with an expression
     ReturnValue(hir::HirId),
 
-    /// Return type of this function
-    ReturnType,
-
     /// Opaque return type of this function
     OpaqueReturnType(Option<(Ty<'tcx>, Span)>),
 
@@ -419,10 +411,7 @@ pub enum ObligationCauseCode<'tcx> {
     /// #[feature(trivial_bounds)] is not enabled
     TrivialBound,
 
-    /// If `X` is the concrete type of an opaque type `impl Y`, then `X` must implement `Y`
-    OpaqueType,
-
-    AwaitableExpr(Option<hir::HirId>),
+    AwaitableExpr(hir::HirId),
 
     ForLoopIterator,
 
@@ -843,50 +832,31 @@ impl ObjectSafetyViolation {
         }
     }
 
-    pub fn solution(&self, err: &mut Diagnostic) {
+    pub fn solution(&self) -> ObjectSafetyViolationSolution {
         match self {
             ObjectSafetyViolation::SizedSelf(_)
             | ObjectSafetyViolation::SupertraitSelf(_)
-            | ObjectSafetyViolation::SupertraitNonLifetimeBinder(..) => {}
+            | ObjectSafetyViolation::SupertraitNonLifetimeBinder(..) => {
+                ObjectSafetyViolationSolution::None
+            }
             ObjectSafetyViolation::Method(
                 name,
                 MethodViolationCode::StaticMethod(Some((add_self_sugg, make_sized_sugg))),
                 _,
-            ) => {
-                err.span_suggestion(
-                    add_self_sugg.1,
-                    format!(
-                        "consider turning `{name}` into a method by giving it a `&self` argument"
-                    ),
-                    add_self_sugg.0.to_string(),
-                    Applicability::MaybeIncorrect,
-                );
-                err.span_suggestion(
-                    make_sized_sugg.1,
-                    format!(
-                        "alternatively, consider constraining `{name}` so it does not apply to \
-                             trait objects"
-                    ),
-                    make_sized_sugg.0.to_string(),
-                    Applicability::MaybeIncorrect,
-                );
-            }
+            ) => ObjectSafetyViolationSolution::AddSelfOrMakeSized {
+                name: *name,
+                add_self_sugg: add_self_sugg.clone(),
+                make_sized_sugg: make_sized_sugg.clone(),
+            },
             ObjectSafetyViolation::Method(
                 name,
                 MethodViolationCode::UndispatchableReceiver(Some(span)),
                 _,
-            ) => {
-                err.span_suggestion(
-                    *span,
-                    format!("consider changing method `{name}`'s `self` parameter to be `&self`"),
-                    "&Self",
-                    Applicability::MachineApplicable,
-                );
-            }
+            ) => ObjectSafetyViolationSolution::ChangeToRefSelf(*name, *span),
             ObjectSafetyViolation::AssocConst(name, _)
             | ObjectSafetyViolation::GAT(name, _)
             | ObjectSafetyViolation::Method(name, ..) => {
-                err.help(format!("consider moving `{name}` to another trait"));
+                ObjectSafetyViolationSolution::MoveToAnotherTrait(*name)
             }
         }
     }
@@ -906,6 +876,60 @@ impl ObjectSafetyViolation {
                 smallvec![*span]
             }
             _ => smallvec![],
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ObjectSafetyViolationSolution {
+    None,
+    AddSelfOrMakeSized {
+        name: Symbol,
+        add_self_sugg: (String, Span),
+        make_sized_sugg: (String, Span),
+    },
+    ChangeToRefSelf(Symbol, Span),
+    MoveToAnotherTrait(Symbol),
+}
+
+impl ObjectSafetyViolationSolution {
+    pub fn add_to(self, err: &mut Diagnostic) {
+        match self {
+            ObjectSafetyViolationSolution::None => {}
+            ObjectSafetyViolationSolution::AddSelfOrMakeSized {
+                name,
+                add_self_sugg,
+                make_sized_sugg,
+            } => {
+                err.span_suggestion(
+                    add_self_sugg.1,
+                    format!(
+                        "consider turning `{name}` into a method by giving it a `&self` argument"
+                    ),
+                    add_self_sugg.0,
+                    Applicability::MaybeIncorrect,
+                );
+                err.span_suggestion(
+                    make_sized_sugg.1,
+                    format!(
+                        "alternatively, consider constraining `{name}` so it does not apply to \
+                             trait objects"
+                    ),
+                    make_sized_sugg.0,
+                    Applicability::MaybeIncorrect,
+                );
+            }
+            ObjectSafetyViolationSolution::ChangeToRefSelf(name, span) => {
+                err.span_suggestion(
+                    span,
+                    format!("consider changing method `{name}`'s `self` parameter to be `&self`"),
+                    "&Self",
+                    Applicability::MachineApplicable,
+                );
+            }
+            ObjectSafetyViolationSolution::MoveToAnotherTrait(name) => {
+                err.help(format!("consider moving `{name}` to another trait"));
+            }
         }
     }
 }

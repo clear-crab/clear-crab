@@ -256,7 +256,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         self.adjust_expr_for_assert_eq_macro(&mut expr, &mut expected_ty_expr);
 
-        self.set_tainted_by_errors(self.tcx.sess.delay_span_bug(
+        self.set_tainted_by_errors(self.tcx.sess.span_delayed_bug(
             expr.span,
             "`TypeError` when attempting coercion but no error emitted",
         ));
@@ -883,7 +883,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let container_id = pick.item.container_id(self.tcx);
         let container = with_no_trimmed_paths!(self.tcx.def_path_str(container_id));
         for def_id in pick.import_ids {
-            let hir_id = self.tcx.hir().local_def_id_to_hir_id(def_id);
+            let hir_id = self.tcx.local_def_id_to_hir_id(def_id);
             path_span.push_span_label(
                 self.tcx.hir().span(hir_id),
                 format!("`{container}` imported here"),

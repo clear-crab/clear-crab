@@ -99,8 +99,6 @@ pub mod structured_errors;
 mod variance;
 
 use rustc_errors::ErrorGuaranteed;
-use rustc_errors::{DiagnosticMessage, SubdiagnosticMessage};
-use rustc_fluent_macro::fluent_messages;
 use rustc_hir as hir;
 use rustc_middle::middle;
 use rustc_middle::query::Providers;
@@ -115,7 +113,7 @@ use astconv::{AstConv, OnlySelfBounds};
 use bounds::Bounds;
 use rustc_hir::def::DefKind;
 
-fluent_messages! { "../messages.ftl" }
+rustc_fluent_macro::fluent_messages! { "../messages.ftl" }
 
 fn require_c_abi_if_c_variadic(tcx: TyCtxt<'_>, decl: &hir::FnDecl<'_>, abi: Abi, span: Span) {
     const CONVENTIONS_UNSTABLE: &str = "`C`, `cdecl`, `aapcs`, `win64`, `sysv64` or `efiapi`";
@@ -211,8 +209,8 @@ pub fn check_crate(tcx: TyCtxt<'_>) -> Result<(), ErrorGuaranteed> {
         tcx.hir().for_each_module(|module| tcx.ensure().check_mod_item_types(module))
     });
 
-    // HACK: `check_mod_type_wf` may spuriously emit errors due to `delay_span_bug`, even if those errors
-    // only actually get emitted in `check_mod_item_types`.
+    // HACK: `check_mod_type_wf` may spuriously emit errors due to `span_delayed_bug`, even if
+    // those errors only actually get emitted in `check_mod_item_types`.
     errs?;
 
     if tcx.features().rustc_attrs {

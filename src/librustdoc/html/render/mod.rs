@@ -66,7 +66,7 @@ use crate::clean::{self, ItemId, RenderedLink, SelfTy};
 use crate::error::Error;
 use crate::formats::cache::Cache;
 use crate::formats::item_type::ItemType;
-use crate::formats::{AssocItemRender, Impl, RenderMode};
+use crate::formats::Impl;
 use crate::html::escape::Escape;
 use crate::html::format::{
     display_fn, href, join_with_double_colon, print_abi_with_space, print_constness_with_space,
@@ -87,6 +87,21 @@ pub(crate) fn ensure_trailing_slash(v: &str) -> impl fmt::Display + '_ {
     crate::html::format::display_fn(move |f| {
         if !v.ends_with('/') && !v.is_empty() { write!(f, "{v}/") } else { f.write_str(v) }
     })
+}
+
+/// Specifies whether rendering directly implemented trait items or ones from a certain Deref
+/// impl.
+pub(crate) enum AssocItemRender<'a> {
+    All,
+    DerefFor { trait_: &'a clean::Path, type_: &'a clean::Type, deref_mut_: bool },
+}
+
+/// For different handling of associated items from the Deref target of a type rather than the type
+/// itself.
+#[derive(Copy, Clone, PartialEq)]
+pub(crate) enum RenderMode {
+    Normal,
+    ForDeref { mut_: bool },
 }
 
 // Helper structs for rendering items/sidebars and carrying along contextual
@@ -1130,7 +1145,7 @@ impl<'a> AssocItemLink<'a> {
 fn write_impl_section_heading(mut w: impl fmt::Write, title: &str, id: &str) {
     write!(
         w,
-        "<h2 id=\"{id}\" class=\"small-section-header\">\
+        "<h2 id=\"{id}\" class=\"section-header\">\
             {title}\
             <a href=\"#{id}\" class=\"anchor\">§</a>\
          </h2>"
@@ -1381,8 +1396,7 @@ pub(crate) fn notable_traits_button(ty: &clean::Type, cx: &mut Context<'_>) -> O
             if let Some(trait_) = &impl_.trait_ {
                 let trait_did = trait_.def_id();
 
-                if cx.cache().traits.get(&trait_did).map_or(false, |t| t.is_notable_trait(cx.tcx()))
-                {
+                if cx.cache().traits.get(&trait_did).is_some_and(|t| t.is_notable_trait(cx.tcx())) {
                     has_notable_trait = true;
                 }
             }
@@ -1417,7 +1431,7 @@ fn notable_traits_decl(ty: &clean::Type, cx: &Context<'_>) -> (String, String) {
         if let Some(trait_) = &impl_.trait_ {
             let trait_did = trait_.def_id();
 
-            if cx.cache().traits.get(&trait_did).map_or(false, |t| t.is_notable_trait(cx.tcx())) {
+            if cx.cache().traits.get(&trait_did).is_some_and(|t| t.is_notable_trait(cx.tcx())) {
                 if out.is_empty() {
                     write!(
                         &mut out,
@@ -1427,15 +1441,10 @@ fn notable_traits_decl(ty: &clean::Type, cx: &Context<'_>) -> (String, String) {
                     );
                 }
 
-                //use the "where" class here to make it small
-                write!(
-                    &mut out,
-                    "<span class=\"where fmt-newline\">{}</span>",
-                    impl_.print(false, cx)
-                );
+                write!(&mut out, "<div class=\"where\">{}</div>", impl_.print(false, cx));
                 for it in &impl_.items {
                     if let clean::AssocTypeItem(ref tydef, ref _bounds) = *it.kind {
-                        out.push_str("<span class=\"where fmt-newline\">    ");
+                        out.push_str("<div class=\"where\">    ");
                         let empty_set = FxHashSet::default();
                         let src_link = AssocItemLink::GotoSource(trait_did.into(), &empty_set);
                         assoc_type(
@@ -1448,7 +1457,7 @@ fn notable_traits_decl(ty: &clean::Type, cx: &Context<'_>) -> (String, String) {
                             0,
                             cx,
                         );
-                        out.push_str(";</span>");
+                        out.push_str(";</div>");
                     }
                 }
             }
@@ -1934,7 +1943,7 @@ pub(crate) fn render_impl_summary(
         if show_def_docs {
             for it in &inner_impl.items {
                 if let clean::AssocTypeItem(ref tydef, ref _bounds) = *it.kind {
-                    w.write_str("<span class=\"where fmt-newline\">  ");
+                    w.write_str("<div class=\"where\">  ");
                     assoc_type(
                         w,
                         it,
@@ -1945,7 +1954,7 @@ pub(crate) fn render_impl_summary(
                         0,
                         cx,
                     );
-                    w.write_str(";</span>");
+                    w.write_str(";</div>");
                 }
             }
         }

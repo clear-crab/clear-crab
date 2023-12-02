@@ -1,10 +1,9 @@
-use crate::mir::pretty::{function_body, pretty_statement};
+use crate::mir::pretty::{function_body, pretty_statement, pretty_terminator};
 use crate::ty::{
     AdtDef, ClosureDef, Const, CoroutineDef, GenericArgs, Movability, Region, RigidTy, Ty, TyKind,
 };
 use crate::{Error, Opaque, Span, Symbol};
 use std::io;
-
 /// The SMIR representation of a single function.
 #[derive(Clone, Debug)]
 pub struct Body {
@@ -23,6 +22,8 @@ pub struct Body {
     // Debug information pertaining to user variables, including captures.
     pub(super) var_debug_info: Vec<VarDebugInfo>,
 }
+
+pub type BasicBlockIdx = usize;
 
 impl Body {
     /// Constructs a `Body`.
@@ -83,6 +84,8 @@ impl Body {
                         Ok(())
                     })
                     .collect::<Vec<_>>();
+                pretty_terminator(&block.terminator.kind, w)?;
+                writeln!(w, "").unwrap();
                 writeln!(w, "    }}").unwrap();
                 Ok(())
             })
@@ -100,7 +103,7 @@ pub struct LocalDecl {
     pub mutability: Mutability,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct BasicBlock {
     pub statements: Vec<Statement>,
     pub terminator: Terminator,
@@ -112,15 +115,22 @@ pub struct Terminator {
     pub span: Span,
 }
 
+impl Terminator {
+    pub fn successors(&self) -> Successors {
+        self.kind.successors()
+    }
+}
+
+pub type Successors = Vec<BasicBlockIdx>;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TerminatorKind {
     Goto {
-        target: usize,
+        target: BasicBlockIdx,
     },
     SwitchInt {
         discr: Operand,
-        targets: Vec<SwitchTarget>,
-        otherwise: usize,
+        targets: SwitchTargets,
     },
     Resume,
     Abort,
@@ -128,32 +138,79 @@ pub enum TerminatorKind {
     Unreachable,
     Drop {
         place: Place,
-        target: usize,
+        target: BasicBlockIdx,
         unwind: UnwindAction,
     },
     Call {
         func: Operand,
         args: Vec<Operand>,
         destination: Place,
-        target: Option<usize>,
+        target: Option<BasicBlockIdx>,
         unwind: UnwindAction,
     },
     Assert {
         cond: Operand,
         expected: bool,
         msg: AssertMessage,
-        target: usize,
+        target: BasicBlockIdx,
         unwind: UnwindAction,
     },
-    CoroutineDrop,
     InlineAsm {
         template: String,
         operands: Vec<InlineAsmOperand>,
         options: String,
         line_spans: String,
-        destination: Option<usize>,
+        destination: Option<BasicBlockIdx>,
         unwind: UnwindAction,
     },
+}
+
+impl TerminatorKind {
+    pub fn successors(&self) -> Successors {
+        use self::TerminatorKind::*;
+        match *self {
+            Call { target: Some(t), unwind: UnwindAction::Cleanup(u), .. }
+            | Drop { target: t, unwind: UnwindAction::Cleanup(u), .. }
+            | Assert { target: t, unwind: UnwindAction::Cleanup(u), .. }
+            | InlineAsm { destination: Some(t), unwind: UnwindAction::Cleanup(u), .. } => {
+                vec![t, u]
+            }
+            Goto { target: t }
+            | Call { target: None, unwind: UnwindAction::Cleanup(t), .. }
+            | Call { target: Some(t), unwind: _, .. }
+            | Drop { target: t, unwind: _, .. }
+            | Assert { target: t, unwind: _, .. }
+            | InlineAsm { destination: None, unwind: UnwindAction::Cleanup(t), .. }
+            | InlineAsm { destination: Some(t), unwind: _, .. } => {
+                vec![t]
+            }
+
+            Return
+            | Resume
+            | Abort
+            | Unreachable
+            | Call { target: None, unwind: _, .. }
+            | InlineAsm { destination: None, unwind: _, .. } => {
+                vec![]
+            }
+            SwitchInt { ref targets, .. } => targets.all_targets(),
+        }
+    }
+
+    pub fn unwind(&self) -> Option<&UnwindAction> {
+        match *self {
+            TerminatorKind::Goto { .. }
+            | TerminatorKind::Return
+            | TerminatorKind::Unreachable
+            | TerminatorKind::Resume
+            | TerminatorKind::Abort
+            | TerminatorKind::SwitchInt { .. } => None,
+            TerminatorKind::Call { ref unwind, .. }
+            | TerminatorKind::Assert { ref unwind, .. }
+            | TerminatorKind::Drop { ref unwind, .. }
+            | TerminatorKind::InlineAsm { ref unwind, .. } => Some(unwind),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -170,7 +227,7 @@ pub enum UnwindAction {
     Continue,
     Unreachable,
     Terminate,
-    Cleanup(usize),
+    Cleanup(BasicBlockIdx),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -601,10 +658,42 @@ pub struct Constant {
     pub literal: Const,
 }
 
+/// The possible branch sites of a [TerminatorKind::SwitchInt].
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SwitchTarget {
-    pub value: u128,
-    pub target: usize,
+pub struct SwitchTargets {
+    /// The conditional branches where the first element represents the value that guards this
+    /// branch, and the second element is the branch target.
+    branches: Vec<(u128, BasicBlockIdx)>,
+    /// The `otherwise` branch which will be taken in case none of the conditional branches are
+    /// satisfied.
+    otherwise: BasicBlockIdx,
+}
+
+impl SwitchTargets {
+    /// All possible targets including the `otherwise` target.
+    pub fn all_targets(&self) -> Successors {
+        self.branches.iter().map(|(_, target)| *target).chain(Some(self.otherwise)).collect()
+    }
+
+    /// The `otherwise` branch target.
+    pub fn otherwise(&self) -> BasicBlockIdx {
+        self.otherwise
+    }
+
+    /// The conditional targets which are only taken if the pattern matches the given value.
+    pub fn branches(&self) -> impl Iterator<Item = (u128, BasicBlockIdx)> + '_ {
+        self.branches.iter().copied()
+    }
+
+    /// The number of targets including `otherwise`.
+    pub fn len(&self) -> usize {
+        self.branches.len() + 1
+    }
+
+    /// Create a new SwitchTargets from the given branches and `otherwise` target.
+    pub fn new(branches: Vec<(u128, BasicBlockIdx)>, otherwise: BasicBlockIdx) -> SwitchTargets {
+        SwitchTargets { branches, otherwise }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

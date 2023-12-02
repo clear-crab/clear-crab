@@ -17,7 +17,7 @@ use rustc_middle::ty::TyCtxt;
 use rustc_session::parse::feature_err;
 use rustc_span::{sym, Span, Symbol};
 
-use crate::errors::{ExprNotAllowedInContext, SkippingConstChecks};
+use crate::errors::SkippingConstChecks;
 
 /// An expression that is not *always* legal in a const context.
 #[derive(Clone, Copy)]
@@ -110,7 +110,7 @@ impl<'tcx> CheckConstVisitor<'tcx> {
 
             // However, we cannot allow stable `const fn`s to use unstable features without an explicit
             // opt-in via `rustc_allow_const_fn_unstable`.
-            let attrs = tcx.hir().attrs(tcx.hir().local_def_id_to_hir_id(def_id));
+            let attrs = tcx.hir().attrs(tcx.local_def_id_to_hir_id(def_id));
             attr::rustc_allow_const_fn_unstable(tcx.sess, attrs).any(|name| name == feature_gate)
         };
 
@@ -138,11 +138,10 @@ impl<'tcx> CheckConstVisitor<'tcx> {
 
         match missing_gates.as_slice() {
             [] => {
-                tcx.sess.emit_err(ExprNotAllowedInContext {
+                span_bug!(
                     span,
-                    expr: expr.name(),
-                    context: const_kind.keyword_name(),
-                });
+                    "we should not have reached this point, since `.await` is denied earlier"
+                );
             }
 
             [missing_primary, ref missing_secondary @ ..] => {

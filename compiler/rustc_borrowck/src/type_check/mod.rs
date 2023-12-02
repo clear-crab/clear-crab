@@ -14,7 +14,6 @@ use rustc_hir as hir;
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::LocalDefId;
 use rustc_hir::lang_items::LangItem;
-use rustc_index::bit_set::SparseBitMatrix;
 use rustc_index::{IndexSlice, IndexVec};
 use rustc_infer::infer::canonical::QueryRegionConstraints;
 use rustc_infer::infer::outlives::env::RegionBoundPairs;
@@ -51,8 +50,6 @@ use rustc_mir_dataflow::impls::MaybeInitializedPlaces;
 use rustc_mir_dataflow::move_paths::MoveData;
 use rustc_mir_dataflow::ResultsCursor;
 
-use crate::dataflow::BorrowIndex;
-use crate::region_infer::values::PointIndex;
 use crate::session_diagnostics::{MoveUnsized, SimdShuffleLastConst};
 use crate::{
     borrow_set::BorrowSet,
@@ -68,7 +65,7 @@ use crate::{
     region_infer::TypeTest,
     type_check::free_region_relations::{CreateResult, UniversalRegionRelations},
     universal_regions::{DefiningTy, UniversalRegions},
-    BorrowckInferCtxt, Upvar,
+    BorrowckInferCtxt,
 };
 
 macro_rules! span_mirbug {
@@ -138,7 +135,7 @@ pub(crate) fn type_check<'mir, 'tcx>(
     flow_inits: &mut ResultsCursor<'mir, 'tcx, MaybeInitializedPlaces<'mir, 'tcx>>,
     move_data: &MoveData<'tcx>,
     elements: &Rc<RegionValueElements>,
-    upvars: &[Upvar<'tcx>],
+    upvars: &[&ty::CapturedPlace<'tcx>],
     use_polonius: bool,
 ) -> MirTypeckResults<'tcx> {
     let implicit_region_bound = ty::Region::new_var(infcx.tcx, universal_regions.fr_fn_body);
@@ -166,9 +163,6 @@ pub(crate) fn type_check<'mir, 'tcx>(
 
     debug!(?normalized_inputs_and_output);
 
-    // When using `-Zpolonius=next`, liveness will record the set of live loans per point.
-    let mut live_loans = SparseBitMatrix::new(borrow_set.len());
-
     let mut borrowck_context = BorrowCheckContext {
         universal_regions,
         location_table,
@@ -176,7 +170,6 @@ pub(crate) fn type_check<'mir, 'tcx>(
         all_facts,
         constraints: &mut constraints,
         upvars,
-        live_loans: &mut live_loans,
     };
 
     let mut checker = TypeChecker::new(
@@ -232,7 +225,7 @@ pub(crate) fn type_check<'mir, 'tcx>(
             let mut hidden_type = infcx.resolve_vars_if_possible(decl.hidden_type);
             trace!("finalized opaque type {:?} to {:#?}", opaque_type_key, hidden_type.ty.kind());
             if hidden_type.has_non_region_infer() {
-                let reported = infcx.tcx.sess.delay_span_bug(
+                let reported = infcx.tcx.sess.span_delayed_bug(
                     decl.hidden_type.span,
                     format!("could not resolve {:#?}", hidden_type.ty.kind()),
                 );
@@ -243,7 +236,7 @@ pub(crate) fn type_check<'mir, 'tcx>(
         })
         .collect();
 
-    MirTypeckResults { constraints, universal_region_relations, opaque_type_values, live_loans }
+    MirTypeckResults { constraints, universal_region_relations, opaque_type_values }
 }
 
 fn translate_outlives_facts(typeck: &mut TypeChecker<'_, '_>) {
@@ -274,9 +267,9 @@ fn translate_outlives_facts(typeck: &mut TypeChecker<'_, '_>) {
 #[track_caller]
 fn mirbug(tcx: TyCtxt<'_>, span: Span, msg: String) {
     // We sometimes see MIR failures (notably predicate failures) due to
-    // the fact that we check rvalue sized predicates here. So use `delay_span_bug`
+    // the fact that we check rvalue sized predicates here. So use `span_delayed_bug`
     // to avoid reporting bugs in those cases.
-    tcx.sess.diagnostic().delay_span_bug(span, msg);
+    tcx.sess.diagnostic().span_delayed_bug(span, msg);
 }
 
 enum FieldAccessError {
@@ -318,7 +311,7 @@ impl<'a, 'b, 'tcx> Visitor<'tcx> for TypeVerifier<'a, 'b, 'tcx> {
                 .borrowck_context
                 .constraints
                 .liveness_constraints
-                .add_element(live_region_vid, location);
+                .add_location(live_region_vid, location);
         });
 
         // HACK(compiler-errors): Constants that are gathered into Body.required_consts
@@ -592,16 +585,16 @@ impl<'a, 'b, 'tcx> TypeVerifier<'a, 'b, 'tcx> {
             }
             self.cx.borrowck_context.constraints.outlives_constraints.push(constraint)
         }
-        for region in liveness_constraints.rows() {
+        for region in liveness_constraints.regions() {
             // If the region is live at at least one location in the promoted MIR,
             // then add a liveness constraint to the main MIR for this region
             // at the location provided as an argument to this method
-            if liveness_constraints.get_elements(region).next().is_some() {
+            if liveness_constraints.is_live_anywhere(region) {
                 self.cx
                     .borrowck_context
                     .constraints
                     .liveness_constraints
-                    .add_element(region, location);
+                    .add_location(region, location);
             }
         }
     }
@@ -857,11 +850,7 @@ struct BorrowCheckContext<'a, 'tcx> {
     all_facts: &'a mut Option<AllFacts>,
     borrow_set: &'a BorrowSet<'tcx>,
     pub(crate) constraints: &'a mut MirTypeckRegionConstraints<'tcx>,
-    upvars: &'a [Upvar<'tcx>],
-
-    /// The set of loans that are live at a given point in the CFG, filled in by `liveness::trace`,
-    /// when using `-Zpolonius=next`.
-    pub(crate) live_loans: &'a mut SparseBitMatrix<PointIndex, BorrowIndex>,
+    upvars: &'a [&'a ty::CapturedPlace<'tcx>],
 }
 
 /// Holder struct for passing results from MIR typeck to the rest of the non-lexical regions
@@ -870,9 +859,6 @@ pub(crate) struct MirTypeckResults<'tcx> {
     pub(crate) constraints: MirTypeckRegionConstraints<'tcx>,
     pub(crate) universal_region_relations: Frozen<UniversalRegionRelations<'tcx>>,
     pub(crate) opaque_type_values: FxIndexMap<OpaqueTypeKey<'tcx>, OpaqueHiddenType<'tcx>>,
-
-    /// The set of loans that are live at a given point in the CFG, when using `-Zpolonius=next`.
-    pub(crate) live_loans: SparseBitMatrix<PointIndex, BorrowIndex>,
 }
 
 /// A collection of region constraints that must be satisfied for the
@@ -899,7 +885,7 @@ pub(crate) struct MirTypeckRegionConstraints<'tcx> {
     /// not otherwise appear in the MIR -- in particular, the
     /// late-bound regions that it instantiates at call-sites -- and
     /// hence it must report on their liveness constraints.
-    pub(crate) liveness_constraints: LivenessValues<RegionVid>,
+    pub(crate) liveness_constraints: LivenessValues,
 
     pub(crate) outlives_constraints: OutlivesConstraintSet<'tcx>,
 
@@ -1082,7 +1068,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
         );
 
         if result.is_err() {
-            self.infcx.tcx.sess.delay_span_bug(
+            self.infcx.tcx.sess.span_delayed_bug(
                 self.body.span,
                 "failed re-defining predefined opaques in mir typeck",
             );
@@ -1443,7 +1429,7 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
                     self.borrowck_context
                         .constraints
                         .liveness_constraints
-                        .add_element(region_vid, term_location);
+                        .add_location(region_vid, term_location);
                 }
 
                 self.check_call_inputs(body, term, func, &sig, args, term_location, *call_source);
@@ -2678,8 +2664,10 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
         let typeck_root_args = ty::GenericArgs::identity_for_item(tcx, typeck_root_def_id);
 
         let parent_args = match tcx.def_kind(def_id) {
+            DefKind::Closure if tcx.is_coroutine(def_id.to_def_id()) => {
+                args.as_coroutine().parent_args()
+            }
             DefKind::Closure => args.as_closure().parent_args(),
-            DefKind::Coroutine => args.as_coroutine().parent_args(),
             DefKind::InlineConst => args.as_inline_const().parent_args(),
             other => bug!("unexpected item {:?}", other),
         };

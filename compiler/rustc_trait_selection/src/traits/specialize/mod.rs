@@ -37,7 +37,7 @@ pub struct OverlapError<'tcx> {
     pub with_impl: DefId,
     pub trait_ref: ty::TraitRef<'tcx>,
     pub self_ty: Option<Ty<'tcx>>,
-    pub intercrate_ambiguity_causes: FxIndexSet<IntercrateAmbiguityCause>,
+    pub intercrate_ambiguity_causes: FxIndexSet<IntercrateAmbiguityCause<'tcx>>,
     pub involves_placeholder: bool,
 }
 
@@ -202,7 +202,7 @@ fn fulfill_implication<'tcx>(
         {
             Ok(source_trait_ref) => source_trait_ref,
             Err(_errors) => {
-                infcx.tcx.sess.delay_span_bug(
+                infcx.tcx.sess.span_delayed_bug(
                     infcx.tcx.def_span(source_impl),
                     format!("failed to fully normalize {source_trait_ref}"),
                 );
@@ -431,7 +431,10 @@ fn report_conflicting_impls<'tcx>(
                 decorate(tcx, &overlap, impl_span, &mut err);
                 Some(err.emit())
             } else {
-                Some(tcx.sess.delay_span_bug(impl_span, "impl should have failed the orphan check"))
+                Some(
+                    tcx.sess
+                        .span_delayed_bug(impl_span, "impl should have failed the orphan check"),
+                )
             };
             sg.has_errored = reported;
         }
@@ -442,7 +445,7 @@ fn report_conflicting_impls<'tcx>(
             };
             tcx.struct_span_lint_hir(
                 lint,
-                tcx.hir().local_def_id_to_hir_id(impl_def_id),
+                tcx.local_def_id_to_hir_id(impl_def_id),
                 impl_span,
                 msg,
                 |err| {

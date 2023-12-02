@@ -380,7 +380,7 @@ fn compare_method_predicate_entailment<'tcx>(
     if !errors.is_empty() {
         match check_implied_wf {
             CheckImpliedWfMode::Check => {
-                let impl_m_hir_id = tcx.hir().local_def_id_to_hir_id(impl_m_def_id);
+                let impl_m_hir_id = tcx.local_def_id_to_hir_id(impl_m_def_id);
                 return compare_method_predicate_entailment(
                     tcx,
                     impl_m,
@@ -410,7 +410,7 @@ fn compare_method_predicate_entailment<'tcx>(
     if !errors.is_empty() {
         // FIXME(compiler-errors): This can be simplified when IMPLIED_BOUNDS_ENTAILMENT
         // becomes a hard error (i.e. ideally we'd just call `resolve_regions_and_report_errors`
-        let impl_m_hir_id = tcx.hir().local_def_id_to_hir_id(impl_m_def_id);
+        let impl_m_hir_id = tcx.local_def_id_to_hir_id(impl_m_def_id);
         match check_implied_wf {
             CheckImpliedWfMode::Check => {
                 return compare_method_predicate_entailment(
@@ -439,7 +439,7 @@ fn compare_method_predicate_entailment<'tcx>(
                 }
                 return Err(tcx
                     .sess
-                    .delay_span_bug(rustc_span::DUMMY_SP, "error should have been emitted"));
+                    .span_delayed_bug(rustc_span::DUMMY_SP, "error should have been emitted"));
             }
         }
     }
@@ -667,7 +667,7 @@ pub(super) fn collect_return_position_impl_trait_in_trait_tys<'tcx>(
 
     let trait_to_impl_args = impl_trait_ref.args;
 
-    let impl_m_hir_id = tcx.hir().local_def_id_to_hir_id(impl_m_def_id);
+    let impl_m_hir_id = tcx.local_def_id_to_hir_id(impl_m_def_id);
     let return_span = tcx.hir().fn_decl_by_hir_id(impl_m_hir_id).unwrap().output.span();
     let cause = ObligationCause::new(
         return_span,
@@ -937,7 +937,7 @@ pub(super) fn collect_return_position_impl_trait_in_trait_tys<'tcx>(
                 remapped_types.insert(def_id, ty::EarlyBinder::bind(ty));
             }
             Err(err) => {
-                let reported = tcx.sess.delay_span_bug(
+                let reported = tcx.sess.span_delayed_bug(
                     return_span,
                     format!("could not fully resolve: {ty} => {err:?}"),
                 );
@@ -1114,7 +1114,9 @@ impl<'tcx> ty::FallibleTypeFolder<TyCtxt<'tcx>> for RemapHiddenTyRegions<'tcx> {
                         .note(format!("hidden type inferred to be `{}`", self.ty))
                         .emit()
                 }
-                _ => self.tcx.sess.delay_span_bug(DUMMY_SP, "should've been able to remap region"),
+                _ => {
+                    self.tcx.sess.span_delayed_bug(DUMMY_SP, "should've been able to remap region")
+                }
             };
             return Err(guar);
         };
@@ -1473,7 +1475,7 @@ fn compare_number_of_generics<'tcx>(
     // inheriting the generics from will also have mismatched arguments, and
     // we'll report an error for that instead. Delay a bug for safety, though.
     if trait_.is_impl_trait_in_trait() {
-        return Err(tcx.sess.delay_span_bug(
+        return Err(tcx.sess.span_delayed_bug(
             rustc_span::DUMMY_SP,
             "errors comparing numbers of generics of trait/impl functions were not emitted",
         ));

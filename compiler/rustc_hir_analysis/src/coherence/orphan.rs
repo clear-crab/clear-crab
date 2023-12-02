@@ -453,7 +453,7 @@ fn lint_auto_trait_impl<'tcx>(
     impl_def_id: LocalDefId,
 ) {
     if trait_ref.args.len() != 1 {
-        tcx.sess.diagnostic().delay_span_bug(
+        tcx.sess.diagnostic().span_delayed_bug(
             tcx.def_span(impl_def_id),
             "auto traits cannot have generic parameters",
         );
@@ -497,7 +497,7 @@ fn lint_auto_trait_impl<'tcx>(
 
     tcx.struct_span_lint_hir(
         lint::builtin::SUSPICIOUS_AUTO_TRAIT_IMPLS,
-        tcx.hir().local_def_id_to_hir_id(impl_def_id),
+        tcx.local_def_id_to_hir_id(impl_def_id),
         tcx.def_span(impl_def_id),
         DelayDm(|| {
             format!(

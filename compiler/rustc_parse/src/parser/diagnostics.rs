@@ -11,12 +11,12 @@ use crate::errors::{
     DoubleColonInBound, ExpectedIdentifier, ExpectedSemi, ExpectedSemiSugg,
     GenericParamsWithoutAngleBrackets, GenericParamsWithoutAngleBracketsSugg,
     HelpIdentifierStartsWithNumber, InInTypo, IncorrectAwait, IncorrectSemicolon,
-    IncorrectUseOfAwait, ParenthesesInForHead, ParenthesesInForHeadSugg,
-    PatternMethodParamWithoutBody, QuestionMarkInType, QuestionMarkInTypeSugg, SelfParamNotFirst,
-    StructLiteralBodyWithoutPath, StructLiteralBodyWithoutPathSugg, StructLiteralNeedingParens,
-    StructLiteralNeedingParensSugg, SuggAddMissingLetStmt, SuggEscapeIdentifier, SuggRemoveComma,
-    TernaryOperator, UnexpectedConstInGenericParam, UnexpectedConstParamDeclaration,
-    UnexpectedConstParamDeclarationSugg, UnmatchedAngleBrackets, UseEqInstead, WrapType,
+    IncorrectUseOfAwait, PatternMethodParamWithoutBody, QuestionMarkInType, QuestionMarkInTypeSugg,
+    SelfParamNotFirst, StructLiteralBodyWithoutPath, StructLiteralBodyWithoutPathSugg,
+    StructLiteralNeedingParens, StructLiteralNeedingParensSugg, SuggAddMissingLetStmt,
+    SuggEscapeIdentifier, SuggRemoveComma, TernaryOperator, UnexpectedConstInGenericParam,
+    UnexpectedConstParamDeclaration, UnexpectedConstParamDeclarationSugg, UnmatchedAngleBrackets,
+    UseEqInstead, WrapType,
 };
 
 use crate::fluent_generated as fluent;
@@ -247,11 +247,11 @@ impl<'a> Parser<'a> {
         sp: S,
         m: impl Into<DiagnosticMessage>,
     ) -> DiagnosticBuilder<'a, ErrorGuaranteed> {
-        self.sess.span_diagnostic.struct_span_err(sp, m)
+        self.diagnostic().struct_span_err(sp, m)
     }
 
     pub fn span_bug<S: Into<MultiSpan>>(&self, sp: S, m: impl Into<String>) -> ! {
-        self.sess.span_diagnostic.span_bug(sp, m)
+        self.diagnostic().span_bug(sp, m)
     }
 
     pub(super) fn diagnostic(&self) -> &'a Handler {
@@ -285,7 +285,7 @@ impl<'a> Parser<'a> {
                 span: self.prev_token.span,
                 missing_comma: None,
             }
-            .into_diagnostic(&self.sess.span_diagnostic));
+            .into_diagnostic(self.diagnostic()));
         }
 
         let valid_follow = &[
@@ -348,7 +348,7 @@ impl<'a> Parser<'a> {
             suggest_remove_comma,
             help_cannot_start_number,
         };
-        let mut err = err.into_diagnostic(&self.sess.span_diagnostic);
+        let mut err = err.into_diagnostic(self.diagnostic());
 
         // if the token we have is a `<`
         // it *might* be a misplaced generic
@@ -1426,7 +1426,7 @@ impl<'a> Parser<'a> {
                                 // Not entirely sure now, but we bubble the error up with the
                                 // suggestion.
                                 self.restore_snapshot(snapshot);
-                                Err(err.into_diagnostic(&self.sess.span_diagnostic))
+                                Err(err.into_diagnostic(self.diagnostic()))
                             }
                         }
                     } else if token::OpenDelim(Delimiter::Parenthesis) == self.token.kind {
@@ -1441,7 +1441,7 @@ impl<'a> Parser<'a> {
                         }
                         // Consume the fn call arguments.
                         match self.consume_fn_args() {
-                            Err(()) => Err(err.into_diagnostic(&self.sess.span_diagnostic)),
+                            Err(()) => Err(err.into_diagnostic(self.diagnostic())),
                             Ok(()) => {
                                 self.sess.emit_err(err);
                                 // FIXME: actually check that the two expressions in the binop are
@@ -1467,7 +1467,7 @@ impl<'a> Parser<'a> {
                             mk_err_expr(self, inner_op.span.to(self.prev_token.span))
                         } else {
                             // These cases cause too many knock-down errors, bail out (#61329).
-                            Err(err.into_diagnostic(&self.sess.span_diagnostic))
+                            Err(err.into_diagnostic(self.diagnostic()))
                         }
                     };
                 }
@@ -1991,56 +1991,6 @@ impl<'a> Parser<'a> {
             Ok(self.mk_expr_err(lo.to(hi)))
         } else {
             Err(self.expected_expression_found()) // The user isn't trying to invoke the try! macro
-        }
-    }
-
-    /// Recovers a situation like `for ( $pat in $expr )`
-    /// and suggest writing `for $pat in $expr` instead.
-    ///
-    /// This should be called before parsing the `$block`.
-    pub(super) fn recover_parens_around_for_head(
-        &mut self,
-        pat: P<Pat>,
-        begin_paren: Option<Span>,
-    ) -> P<Pat> {
-        match (&self.token.kind, begin_paren) {
-            (token::CloseDelim(Delimiter::Parenthesis), Some(begin_par_sp)) => {
-                self.bump();
-
-                let sm = self.sess.source_map();
-                let left = begin_par_sp;
-                let right = self.prev_token.span;
-                let left_snippet = if let Ok(snip) = sm.span_to_prev_source(left)
-                    && !snip.ends_with(' ')
-                {
-                    " ".to_string()
-                } else {
-                    "".to_string()
-                };
-
-                let right_snippet = if let Ok(snip) = sm.span_to_next_source(right)
-                    && !snip.starts_with(' ')
-                {
-                    " ".to_string()
-                } else {
-                    "".to_string()
-                };
-
-                self.sess.emit_err(ParenthesesInForHead {
-                    span: vec![left, right],
-                    // With e.g. `for (x) in y)` this would replace `(x) in y)`
-                    // with `x) in y)` which is syntactically invalid.
-                    // However, this is prevented before we get here.
-                    sugg: ParenthesesInForHeadSugg { left, right, left_snippet, right_snippet },
-                });
-
-                // Unwrap `(pat)` into `pat` to avoid the `unused_parens` lint.
-                pat.and_then(|pat| match pat.kind {
-                    PatKind::Paren(pat) => pat,
-                    _ => P(pat),
-                })
-            }
-            _ => pat,
         }
     }
 
@@ -2572,8 +2522,7 @@ impl<'a> Parser<'a> {
             Ok(Some(GenericArg::Const(self.parse_const_arg()?)))
         } else {
             let after_kw_const = self.token.span;
-            self.recover_const_arg(after_kw_const, err.into_diagnostic(&self.sess.span_diagnostic))
-                .map(Some)
+            self.recover_const_arg(after_kw_const, err.into_diagnostic(self.diagnostic())).map(Some)
         }
     }
 
@@ -2936,7 +2885,7 @@ impl<'a> Parser<'a> {
                         span: path.span.shrink_to_hi(),
                         between: between_span,
                     }
-                    .into_diagnostic(&self.sess.span_diagnostic));
+                    .into_diagnostic(self.diagnostic()));
                 }
             }
         }

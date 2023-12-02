@@ -131,13 +131,13 @@ pub struct TypeErrCtxt<'a, 'tcx> {
 
 impl Drop for TypeErrCtxt<'_, '_> {
     fn drop(&mut self) {
-        if let Some(_) = self.infcx.tcx.sess.has_errors_or_delayed_span_bugs() {
+        if let Some(_) = self.infcx.tcx.sess.has_errors_or_span_delayed_bugs() {
             // ok, emitted an error.
         } else {
             self.infcx
                 .tcx
                 .sess
-                .delay_good_path_bug("used a `TypeErrCtxt` without raising an error or lint");
+                .good_path_delayed_bug("used a `TypeErrCtxt` without raising an error or lint");
         }
     }
 }
@@ -517,7 +517,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
 
         self.tcx
             .sess
-            .delay_span_bug(self.tcx.def_span(generic_param_scope), "expected region errors")
+            .span_delayed_bug(self.tcx.def_span(generic_param_scope), "expected region errors")
     }
 
     // This method goes through all the errors and try to group certain types
@@ -1667,9 +1667,7 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
                             .report(diag);
                         (false, Mismatch::Fixed("signature"))
                     }
-                    ValuePairs::TraitRefs(_) | ValuePairs::PolyTraitRefs(_) => {
-                        (false, Mismatch::Fixed("trait"))
-                    }
+                    ValuePairs::PolyTraitRefs(_) => (false, Mismatch::Fixed("trait")),
                     ValuePairs::Aliases(infer::ExpectedFound { expected, .. }) => {
                         (false, Mismatch::Fixed(self.tcx.def_descr(expected.def_id)))
                     }
@@ -2219,18 +2217,6 @@ impl<'tcx> TypeErrCtxt<'_, 'tcx> {
             infer::Aliases(exp_found) => self.expected_found_str(exp_found),
             infer::ExistentialTraitRef(exp_found) => self.expected_found_str(exp_found),
             infer::ExistentialProjection(exp_found) => self.expected_found_str(exp_found),
-            infer::TraitRefs(exp_found) => {
-                let pretty_exp_found = ty::error::ExpectedFound {
-                    expected: exp_found.expected.print_only_trait_path(),
-                    found: exp_found.found.print_only_trait_path(),
-                };
-                match self.expected_found_str(pretty_exp_found) {
-                    Some((expected, found, _, _)) if expected == found => {
-                        self.expected_found_str(exp_found)
-                    }
-                    ret => ret,
-                }
-            }
             infer::PolyTraitRefs(exp_found) => {
                 let pretty_exp_found = ty::error::ExpectedFound {
                     expected: exp_found.expected.print_only_trait_path(),
@@ -2909,9 +2895,6 @@ impl<'tcx> ObligationCauseExt<'tcx> for ObligationCause<'tcx> {
             CompareImplItemObligation { kind: ty::AssocKind::Const, .. } => {
                 "const is compatible with trait"
             }
-            ExprAssignable => "expression is assignable",
-            IfExpression { .. } => "`if` and `else` have incompatible types",
-            IfExpressionWithNoElse => "`if` missing an `else` returns `()`",
             MainFunctionType => "`main` function has the correct type",
             StartFunctionType => "`#[start]` function has the correct type",
             LangFunctionType(_) => "lang item function has the correct type",
@@ -2932,9 +2915,6 @@ impl IntoDiagnosticArg for ObligationCauseAsDiagArg<'_> {
             CompareImplItemObligation { kind: ty::AssocKind::Fn, .. } => "method_compat",
             CompareImplItemObligation { kind: ty::AssocKind::Type, .. } => "type_compat",
             CompareImplItemObligation { kind: ty::AssocKind::Const, .. } => "const_compat",
-            ExprAssignable => "expr_assignable",
-            IfExpression { .. } => "if_else_different",
-            IfExpressionWithNoElse => "no_else",
             MainFunctionType => "fn_main_correct_type",
             StartFunctionType => "fn_start_correct_type",
             LangFunctionType(_) => "fn_lang_correct_type",

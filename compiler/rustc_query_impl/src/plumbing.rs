@@ -80,14 +80,14 @@ impl QueryContext for QueryCtxt<'_> {
         tls::with_related_context(self.tcx, |icx| icx.query)
     }
 
-    fn try_collect_active_jobs(self) -> Option<QueryMap> {
+    fn collect_active_jobs(self) -> QueryMap {
         let mut jobs = QueryMap::default();
 
         for collect in super::TRY_COLLECT_ACTIVE_JOBS.iter() {
             collect(self.tcx, &mut jobs);
         }
 
-        Some(jobs)
+        jobs
     }
 
     // Interactions with on_disk_cache
@@ -155,11 +155,11 @@ impl QueryContext for QueryCtxt<'_> {
     fn depth_limit_error(self, job: QueryJobId) {
         let mut span = None;
         let mut layout_of_depth = None;
-        if let Some(map) = self.try_collect_active_jobs() {
-            if let Some((info, depth)) = job.try_find_layout_root(map, dep_kinds::layout_of) {
-                span = Some(info.job.span);
-                layout_of_depth = Some(LayoutOfDepth { desc: info.query.description, depth });
-            }
+        if let Some((info, depth)) =
+            job.try_find_layout_root(self.collect_active_jobs(), dep_kinds::layout_of)
+        {
+            span = Some(info.job.span);
+            layout_of_depth = Some(LayoutOfDepth { desc: info.query.description, depth });
         }
 
         let suggested_limit = match self.recursion_limit() {
@@ -325,11 +325,11 @@ pub(crate) fn create_query_frame<
         Some(key.default_span(tcx))
     };
     let def_id = key.key_as_def_id();
-    let def_kind = if kind == dep_graph::dep_kinds::opt_def_kind || with_no_queries() {
+    let def_kind = if kind == dep_graph::dep_kinds::def_kind || with_no_queries() {
         // Try to avoid infinite recursion.
         None
     } else {
-        def_id.and_then(|def_id| def_id.as_local()).and_then(|def_id| tcx.opt_def_kind(def_id))
+        def_id.and_then(|def_id| def_id.as_local()).map(|def_id| tcx.def_kind(def_id))
     };
     let hash = || {
         tcx.with_stable_hashing_context(|mut hcx| {

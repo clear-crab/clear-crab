@@ -64,19 +64,12 @@ enum GoalEvaluationKind {
 
 trait CanonicalResponseExt {
     fn has_no_inference_or_external_constraints(&self) -> bool;
-
-    fn has_only_region_constraints(&self) -> bool;
 }
 
 impl<'tcx> CanonicalResponseExt for Canonical<'tcx, Response<'tcx>> {
     fn has_no_inference_or_external_constraints(&self) -> bool {
         self.value.external_constraints.region_constraints.is_empty()
             && self.value.var_values.is_identity()
-            && self.value.external_constraints.opaque_types.is_empty()
-    }
-
-    fn has_only_region_constraints(&self) -> bool {
-        self.value.var_values.is_identity_modulo_regions()
             && self.value.external_constraints.opaque_types.is_empty()
     }
 }
@@ -295,6 +288,7 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
     /// in [`EvalCtxt::assemble_candidates_via_self_ty`] does not have to normalize
     /// the self type. It is required when structurally matching on any other
     /// arguments of a trait goal, e.g. when assembling builtin unsize candidates.
+    #[instrument(level = "debug", skip(self), ret)]
     fn try_normalize_ty(
         &mut self,
         param_env: ty::ParamEnv<'tcx>,

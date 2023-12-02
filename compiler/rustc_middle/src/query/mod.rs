@@ -108,9 +108,9 @@ pub use plumbing::{IntoQueryParam, TyCtxtAt, TyCtxtEnsure, TyCtxtEnsureWithValue
 // Queries marked with `fatal_cycle` do not need the latter implementation,
 // as they will raise an fatal error on query cycles instead.
 rustc_queries! {
-    /// This exists purely for testing the interactions between delay_span_bug and incremental.
-    query trigger_delay_span_bug(key: DefId) -> () {
-        desc { "triggering a delay span bug for testing incremental" }
+    /// This exists purely for testing the interactions between span_delayed_bug and incremental.
+    query trigger_span_delayed_bug(key: DefId) -> () {
+        desc { "triggering a span delayed bug for testing incremental" }
     }
 
     /// Collects the list of all tools registered using `#![register_tool]`.
@@ -1151,7 +1151,7 @@ rustc_queries! {
         cache_on_disk_if { true }
     }
 
-    query opt_def_kind(def_id: DefId) -> Option<DefKind> {
+    query def_kind(def_id: DefId) -> DefKind {
         desc { |tcx| "looking up definition kind of `{}`", tcx.def_path_str(def_id) }
         cache_on_disk_if { def_id.is_local() }
         separate_provide_extern

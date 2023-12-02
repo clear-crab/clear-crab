@@ -47,7 +47,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         // Type only exists for constants and statics, not functions.
         match self.tcx.hir().body_owner_kind(item_def_id) {
             hir::BodyOwnerKind::Const { .. } | hir::BodyOwnerKind::Static(_) => {
-                let item_hir_id = self.tcx.hir().local_def_id_to_hir_id(item_def_id);
+                let item_hir_id = self.tcx.local_def_id_to_hir_id(item_def_id);
                 wbcx.visit_node_id(body.value.span, item_hir_id);
             }
             hir::BodyOwnerKind::Closure | hir::BodyOwnerKind::Fn => (),
@@ -218,7 +218,7 @@ impl<'cx, 'tcx> WritebackCx<'cx, 'tcx> {
                 // When encountering `return [0][0]` outside of a `fn` body we can encounter a base
                 // that isn't in the type table. We assume more relevant errors have already been
                 // emitted, so we delay an ICE if none have. (#64638)
-                self.tcx().sess.delay_span_bug(e.span, format!("bad base: `{base:?}`"));
+                self.tcx().sess.span_delayed_bug(e.span, format!("bad base: `{base:?}`"));
             }
             if let Some(base_ty) = base_ty
                 && let ty::Ref(_, base_ty_inner, _) = *base_ty.kind()
@@ -311,7 +311,9 @@ impl<'cx, 'tcx> Visitor<'tcx> for WritebackCx<'cx, 'tcx> {
                 // Nothing to write back here
             }
             hir::GenericParamKind::Type { .. } | hir::GenericParamKind::Const { .. } => {
-                self.tcx().sess.delay_span_bug(p.span, format!("unexpected generic param: {p:?}"));
+                self.tcx()
+                    .sess
+                    .span_delayed_bug(p.span, format!("unexpected generic param: {p:?}"));
             }
         }
     }
@@ -382,7 +384,7 @@ impl<'cx, 'tcx> WritebackCx<'cx, 'tcx> {
                 .to_sorted(hcx, false)
                 .into_iter()
                 .map(|(&closure_def_id, data)| {
-                    let closure_hir_id = self.tcx().hir().local_def_id_to_hir_id(closure_def_id);
+                    let closure_hir_id = self.tcx().local_def_id_to_hir_id(closure_def_id);
                     let data = self.resolve(*data, &closure_hir_id);
                     (closure_def_id, data)
                 })
@@ -407,7 +409,7 @@ impl<'cx, 'tcx> WritebackCx<'cx, 'tcx> {
                                 .map(|captured_place| {
                                     let locatable =
                                         captured_place.info.path_expr_id.unwrap_or_else(|| {
-                                            self.tcx().hir().local_def_id_to_hir_id(closure_def_id)
+                                            self.tcx().local_def_id_to_hir_id(closure_def_id)
                                         });
                                     self.resolve(captured_place.clone(), &locatable)
                                 })
@@ -433,7 +435,7 @@ impl<'cx, 'tcx> WritebackCx<'cx, 'tcx> {
                     let resolved_fake_reads = fake_reads
                         .iter()
                         .map(|(place, cause, hir_id)| {
-                            let locatable = self.tcx().hir().local_def_id_to_hir_id(closure_def_id);
+                            let locatable = self.tcx().local_def_id_to_hir_id(closure_def_id);
                             let resolved_fake_read = self.resolve(place.clone(), &locatable);
                             (resolved_fake_read, *cause, *hir_id)
                         })

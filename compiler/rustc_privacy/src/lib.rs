@@ -19,8 +19,6 @@ use rustc_ast::MacroDef;
 use rustc_attr as attr;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_data_structures::intern::Interned;
-use rustc_errors::{DiagnosticMessage, SubdiagnosticMessage};
-use rustc_fluent_macro::fluent_messages;
 use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::def_id::{DefId, LocalDefId, LocalModDefId, CRATE_DEF_ID};
@@ -49,7 +47,7 @@ use errors::{
     UnnamedItemIsPrivate,
 };
 
-fluent_messages! { "../messages.ftl" }
+rustc_fluent_macro::fluent_messages! { "../messages.ftl" }
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Generic infrastructure used to implement specific visitors below.
@@ -493,14 +491,14 @@ impl<'tcx> EmbargoVisitor<'tcx> {
         macro_ev: EffectiveVisibility,
     ) {
         // Non-opaque macros cannot make other items more accessible than they already are.
-        let hir_id = self.tcx.hir().local_def_id_to_hir_id(local_def_id);
+        let hir_id = self.tcx.local_def_id_to_hir_id(local_def_id);
         let attrs = self.tcx.hir().attrs(hir_id);
         if attr::find_transparency(attrs, md.macro_rules).0 != Transparency::Opaque {
             return;
         }
 
         let macro_module_def_id = self.tcx.local_parent(local_def_id);
-        if self.tcx.opt_def_kind(macro_module_def_id) != Some(DefKind::Mod) {
+        if self.tcx.def_kind(macro_module_def_id) != DefKind::Mod {
             // The macro's parent doesn't correspond to a `mod`, return early (#63164, #65252).
             return;
         }
@@ -655,8 +653,7 @@ impl<'tcx> EmbargoVisitor<'tcx> {
             | DefKind::Field
             | DefKind::GlobalAsm
             | DefKind::Impl { .. }
-            | DefKind::Closure
-            | DefKind::Coroutine => (),
+            | DefKind::Closure => (),
         }
     }
 }
@@ -891,21 +888,6 @@ pub struct TestReachabilityVisitor<'tcx, 'a> {
     effective_visibilities: &'a EffectiveVisibilities,
 }
 
-fn vis_to_string<'tcx>(def_id: LocalDefId, vis: ty::Visibility, tcx: TyCtxt<'tcx>) -> String {
-    match vis {
-        ty::Visibility::Restricted(restricted_id) => {
-            if restricted_id.is_top_level_module() {
-                "pub(crate)".to_string()
-            } else if restricted_id == tcx.parent_module_from_def_id(def_id).to_local_def_id() {
-                "pub(self)".to_string()
-            } else {
-                format!("pub({})", tcx.item_name(restricted_id.to_def_id()))
-            }
-        }
-        ty::Visibility::Public => "pub".to_string(),
-    }
-}
-
 impl<'tcx, 'a> TestReachabilityVisitor<'tcx, 'a> {
     fn effective_visibility_diagnostic(&mut self, def_id: LocalDefId) {
         if self.tcx.has_attr(def_id, sym::rustc_effective_visibility) {
@@ -913,7 +895,7 @@ impl<'tcx, 'a> TestReachabilityVisitor<'tcx, 'a> {
             let span = self.tcx.def_span(def_id.to_def_id());
             if let Some(effective_vis) = self.effective_visibilities.effective_vis(def_id) {
                 for level in Level::all_levels() {
-                    let vis_str = vis_to_string(def_id, *effective_vis.at_level(level), self.tcx);
+                    let vis_str = effective_vis.at_level(level).to_string(def_id, self.tcx);
                     if level != Level::Direct {
                         error_msg.push_str(", ");
                     }
@@ -1004,7 +986,7 @@ impl<'tcx> NamePrivacyVisitor<'tcx> {
 
         // definition of the field
         let ident = Ident::new(kw::Empty, use_ctxt);
-        let hir_id = self.tcx.hir().local_def_id_to_hir_id(self.current_item);
+        let hir_id = self.tcx.local_def_id_to_hir_id(self.current_item);
         let def_id = self.tcx.adjust_ident_and_get_scope(ident, def.did(), hir_id).1;
         if !field.vis.is_accessible_from(def_id, self.tcx) {
             self.tcx.sess.emit_err(FieldIsPrivate {
@@ -1271,7 +1253,7 @@ impl<'tcx> Visitor<'tcx> for TypePrivacyVisitor<'tcx> {
                 } else {
                     self.tcx
                         .sess
-                        .delay_span_bug(expr.span, "no type-dependent def for method call");
+                        .span_delayed_bug(expr.span, "no type-dependent def for method call");
                 }
             }
             _ => {}
@@ -1442,7 +1424,7 @@ impl SearchInterfaceForPrivateItemsVisitor<'_> {
         if self.leaks_private_dep(def_id) {
             self.tcx.emit_spanned_lint(
                 lint::builtin::EXPORTED_PRIVATE_DEPENDENCIES,
-                self.tcx.hir().local_def_id_to_hir_id(self.item_def_id),
+                self.tcx.local_def_id_to_hir_id(self.item_def_id),
                 self.tcx.def_span(self.item_def_id.to_def_id()),
                 FromPrivateDependencyInPublicInterface {
                     kind,
@@ -1499,7 +1481,7 @@ impl SearchInterfaceForPrivateItemsVisitor<'_> {
             };
             self.tcx.emit_spanned_lint(
                 lint,
-                self.tcx.hir().local_def_id_to_hir_id(self.item_def_id),
+                self.tcx.local_def_id_to_hir_id(self.item_def_id),
                 span,
                 PrivateInterfacesOrBoundsLint {
                     item_span: span,
@@ -1509,11 +1491,11 @@ impl SearchInterfaceForPrivateItemsVisitor<'_> {
                         tcx: self.tcx,
                     })
                         .into(),
-                    item_vis_descr: &vis_to_string(self.item_def_id, reachable_at_vis, self.tcx),
+                    item_vis_descr: &reachable_at_vis.to_string(self.item_def_id, self.tcx),
                     ty_span: vis_span,
                     ty_kind: kind,
                     ty_descr: descr.into(),
-                    ty_vis_descr: &vis_to_string(local_def_id, vis, self.tcx),
+                    ty_vis_descr: &vis.to_string(local_def_id, self.tcx),
                 },
             );
         }
@@ -1582,7 +1564,7 @@ impl<'tcx> PrivateItemsInPublicInterfacesChecker<'tcx, '_> {
         let reachable_at_vis = effective_vis.at_level(Level::Reachable);
 
         if reachable_at_vis.is_public() && reexported_at_vis != reachable_at_vis {
-            let hir_id = self.tcx.hir().local_def_id_to_hir_id(def_id);
+            let hir_id = self.tcx.local_def_id_to_hir_id(def_id);
             let span = self.tcx.def_span(def_id.to_def_id());
             self.tcx.emit_spanned_lint(
                 lint::builtin::UNNAMEABLE_TYPES,
@@ -1592,8 +1574,8 @@ impl<'tcx> PrivateItemsInPublicInterfacesChecker<'tcx, '_> {
                     span,
                     kind: self.tcx.def_descr(def_id.to_def_id()),
                     descr: (&LazyDefPathStr { def_id: def_id.to_def_id(), tcx: self.tcx }).into(),
-                    reachable_vis: &vis_to_string(def_id, *reachable_at_vis, self.tcx),
-                    reexported_vis: &vis_to_string(def_id, *reexported_at_vis, self.tcx),
+                    reachable_vis: &reachable_at_vis.to_string(def_id, self.tcx),
+                    reexported_vis: &reexported_at_vis.to_string(def_id, self.tcx),
                 },
             );
         }
@@ -1822,7 +1804,7 @@ fn local_visibility(tcx: TyCtxt<'_>, def_id: LocalDefId) -> ty::Visibility {
     match tcx.resolutions(()).visibilities.get(&def_id) {
         Some(vis) => *vis,
         None => {
-            let hir_id = tcx.hir().local_def_id_to_hir_id(def_id);
+            let hir_id = tcx.local_def_id_to_hir_id(def_id);
             match tcx.hir().get(hir_id) {
                 // Unique types created for closures participate in type privacy checking.
                 // They have visibilities inherited from the module they are defined in.
@@ -1846,7 +1828,7 @@ fn local_visibility(tcx: TyCtxt<'_>, def_id: LocalDefId) -> ty::Visibility {
                             ..
                         }) => tr.path.res.opt_def_id().map_or_else(
                             || {
-                                tcx.sess.delay_span_bug(tr.path.span, "trait without a def-id");
+                                tcx.sess.span_delayed_bug(tr.path.span, "trait without a def-id");
                                 ty::Visibility::Public
                             },
                             |def_id| tcx.visibility(def_id).expect_local(),
