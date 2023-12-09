@@ -291,7 +291,7 @@ impl<'tcx> LateLintPass<'tcx> for UnusedResults {
                         .map(|inner| MustUsePath::Pinned(Box::new(inner)))
                 }
                 ty::Adt(def, _) => is_def_must_use(cx, def.did(), span),
-                ty::Alias(ty::Opaque, ty::AliasTy { def_id: def, .. }) => {
+                ty::Alias(ty::Opaque | ty::Projection, ty::AliasTy { def_id: def, .. }) => {
                     elaborate(
                         cx.tcx,
                         cx.tcx.explicit_item_bounds(def).instantiate_identity_iter_copied(),
@@ -1113,15 +1113,17 @@ impl EarlyLintPass for UnusedParens {
             }
             ExprKind::Match(ref _expr, ref arm) => {
                 for a in arm {
-                    self.check_unused_delims_expr(
-                        cx,
-                        &a.body,
-                        UnusedDelimsCtx::MatchArmExpr,
-                        false,
-                        None,
-                        None,
-                        true,
-                    );
+                    if let Some(body) = &a.body {
+                        self.check_unused_delims_expr(
+                            cx,
+                            body,
+                            UnusedDelimsCtx::MatchArmExpr,
+                            false,
+                            None,
+                            None,
+                            true,
+                        );
+                    }
                 }
             }
             _ => {}

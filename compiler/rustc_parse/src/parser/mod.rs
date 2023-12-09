@@ -11,7 +11,6 @@ mod stmt;
 mod ty;
 
 use crate::lexer::UnmatchedDelim;
-use ast::Gen;
 pub use attr_wrapper::AttrWrapper;
 pub use diagnostics::AttemptLocalParseRecovery;
 pub(crate) use expr::ForbiddenLetReason;
@@ -25,9 +24,10 @@ use rustc_ast::tokenstream::{AttributesData, DelimSpan, Spacing};
 use rustc_ast::tokenstream::{TokenStream, TokenTree, TokenTreeCursor};
 use rustc_ast::util::case::Case;
 use rustc_ast::AttrId;
+use rustc_ast::CoroutineKind;
 use rustc_ast::DUMMY_NODE_ID;
 use rustc_ast::{self as ast, AnonConst, Const, DelimArgs, Extern};
-use rustc_ast::{Async, AttrArgs, AttrArgsEq, Expr, ExprKind, Mutability, StrLit};
+use rustc_ast::{AttrArgs, AttrArgsEq, Expr, ExprKind, Mutability, StrLit};
 use rustc_ast::{HasAttrs, HasTokens, Unsafe, Visibility, VisibilityKind};
 use rustc_ast_pretty::pprust;
 use rustc_data_structures::fx::FxHashMap;
@@ -1125,22 +1125,37 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses asyncness: `async` or nothing.
-    fn parse_asyncness(&mut self, case: Case) -> Async {
+    fn parse_coroutine_kind(&mut self, case: Case) -> Option<CoroutineKind> {
+        let span = self.token.uninterpolated_span();
         if self.eat_keyword_case(kw::Async, case) {
-            let span = self.prev_token.uninterpolated_span();
-            Async::Yes { span, closure_id: DUMMY_NODE_ID, return_impl_trait_id: DUMMY_NODE_ID }
+            // FIXME(gen_blocks): Do we want to unconditionally parse `gen` and then
+            // error if edition <= 2024, like we do with async and edition <= 2018?
+            if self.token.uninterpolated_span().at_least_rust_2024()
+                && self.eat_keyword_case(kw::Gen, case)
+            {
+                let gen_span = self.prev_token.uninterpolated_span();
+                Some(CoroutineKind::AsyncGen {
+                    span: span.to(gen_span),
+                    closure_id: DUMMY_NODE_ID,
+                    return_impl_trait_id: DUMMY_NODE_ID,
+                })
+            } else {
+                Some(CoroutineKind::Async {
+                    span,
+                    closure_id: DUMMY_NODE_ID,
+                    return_impl_trait_id: DUMMY_NODE_ID,
+                })
+            }
+        } else if self.token.uninterpolated_span().at_least_rust_2024()
+            && self.eat_keyword_case(kw::Gen, case)
+        {
+            Some(CoroutineKind::Gen {
+                span,
+                closure_id: DUMMY_NODE_ID,
+                return_impl_trait_id: DUMMY_NODE_ID,
+            })
         } else {
-            Async::No
-        }
-    }
-
-    /// Parses genness: `gen` or nothing.
-    fn parse_genness(&mut self, case: Case) -> Gen {
-        if self.token.span.at_least_rust_2024() && self.eat_keyword_case(kw::Gen, case) {
-            let span = self.prev_token.uninterpolated_span();
-            Gen::Yes { span, closure_id: DUMMY_NODE_ID, return_impl_trait_id: DUMMY_NODE_ID }
-        } else {
-            Gen::No
+            None
         }
     }
 

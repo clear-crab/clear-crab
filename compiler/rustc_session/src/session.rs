@@ -461,7 +461,7 @@ impl Session {
     }
     #[rustc_lint_diagnostics]
     pub fn fatal(&self, msg: impl Into<DiagnosticMessage>) -> ! {
-        self.diagnostic().fatal(msg).raise()
+        self.diagnostic().fatal(msg)
     }
     #[rustc_lint_diagnostics]
     #[track_caller]
@@ -1349,7 +1349,7 @@ fn default_emitter(
 // JUSTIFICATION: literally session construction
 #[allow(rustc::bad_opt_access)]
 pub fn build_session(
-    handler: &EarlyErrorHandler,
+    early_handler: EarlyErrorHandler,
     sopts: config::Options,
     io: CompilerIO,
     bundle: Option<Lrc<rustc_errors::FluentBundle>>,
@@ -1379,12 +1379,13 @@ pub fn build_session(
         None => filesearch::get_or_default_sysroot().expect("Failed finding sysroot"),
     };
 
-    let target_cfg = config::build_target_config(handler, &sopts, target_override, &sysroot);
+    let target_cfg = config::build_target_config(&early_handler, &sopts, target_override, &sysroot);
     let host_triple = TargetTriple::from_triple(config::host_triple());
-    let (host, target_warnings) = Target::search(&host_triple, &sysroot)
-        .unwrap_or_else(|e| handler.early_error(format!("Error loading host specification: {e}")));
+    let (host, target_warnings) = Target::search(&host_triple, &sysroot).unwrap_or_else(|e| {
+        early_handler.early_error(format!("Error loading host specification: {e}"))
+    });
     for warning in target_warnings.warning_messages() {
-        handler.early_warn(warning)
+        early_handler.early_warn(warning)
     }
 
     let loader = file_loader.unwrap_or_else(|| Box::new(RealFileLoader));
@@ -1413,6 +1414,10 @@ pub fn build_session(
         span_diagnostic = span_diagnostic.with_ice_file(ice_file);
     }
 
+    // Now that the proper handler has been constructed, drop the early handler
+    // to prevent accidental use.
+    drop(early_handler);
+
     let self_profiler = if let SwitchWithOptPath::Enabled(ref d) = sopts.unstable_opts.self_profile
     {
         let directory =
@@ -1427,7 +1432,7 @@ pub fn build_session(
         match profiler {
             Ok(profiler) => Some(Arc::new(profiler)),
             Err(e) => {
-                handler.early_warn(format!("failed to create profiler: {e}"));
+                span_diagnostic.emit_warning(errors::FailedToCreateProfiler { err: e.to_string() });
                 None
             }
         }
@@ -1775,6 +1780,18 @@ impl EarlyErrorHandler {
     #[allow(rustc::diagnostic_outside_of_impl)]
     pub fn early_warn(&self, msg: impl Into<DiagnosticMessage>) {
         self.handler.struct_warn(msg).emit()
+    }
+
+    pub fn initialize_checked_jobserver(&self) {
+        // initialize jobserver before getting `jobserver::client` and `build_session`.
+        jobserver::initialize_checked(|err| {
+            #[allow(rustc::untranslatable_diagnostic)]
+            #[allow(rustc::diagnostic_outside_of_impl)]
+            self.handler
+                .struct_warn(err)
+                .note("the build environment is likely misconfigured")
+                .emit()
+        });
     }
 }
 

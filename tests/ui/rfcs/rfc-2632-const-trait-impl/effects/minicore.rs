@@ -1,3 +1,5 @@
+// check-pass
+
 #![crate_type = "lib"]
 #![feature(no_core, lang_items, unboxed_closures, auto_traits, intrinsics, rustc_attrs)]
 #![feature(fundamental)]
@@ -5,8 +7,6 @@
 #![allow(internal_features)]
 #![no_std]
 #![no_core]
-
-// known-bug: #110395
 
 #[lang = "sized"]
 trait Sized {}
@@ -21,8 +21,7 @@ trait Add<Rhs = Self> {
     fn add(self, rhs: Rhs) -> Self::Output;
 }
 
-// FIXME(effects) we shouldn't need to have to specify `Rhs`.
-impl const Add<i32> for i32 {
+impl const Add for i32 {
     type Output = i32;
     fn add(self, rhs: i32) -> i32 {
         loop {}
@@ -353,8 +352,7 @@ where
     }
 }
 
-// FIXME(effects): again, this should not error without Rhs specified
-impl PartialEq<str> for str {
+impl PartialEq for str {
     fn eq(&self, other: &str) -> bool {
         loop {}
     }

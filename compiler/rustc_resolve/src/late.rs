@@ -916,8 +916,12 @@ impl<'a: 'ast, 'ast, 'tcx> Visitor<'ast> for LateResolutionVisitor<'a, '_, 'ast,
                             &sig.decl.output,
                         );
 
-                        if let Some((async_node_id, _)) = sig.header.asyncness.opt_return_id() {
-                            this.record_lifetime_params_for_impl_trait(async_node_id);
+                        if let Some((coro_node_id, _)) = sig
+                            .header
+                            .coroutine_kind
+                            .map(|coroutine_kind| coroutine_kind.return_id())
+                        {
+                            this.record_lifetime_params_for_impl_trait(coro_node_id);
                         }
                     },
                 );
@@ -940,12 +944,15 @@ impl<'a: 'ast, 'ast, 'tcx> Visitor<'ast> for LateResolutionVisitor<'a, '_, 'ast,
                         this.visit_generics(generics);
 
                         let declaration = &sig.decl;
-                        let async_node_id = sig.header.asyncness.opt_return_id();
+                        let coro_node_id = sig
+                            .header
+                            .coroutine_kind
+                            .map(|coroutine_kind| coroutine_kind.return_id());
 
                         this.with_lifetime_rib(
                             LifetimeRibKind::AnonymousCreateParameter {
                                 binder: fn_id,
-                                report_in_path: async_node_id.is_some(),
+                                report_in_path: coro_node_id.is_some(),
                             },
                             |this| {
                                 this.resolve_fn_signature(
@@ -958,7 +965,7 @@ impl<'a: 'ast, 'ast, 'tcx> Visitor<'ast> for LateResolutionVisitor<'a, '_, 'ast,
                                     &declaration.output,
                                 );
 
-                                if let Some((async_node_id, _)) = async_node_id {
+                                if let Some((async_node_id, _)) = coro_node_id {
                                     this.record_lifetime_params_for_impl_trait(async_node_id);
                                 }
                             },
@@ -3294,7 +3301,7 @@ impl<'a: 'ast, 'b, 'ast, 'tcx> LateResolutionVisitor<'a, 'b, 'ast, 'tcx> {
         self.with_rib(ValueNS, RibKind::Normal, |this| {
             this.resolve_pattern_top(&arm.pat, PatternSource::Match);
             walk_list!(this, visit_expr, &arm.guard);
-            this.visit_expr(&arm.body);
+            walk_list!(this, visit_expr, &arm.body);
         });
     }
 
@@ -4288,8 +4295,10 @@ impl<'a: 'ast, 'b, 'ast, 'tcx> LateResolutionVisitor<'a, 'b, 'ast, 'tcx> {
             // `async |x| ...` gets desugared to `|x| async {...}`, so we need to
             // resolve the arguments within the proper scopes so that usages of them inside the
             // closure are detected as upvars rather than normal closure arg usages.
+            //
+            // Similarly, `gen |x| ...` gets desugared to `|x| gen {...}`, so we handle that too.
             ExprKind::Closure(box ast::Closure {
-                asyncness: Async::Yes { .. },
+                coroutine_kind: Some(_),
                 ref fn_decl,
                 ref body,
                 ..

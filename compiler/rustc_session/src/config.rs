@@ -1283,7 +1283,7 @@ fn default_configuration(sess: &Session) -> Cfg {
         ret.insert((sym::relocation_model, Some(relocation_model)));
     }
     ret.insert((sym::target_vendor, Some(Symbol::intern(vendor))));
-    if sess.target.has_thread_local {
+    if sess.opts.unstable_opts.has_thread_local.unwrap_or(sess.target.has_thread_local) {
         ret.insert((sym::target_thread_local, None));
     }
     let mut has_atomic = false;
@@ -1422,6 +1422,9 @@ impl CheckCfg {
         };
 
         // NOTE: This should be kept in sync with `default_configuration`
+        //
+        // When adding a new config here you should also update
+        // `tests/ui/check-cfg/well-known-values.rs`.
 
         let panic_values = &PanicStrategy::all();
 
@@ -2121,16 +2124,6 @@ fn should_override_cgus_and_disable_thinlto(
     (disable_local_thinlto, codegen_units)
 }
 
-fn check_thread_count(handler: &EarlyErrorHandler, unstable_opts: &UnstableOptions) {
-    if unstable_opts.threads == 0 {
-        handler.early_error("value for threads must be a positive non-zero integer");
-    }
-
-    if unstable_opts.threads > 1 && unstable_opts.fuel.is_some() {
-        handler.early_error("optimization fuel is incompatible with multiple threads");
-    }
-}
-
 fn collect_print_requests(
     handler: &EarlyErrorHandler,
     cg: &mut CodegenOptions,
@@ -2646,7 +2639,17 @@ pub fn build_session_options(
     let (disable_local_thinlto, mut codegen_units) =
         should_override_cgus_and_disable_thinlto(handler, &output_types, matches, cg.codegen_units);
 
-    check_thread_count(handler, &unstable_opts);
+    if unstable_opts.threads == 0 {
+        handler.early_error("value for threads must be a positive non-zero integer");
+    }
+
+    let fuel = unstable_opts.fuel.is_some() || unstable_opts.print_fuel.is_some();
+    if fuel && unstable_opts.threads > 1 {
+        handler.early_error("optimization fuel is incompatible with multiple threads");
+    }
+    if fuel && cg.incremental.is_some() {
+        handler.early_error("optimization fuel is incompatible with incremental compilation");
+    }
 
     let incremental = cg.incremental.as_ref().map(PathBuf::from);
 

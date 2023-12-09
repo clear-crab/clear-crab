@@ -139,6 +139,9 @@ symbols! {
         AssertParamIsClone,
         AssertParamIsCopy,
         AssertParamIsEq,
+        AsyncGenFinished,
+        AsyncGenPending,
+        AsyncGenReady,
         AtomicBool,
         AtomicI128,
         AtomicI16,
@@ -423,6 +426,7 @@ symbols! {
         async_closure,
         async_fn_in_trait,
         async_fn_track_caller,
+        async_iterator,
         atomic,
         atomic_mod,
         atomics,
@@ -973,6 +977,7 @@ symbols! {
         managed_boxes,
         manually_drop,
         map,
+        map_err,
         marker,
         marker_trait_attr,
         masked,
@@ -1137,6 +1142,7 @@ symbols! {
         offset,
         offset_of,
         offset_of_enum,
+        ok_or_else,
         omit_gdb_pretty_printer_section,
         on,
         on_unimplemented,
@@ -1198,6 +1204,7 @@ symbols! {
         pointer,
         pointer_like,
         poll,
+        poll_next,
         post_dash_lto: "post-lto",
         powerpc_target_feature,
         powf32,
@@ -1393,7 +1400,6 @@ symbols! {
         rustc_expected_cgu_reuse,
         rustc_has_incoherent_inherent_impls,
         rustc_hidden_type_of_opaques,
-        rustc_host,
         rustc_if_this_changed,
         rustc_inherit_overflow_checks,
         rustc_insignificant_dtor,
@@ -1510,6 +1516,8 @@ symbols! {
         simd_insert,
         simd_le,
         simd_lt,
+        simd_masked_load,
+        simd_masked_store,
         simd_mul,
         simd_ne,
         simd_neg,
@@ -2118,11 +2126,7 @@ impl Interner {
             return Symbol::new(idx as u32);
         }
 
-        // SAFETY: we convert from `&str` to `&[u8]`, clone it into the arena,
-        // and immediately convert the clone back to `&[u8]`, all because there
-        // is no `inner.arena.alloc_str()` method. This is clearly safe.
-        let string: &str =
-            unsafe { str::from_utf8_unchecked(inner.arena.alloc_slice(string.as_bytes())) };
+        let string: &str = inner.arena.alloc_str(string);
 
         // SAFETY: we can extend the arena allocation to `'static` because we
         // only access these while the arena is still alive.

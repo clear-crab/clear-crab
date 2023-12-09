@@ -11,8 +11,8 @@ use rustc_ast::tokenstream::{DelimSpan, TokenStream, TokenTree};
 use rustc_ast::util::case::Case;
 use rustc_ast::MacCall;
 use rustc_ast::{self as ast, AttrVec, Attribute, DUMMY_NODE_ID};
-use rustc_ast::{Async, Const, Defaultness, IsAuto, Mutability, Unsafe, UseTree, UseTreeKind};
 use rustc_ast::{BindingAnnotation, Block, FnDecl, FnSig, Param, SelfKind};
+use rustc_ast::{Const, Defaultness, IsAuto, Mutability, Unsafe, UseTree, UseTreeKind};
 use rustc_ast::{EnumDef, FieldDef, Generics, TraitRef, Ty, TyKind, Variant, VariantData};
 use rustc_ast::{FnHeader, ForeignItem, Path, PathSegment, Visibility, VisibilityKind};
 use rustc_ast_pretty::pprust;
@@ -1139,9 +1139,11 @@ impl<'a> Parser<'a> {
                     Ok(kind) => kind,
                     Err(kind) => match kind {
                         ItemKind::Const(box ConstItem { ty, expr, .. }) => {
+                            let const_span = Some(span.with_hi(ident.span.lo()))
+                                .filter(|span| span.can_be_used_for_suggestions());
                             self.sess.emit_err(errors::ExternItemCannotBeConst {
                                 ident_span: ident.span,
-                                const_span: span.with_hi(ident.span.lo()),
+                                const_span,
                             });
                             ForeignItemKind::Static(ty, Mutability::Not, expr)
                         }
@@ -2357,8 +2359,10 @@ impl<'a> Parser<'a> {
                             || case == Case::Insensitive
                                 && t.is_non_raw_ident_where(|i| quals.iter().any(|qual| qual.as_str() == i.name.as_str().to_lowercase()))
                         )
-                        // Rule out unsafe extern block.
-                        && !self.is_unsafe_foreign_mod())
+                        // Rule out `unsafe extern {`.
+                        && !self.is_unsafe_foreign_mod()
+                        // Rule out `async gen {` and `async gen move {`
+                        && !self.is_async_gen_block())
                 })
             // `extern ABI fn`
             || self.check_keyword_case(kw::Extern, case)
@@ -2390,10 +2394,7 @@ impl<'a> Parser<'a> {
         let constness = self.parse_constness(case);
 
         let async_start_sp = self.token.span;
-        let asyncness = self.parse_asyncness(case);
-
-        let _gen_start_sp = self.token.span;
-        let genness = self.parse_genness(case);
+        let coroutine_kind = self.parse_coroutine_kind(case);
 
         let unsafe_start_sp = self.token.span;
         let unsafety = self.parse_unsafety(case);
@@ -2401,7 +2402,7 @@ impl<'a> Parser<'a> {
         let ext_start_sp = self.token.span;
         let ext = self.parse_extern(case);
 
-        if let Async::Yes { span, .. } = asyncness {
+        if let Some(CoroutineKind::Async { span, .. }) = coroutine_kind {
             if span.is_rust_2015() {
                 self.sess.emit_err(errors::AsyncFnIn2015 {
                     span,
@@ -2410,8 +2411,11 @@ impl<'a> Parser<'a> {
             }
         }
 
-        if let Gen::Yes { span, .. } = genness {
-            self.sess.emit_err(errors::GenFn { span });
+        match coroutine_kind {
+            Some(CoroutineKind::Gen { span, .. }) | Some(CoroutineKind::AsyncGen { span, .. }) => {
+                self.sess.gated_spans.gate(sym::gen_blocks, span);
+            }
+            Some(CoroutineKind::Async { .. }) | None => {}
         }
 
         if !self.eat_keyword_case(kw::Fn, case) {
@@ -2430,7 +2434,7 @@ impl<'a> Parser<'a> {
 
                     // We may be able to recover
                     let mut recover_constness = constness;
-                    let mut recover_asyncness = asyncness;
+                    let mut recover_coroutine_kind = coroutine_kind;
                     let mut recover_unsafety = unsafety;
                     // This will allow the machine fix to directly place the keyword in the correct place or to indicate
                     // that the keyword is already present and the second instance should be removed.
@@ -2443,14 +2447,28 @@ impl<'a> Parser<'a> {
                             }
                         }
                     } else if self.check_keyword(kw::Async) {
-                        match asyncness {
-                            Async::Yes { span, .. } => Some(WrongKw::Duplicated(span)),
-                            Async::No => {
-                                recover_asyncness = Async::Yes {
+                        match coroutine_kind {
+                            Some(CoroutineKind::Async { span, .. }) => {
+                                Some(WrongKw::Duplicated(span))
+                            }
+                            Some(CoroutineKind::AsyncGen { span, .. }) => {
+                                Some(WrongKw::Duplicated(span))
+                            }
+                            Some(CoroutineKind::Gen { .. }) => {
+                                recover_coroutine_kind = Some(CoroutineKind::AsyncGen {
                                     span: self.token.span,
                                     closure_id: DUMMY_NODE_ID,
                                     return_impl_trait_id: DUMMY_NODE_ID,
-                                };
+                                });
+                                // FIXME(gen_blocks): This span is wrong, didn't want to think about it.
+                                Some(WrongKw::Misplaced(unsafe_start_sp))
+                            }
+                            None => {
+                                recover_coroutine_kind = Some(CoroutineKind::Async {
+                                    span: self.token.span,
+                                    closure_id: DUMMY_NODE_ID,
+                                    return_impl_trait_id: DUMMY_NODE_ID,
+                                });
                                 Some(WrongKw::Misplaced(unsafe_start_sp))
                             }
                         }
@@ -2531,6 +2549,8 @@ impl<'a> Parser<'a> {
                         }
                     }
 
+                    // FIXME(gen_blocks): add keyword recovery logic for genness
+
                     if wrong_kw.is_some()
                         && self.may_recover()
                         && self.look_ahead(1, |tok| tok.is_keyword_case(kw::Fn, case))
@@ -2542,7 +2562,7 @@ impl<'a> Parser<'a> {
                         return Ok(FnHeader {
                             constness: recover_constness,
                             unsafety: recover_unsafety,
-                            asyncness: recover_asyncness,
+                            coroutine_kind: recover_coroutine_kind,
                             ext,
                         });
                     }
@@ -2552,7 +2572,7 @@ impl<'a> Parser<'a> {
             }
         }
 
-        Ok(FnHeader { constness, unsafety, asyncness, ext })
+        Ok(FnHeader { constness, unsafety, coroutine_kind, ext })
     }
 
     /// Parses the parameter list and result type of a function declaration.

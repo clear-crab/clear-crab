@@ -99,11 +99,11 @@ fn fn_sig_for_fn_abi<'tcx>(
         }
         ty::Coroutine(did, args, _) => {
             let coroutine_kind = tcx.coroutine_kind(did).unwrap();
-            let sig = args.as_coroutine().poly_sig();
+            let sig = args.as_coroutine().sig();
 
-            let bound_vars = tcx.mk_bound_variable_kinds_from_iter(
-                sig.bound_vars().iter().chain(iter::once(ty::BoundVariableKind::Region(ty::BrEnv))),
-            );
+            let bound_vars = tcx.mk_bound_variable_kinds_from_iter(iter::once(
+                ty::BoundVariableKind::Region(ty::BrEnv),
+            ));
             let br = ty::BoundRegion {
                 var: ty::BoundVar::from_usize(bound_vars.len() - 1),
                 kind: ty::BoundRegionKind::BrEnv,
@@ -119,12 +119,11 @@ fn fn_sig_for_fn_abi<'tcx>(
                     // unlike for all other coroutine kinds.
                     env_ty
                 }
-                hir::CoroutineKind::Async(_) | hir::CoroutineKind::Coroutine => {
-                    Ty::new_adt(tcx, pin_adt_ref, pin_args)
-                }
+                hir::CoroutineKind::Async(_)
+                | hir::CoroutineKind::AsyncGen(_)
+                | hir::CoroutineKind::Coroutine => Ty::new_adt(tcx, pin_adt_ref, pin_args),
             };
 
-            let sig = sig.skip_binder();
             // The `FnSig` and the `ret_ty` here is for a coroutines main
             // `Coroutine::resume(...) -> CoroutineState` function in case we
             // have an ordinary coroutine, the `Future::poll(...) -> Poll`
@@ -168,6 +167,30 @@ fn fn_sig_for_fn_abi<'tcx>(
                     assert_eq!(sig.resume_ty, tcx.types.unit);
 
                     (None, ret_ty)
+                }
+                hir::CoroutineKind::AsyncGen(_) => {
+                    // The signature should be
+                    // `AsyncIterator::poll_next(_, &mut Context<'_>) -> Poll<Option<Output>>`
+                    assert_eq!(sig.return_ty, tcx.types.unit);
+
+                    // Yield type is already `Poll<Option<yield_ty>>`
+                    let ret_ty = sig.yield_ty;
+
+                    // We have to replace the `ResumeTy` that is used for type and borrow checking
+                    // with `&mut Context<'_>` which is used in codegen.
+                    #[cfg(debug_assertions)]
+                    {
+                        if let ty::Adt(resume_ty_adt, _) = sig.resume_ty.kind() {
+                            let expected_adt =
+                                tcx.adt_def(tcx.require_lang_item(LangItem::ResumeTy, None));
+                            assert_eq!(*resume_ty_adt, expected_adt);
+                        } else {
+                            panic!("expected `ResumeTy`, found `{:?}`", sig.resume_ty);
+                        };
+                    }
+                    let context_mut_ref = Ty::new_task_context(tcx);
+
+                    (Some(context_mut_ref), ret_ty)
                 }
                 hir::CoroutineKind::Coroutine => {
                     // The signature should be `Coroutine::resume(_, Resume) -> CoroutineState<Yield, Return>`
@@ -424,11 +447,23 @@ fn fn_abi_sanity_check<'tcx>(
             }
             PassMode::Indirect { meta_attrs: None, .. } => {
                 // No metadata, must be sized.
+                // Conceptually, unsized arguments must be copied around, which requires dynamically
+                // determining their size, which we cannot do without metadata. Consult
+                // t-opsem before removing this check.
                 assert!(arg.layout.is_sized());
             }
             PassMode::Indirect { meta_attrs: Some(_), on_stack, .. } => {
                 // With metadata. Must be unsized and not on the stack.
                 assert!(arg.layout.is_unsized() && !on_stack);
+                // Also, must not be `extern` type.
+                let tail = cx.tcx.struct_tail_with_normalize(arg.layout.ty, |ty| ty, || {});
+                if matches!(tail.kind(), ty::Foreign(..)) {
+                    // These types do not have metadata, so having `meta_attrs` is bogus.
+                    // Conceptually, unsized arguments must be copied around, which requires dynamically
+                    // determining their size. Therefore, we cannot allow `extern` types here. Consult
+                    // t-opsem before removing this check.
+                    panic!("unsized arguments must not be `extern` types");
+                }
             }
         }
     }

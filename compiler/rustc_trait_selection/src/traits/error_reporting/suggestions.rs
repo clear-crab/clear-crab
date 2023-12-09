@@ -2112,7 +2112,8 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             && !expected_inputs.is_empty()
             && expected_inputs.len() == found_inputs.len()
             && let Some(typeck) = &self.typeck_results
-            && let Res::Def(_, fn_def_id) = typeck.qpath_res(&path, *arg_hir_id)
+            && let Res::Def(res_kind, fn_def_id) = typeck.qpath_res(&path, *arg_hir_id)
+            && res_kind.is_fn_like()
         {
             let closure: Vec<_> = self
                 .tcx
@@ -2155,7 +2156,13 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             .map(|(name, ty)| {
                 format!(
                     "{name}{}",
-                    if ty.has_infer_types() { String::new() } else { format!(": {ty}") }
+                    if ty.has_infer_types() {
+                        String::new()
+                    } else if ty.references_error() {
+                        ": /* type */".to_string()
+                    } else {
+                        format!(": {ty}")
+                    }
                 )
             })
             .collect();
@@ -2579,6 +2586,23 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                         }
                         CoroutineKind::Async(CoroutineSource::Closure) => {
                             format!("future created by async closure is not {trait_name}")
+                        }
+                        CoroutineKind::AsyncGen(CoroutineSource::Fn) => self
+                            .tcx
+                            .parent(coroutine_did)
+                            .as_local()
+                            .map(|parent_did| self.tcx.local_def_id_to_hir_id(parent_did))
+                            .and_then(|parent_hir_id| hir.opt_name(parent_hir_id))
+                            .map(|name| {
+                                format!("async iterator returned by `{name}` is not {trait_name}")
+                            })?,
+                        CoroutineKind::AsyncGen(CoroutineSource::Block) => {
+                            format!("async iterator created by async gen block is not {trait_name}")
+                        }
+                        CoroutineKind::AsyncGen(CoroutineSource::Closure) => {
+                            format!(
+                                "async iterator created by async gen closure is not {trait_name}"
+                            )
                         }
                         CoroutineKind::Gen(CoroutineSource::Fn) => self
                             .tcx
@@ -3122,6 +3146,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                     | Some(hir::CoroutineKind::Coroutine)
                     | Some(hir::CoroutineKind::Gen(_)) => "yield",
                     Some(hir::CoroutineKind::Async(..)) => "await",
+                    Some(hir::CoroutineKind::AsyncGen(_)) => "yield`/`await",
                 };
                 err.note(format!(
                     "all values live across `{what}` must have a statically known size"

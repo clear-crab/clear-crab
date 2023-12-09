@@ -6,7 +6,7 @@ use crate::infer::canonical::Canonical;
 use crate::ty::visit::ValidateBoundVars;
 use crate::ty::InferTy::*;
 use crate::ty::{
-    self, AdtDef, Discr, Term, Ty, TyCtxt, TypeFlags, TypeSuperVisitable, TypeVisitable,
+    self, AdtDef, Discr, IntoKind, Term, Ty, TyCtxt, TypeFlags, TypeSuperVisitable, TypeVisitable,
     TypeVisitableExt, TypeVisitor,
 };
 use crate::ty::{GenericArg, GenericArgs, GenericArgsRef};
@@ -466,16 +466,6 @@ impl<'tcx> CoroutineArgs<'tcx> {
     /// Returns the type representing the return type of the coroutine.
     pub fn return_ty(self) -> Ty<'tcx> {
         self.split().return_ty.expect_ty()
-    }
-
-    /// Returns the "coroutine signature", which consists of its yield
-    /// and return types.
-    ///
-    /// N.B., some bits of the code prefers to see this wrapped in a
-    /// binder, but it never contains bound regions. Probably this
-    /// function should be removed.
-    pub fn poly_sig(self) -> PolyGenSig<'tcx> {
-        ty::Binder::dummy(self.sig())
     }
 
     /// Returns the "coroutine signature", which consists of its resume, yield
@@ -1352,8 +1342,6 @@ pub struct GenSig<'tcx> {
     pub return_ty: Ty<'tcx>,
 }
 
-pub type PolyGenSig<'tcx> = Binder<'tcx, GenSig<'tcx>>;
-
 /// Signature of a function type, which we have arbitrarily
 /// decided to use to refer to the input/output types.
 ///
@@ -1488,6 +1476,14 @@ impl ParamConst {
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, HashStable)]
 #[rustc_pass_by_value]
 pub struct Region<'tcx>(pub Interned<'tcx, RegionKind<'tcx>>);
+
+impl<'tcx> IntoKind for Region<'tcx> {
+    type Kind = RegionKind<'tcx>;
+
+    fn kind(self) -> RegionKind<'tcx> {
+        *self
+    }
+}
 
 impl<'tcx> Region<'tcx> {
     #[inline]

@@ -1268,13 +1268,19 @@ impl<'a> Visitor<'a> for AstValidator<'a> {
 
         self.check_c_variadic_type(fk);
 
-        // Functions cannot both be `const async`
+        // Functions cannot both be `const async` or `const gen`
         if let Some(&FnHeader {
             constness: Const::Yes(cspan),
-            asyncness: Async::Yes { span: aspan, .. },
+            coroutine_kind: Some(coroutine_kind),
             ..
         }) = fk.header()
         {
+            let aspan = match coroutine_kind {
+                CoroutineKind::Async { span: aspan, .. }
+                | CoroutineKind::Gen { span: aspan, .. }
+                | CoroutineKind::AsyncGen { span: aspan, .. } => aspan,
+            };
+            // FIXME(gen_blocks): Report a different error for `const gen`
             self.err_handler().emit_err(errors::ConstAndAsync {
                 spans: vec![cspan, aspan],
                 cspan,

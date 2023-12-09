@@ -2,7 +2,7 @@
 //! `Machine` trait.
 
 use std::borrow::Cow;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::path::Path;
 use std::process;
@@ -17,6 +17,7 @@ use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::static_assert_size;
 use rustc_middle::{
     mir,
+    query::TyCtxtAt,
     ty::{
         self,
         layout::{LayoutCx, LayoutError, LayoutOf, TyAndLayout},
@@ -259,6 +260,17 @@ impl interpret::Provenance for Provenance {
         }
     }
 
+    fn fmt(ptr: &Pointer<Self>, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (prov, addr) = ptr.into_parts(); // address is absolute
+        write!(f, "{:#x}", addr.bytes())?;
+        if f.alternate() {
+            write!(f, "{prov:#?}")?;
+        } else {
+            write!(f, "{prov:?}")?;
+        }
+        Ok(())
+    }
+
     fn join(left: Option<Self>, right: Option<Self>) -> Option<Self> {
         match (left, right) {
             // If both are the *same* concrete tag, that is the result.
@@ -309,11 +321,20 @@ pub struct AllocExtra<'tcx> {
     /// if this allocation is leakable. The backtrace is not
     /// pruned yet; that should be done before printing it.
     pub backtrace: Option<Vec<FrameInfo<'tcx>>>,
+    /// An offset inside this allocation that was deemed aligned even for symbolic alignment checks.
+    /// Invariant: the promised alignment will never be less than the native alignment of this allocation.
+    pub symbolic_alignment: Cell<Option<(Size, Align)>>,
 }
 
 impl VisitProvenance for AllocExtra<'_> {
     fn visit_provenance(&self, visit: &mut VisitWith<'_>) {
-        let AllocExtra { borrow_tracker, data_race, weak_memory, backtrace: _ } = self;
+        let AllocExtra {
+            borrow_tracker,
+            data_race,
+            weak_memory,
+            backtrace: _,
+            symbolic_alignment: _,
+        } = self;
 
         borrow_tracker.visit_provenance(visit);
         data_race.visit_provenance(visit);
@@ -768,11 +789,6 @@ impl<'mir, 'tcx> MiriMachine<'mir, 'tcx> {
         drop(self.profiler.take());
     }
 
-    pub(crate) fn round_up_to_multiple_of_page_size(&self, length: u64) -> Option<u64> {
-        #[allow(clippy::arithmetic_side_effects)] // page size is nonzero
-        (length.checked_add(self.page_size - 1)? / self.page_size).checked_mul(self.page_size)
-    }
-
     pub(crate) fn page_align(&self) -> Align {
         Align::from_bytes(self.page_size).unwrap()
     }
@@ -907,8 +923,45 @@ impl<'mir, 'tcx> Machine<'mir, 'tcx> for MiriMachine<'mir, 'tcx> {
     }
 
     #[inline(always)]
-    fn use_addr_for_alignment_check(ecx: &MiriInterpCx<'mir, 'tcx>) -> bool {
-        ecx.machine.check_alignment == AlignmentCheck::Int
+    fn alignment_check(
+        ecx: &MiriInterpCx<'mir, 'tcx>,
+        alloc_id: AllocId,
+        alloc_align: Align,
+        alloc_kind: AllocKind,
+        offset: Size,
+        align: Align,
+    ) -> Option<Misalignment> {
+        if ecx.machine.check_alignment != AlignmentCheck::Symbolic {
+            // Just use the built-in check.
+            return None;
+        }
+        if alloc_kind != AllocKind::LiveData {
+            // Can't have any extra info here.
+            return None;
+        }
+        // Let's see which alignment we have been promised for this allocation.
+        let alloc_info = ecx.get_alloc_extra(alloc_id).unwrap(); // cannot fail since the allocation is live
+        let (promised_offset, promised_align) =
+            alloc_info.symbolic_alignment.get().unwrap_or((Size::ZERO, alloc_align));
+        if promised_align < align {
+            // Definitely not enough.
+            Some(Misalignment { has: promised_align, required: align })
+        } else {
+            // What's the offset between us and the promised alignment?
+            let distance = offset.bytes().wrapping_sub(promised_offset.bytes());
+            // That must also be aligned.
+            if distance % align.bytes() == 0 {
+                // All looking good!
+                None
+            } else {
+                // The biggest power of two through which `distance` is divisible.
+                let distance_pow2 = 1 << distance.trailing_zeros();
+                Some(Misalignment {
+                    has: Align::from_bytes(distance_pow2).unwrap(),
+                    required: align,
+                })
+            }
+        }
     }
 
     #[inline(always)]
@@ -1112,6 +1165,7 @@ impl<'mir, 'tcx> Machine<'mir, 'tcx> for MiriMachine<'mir, 'tcx> {
                 data_race: race_alloc,
                 weak_memory: buffer_alloc,
                 backtrace,
+                symbolic_alignment: Cell::new(None),
             },
             |ptr| ecx.global_base_pointer(ptr),
         )?;
@@ -1128,11 +1182,11 @@ impl<'mir, 'tcx> Machine<'mir, 'tcx> for MiriMachine<'mir, 'tcx> {
 
     fn adjust_alloc_base_pointer(
         ecx: &MiriInterpCx<'mir, 'tcx>,
-        ptr: Pointer<AllocId>,
+        ptr: Pointer<CtfeProvenance>,
     ) -> InterpResult<'tcx, Pointer<Provenance>> {
+        let alloc_id = ptr.provenance.alloc_id();
         if cfg!(debug_assertions) {
             // The machine promises to never call us on thread-local or extern statics.
-            let alloc_id = ptr.provenance;
             match ecx.tcx.try_get_global_alloc(alloc_id) {
                 Some(GlobalAlloc::Static(def_id)) if ecx.tcx.is_thread_local_static(def_id) => {
                     panic!("adjust_alloc_base_pointer called on thread-local static")
@@ -1143,8 +1197,9 @@ impl<'mir, 'tcx> Machine<'mir, 'tcx> for MiriMachine<'mir, 'tcx> {
                 _ => {}
             }
         }
+        // FIXME: can we somehow preserve the immutability of `ptr`?
         let tag = if let Some(borrow_tracker) = &ecx.machine.borrow_tracker {
-            borrow_tracker.borrow_mut().base_ptr_tag(ptr.provenance, &ecx.machine)
+            borrow_tracker.borrow_mut().base_ptr_tag(alloc_id, &ecx.machine)
         } else {
             // Value does not matter, SB is disabled
             BorTag::default()
@@ -1203,7 +1258,7 @@ impl<'mir, 'tcx> Machine<'mir, 'tcx> for MiriMachine<'mir, 'tcx> {
 
     #[inline(always)]
     fn before_memory_read(
-        _tcx: TyCtxt<'tcx>,
+        _tcx: TyCtxtAt<'tcx>,
         machine: &Self,
         alloc_extra: &AllocExtra<'tcx>,
         (alloc_id, prov_extra): (AllocId, Self::ProvenanceExtra),
@@ -1223,7 +1278,7 @@ impl<'mir, 'tcx> Machine<'mir, 'tcx> for MiriMachine<'mir, 'tcx> {
 
     #[inline(always)]
     fn before_memory_write(
-        _tcx: TyCtxt<'tcx>,
+        _tcx: TyCtxtAt<'tcx>,
         machine: &mut Self,
         alloc_extra: &mut AllocExtra<'tcx>,
         (alloc_id, prov_extra): (AllocId, Self::ProvenanceExtra),
@@ -1243,7 +1298,7 @@ impl<'mir, 'tcx> Machine<'mir, 'tcx> for MiriMachine<'mir, 'tcx> {
 
     #[inline(always)]
     fn before_memory_deallocation(
-        _tcx: TyCtxt<'tcx>,
+        _tcx: TyCtxtAt<'tcx>,
         machine: &mut Self,
         alloc_extra: &mut AllocExtra<'tcx>,
         (alloc_id, prove_extra): (AllocId, Self::ProvenanceExtra),

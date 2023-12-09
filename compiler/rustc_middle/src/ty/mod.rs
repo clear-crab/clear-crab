@@ -65,15 +65,10 @@ use std::ops::ControlFlow;
 use std::{fmt, str};
 
 pub use crate::ty::diagnostics::*;
-pub use rustc_type_ir::AliasKind::*;
 pub use rustc_type_ir::ConstKind::{
     Bound as BoundCt, Error as ErrorCt, Expr as ExprCt, Infer as InferCt, Param as ParamCt,
     Placeholder as PlaceholderCt, Unevaluated, Value,
 };
-pub use rustc_type_ir::DynKind::*;
-pub use rustc_type_ir::InferTy::*;
-pub use rustc_type_ir::RegionKind::*;
-pub use rustc_type_ir::TyKind::*;
 pub use rustc_type_ir::*;
 
 pub use self::binding::BindingMode;
@@ -98,9 +93,8 @@ pub use self::sty::{
     CoroutineArgs, CoroutineArgsParts, EarlyParamRegion, ExistentialPredicate,
     ExistentialProjection, ExistentialTraitRef, FnSig, GenSig, InlineConstArgs,
     InlineConstArgsParts, LateParamRegion, ParamConst, ParamTy, PolyExistentialPredicate,
-    PolyExistentialProjection, PolyExistentialTraitRef, PolyFnSig, PolyGenSig, PolyTraitRef,
-    PredicateKind, Region, RegionKind, RegionVid, TraitRef, TyKind, TypeAndMut, UpvarArgs,
-    VarianceDiagInfo,
+    PolyExistentialProjection, PolyExistentialTraitRef, PolyFnSig, PolyTraitRef, PredicateKind,
+    Region, RegionKind, RegionVid, TraitRef, TyKind, TypeAndMut, UpvarArgs, VarianceDiagInfo,
 };
 pub use self::trait_def::TraitDef;
 pub use self::typeck_results::{
@@ -475,6 +469,14 @@ pub struct CReaderCacheKey {
 #[rustc_pass_by_value]
 pub struct Ty<'tcx>(Interned<'tcx, WithCachedTypeInfo<TyKind<'tcx>>>);
 
+impl<'tcx> IntoKind for Ty<'tcx> {
+    type Kind = TyKind<'tcx>;
+
+    fn kind(self) -> TyKind<'tcx> {
+        self.kind().clone()
+    }
+}
+
 impl EarlyParamRegion {
     /// Does this early bound region have a name? Early bound regions normally
     /// always have names except when using anonymous lifetimes (`'_`).
@@ -554,6 +556,10 @@ impl<'tcx> Predicate<'tcx> {
     pub fn allow_normalization(self) -> bool {
         match self.kind().skip_binder() {
             PredicateKind::Clause(ClauseKind::WellFormed(_)) => false,
+            // `NormalizesTo` is only used in the new solver, so this shouldn't
+            // matter. Normalizing `term` would be 'wrong' however, as it changes whether
+            // `normalizes-to(<T as Trait>::Assoc, <T as Trait>::Assoc)` holds.
+            PredicateKind::NormalizesTo(..) => false,
             PredicateKind::Clause(ClauseKind::Trait(_))
             | PredicateKind::Clause(ClauseKind::RegionOutlives(_))
             | PredicateKind::Clause(ClauseKind::TypeOutlives(_))
@@ -1094,6 +1100,33 @@ impl<'tcx> PolyProjectionPredicate<'tcx> {
     }
 }
 
+/// Used by the new solver. Unlike a `ProjectionPredicate` this can only be
+/// proven by actually normalizing `alias`.
+#[derive(Copy, Clone, PartialEq, Eq, Hash, TyEncodable, TyDecodable)]
+#[derive(HashStable, TypeFoldable, TypeVisitable, Lift)]
+pub struct NormalizesTo<'tcx> {
+    pub alias: AliasTy<'tcx>,
+    pub term: Term<'tcx>,
+}
+
+impl<'tcx> NormalizesTo<'tcx> {
+    pub fn self_ty(self) -> Ty<'tcx> {
+        self.alias.self_ty()
+    }
+
+    pub fn with_self_ty(self, tcx: TyCtxt<'tcx>, self_ty: Ty<'tcx>) -> NormalizesTo<'tcx> {
+        Self { alias: self.alias.with_self_ty(tcx, self_ty), ..self }
+    }
+
+    pub fn trait_def_id(self, tcx: TyCtxt<'tcx>) -> DefId {
+        self.alias.trait_def_id(tcx)
+    }
+
+    pub fn def_id(self) -> DefId {
+        self.alias.def_id
+    }
+}
+
 pub trait ToPolyTraitRef<'tcx> {
     fn to_poly_trait_ref(&self) -> PolyTraitRef<'tcx>;
 }
@@ -1275,6 +1308,12 @@ impl<'tcx> ToPredicate<'tcx, Clause<'tcx>> for PolyProjectionPredicate<'tcx> {
     }
 }
 
+impl<'tcx> ToPredicate<'tcx> for NormalizesTo<'tcx> {
+    fn to_predicate(self, tcx: TyCtxt<'tcx>) -> Predicate<'tcx> {
+        PredicateKind::NormalizesTo(self).to_predicate(tcx)
+    }
+}
+
 impl<'tcx> Predicate<'tcx> {
     pub fn to_opt_poly_trait_pred(self) -> Option<PolyTraitPredicate<'tcx>> {
         let predicate = self.kind();
@@ -1282,6 +1321,7 @@ impl<'tcx> Predicate<'tcx> {
             PredicateKind::Clause(ClauseKind::Trait(t)) => Some(predicate.rebind(t)),
             PredicateKind::Clause(ClauseKind::Projection(..))
             | PredicateKind::Clause(ClauseKind::ConstArgHasType(..))
+            | PredicateKind::NormalizesTo(..)
             | PredicateKind::AliasRelate(..)
             | PredicateKind::Subtype(..)
             | PredicateKind::Coerce(..)
@@ -1301,6 +1341,7 @@ impl<'tcx> Predicate<'tcx> {
             PredicateKind::Clause(ClauseKind::Projection(t)) => Some(predicate.rebind(t)),
             PredicateKind::Clause(ClauseKind::Trait(..))
             | PredicateKind::Clause(ClauseKind::ConstArgHasType(..))
+            | PredicateKind::NormalizesTo(..)
             | PredicateKind::AliasRelate(..)
             | PredicateKind::Subtype(..)
             | PredicateKind::Coerce(..)
@@ -1507,33 +1548,41 @@ pub struct Placeholder<T> {
 
 pub type PlaceholderRegion = Placeholder<BoundRegion>;
 
-impl rustc_type_ir::Placeholder for PlaceholderRegion {
-    fn universe(&self) -> UniverseIndex {
+impl PlaceholderLike for PlaceholderRegion {
+    fn universe(self) -> UniverseIndex {
         self.universe
     }
 
-    fn var(&self) -> BoundVar {
+    fn var(self) -> BoundVar {
         self.bound.var
     }
 
     fn with_updated_universe(self, ui: UniverseIndex) -> Self {
         Placeholder { universe: ui, ..self }
+    }
+
+    fn new(ui: UniverseIndex, var: BoundVar) -> Self {
+        Placeholder { universe: ui, bound: BoundRegion { var, kind: BoundRegionKind::BrAnon } }
     }
 }
 
 pub type PlaceholderType = Placeholder<BoundTy>;
 
-impl rustc_type_ir::Placeholder for PlaceholderType {
-    fn universe(&self) -> UniverseIndex {
+impl PlaceholderLike for PlaceholderType {
+    fn universe(self) -> UniverseIndex {
         self.universe
     }
 
-    fn var(&self) -> BoundVar {
+    fn var(self) -> BoundVar {
         self.bound.var
     }
 
     fn with_updated_universe(self, ui: UniverseIndex) -> Self {
         Placeholder { universe: ui, ..self }
+    }
+
+    fn new(ui: UniverseIndex, var: BoundVar) -> Self {
+        Placeholder { universe: ui, bound: BoundTy { var, kind: BoundTyKind::Anon } }
     }
 }
 
@@ -1546,17 +1595,21 @@ pub struct BoundConst<'tcx> {
 
 pub type PlaceholderConst = Placeholder<BoundVar>;
 
-impl rustc_type_ir::Placeholder for PlaceholderConst {
-    fn universe(&self) -> UniverseIndex {
+impl PlaceholderLike for PlaceholderConst {
+    fn universe(self) -> UniverseIndex {
         self.universe
     }
 
-    fn var(&self) -> BoundVar {
+    fn var(self) -> BoundVar {
         self.bound
     }
 
     fn with_updated_universe(self, ui: UniverseIndex) -> Self {
         Placeholder { universe: ui, ..self }
+    }
+
+    fn new(ui: UniverseIndex, var: BoundVar) -> Self {
+        Placeholder { universe: ui, bound: var }
     }
 }
 
@@ -2614,9 +2667,7 @@ pub struct SymbolName<'tcx> {
 
 impl<'tcx> SymbolName<'tcx> {
     pub fn new(tcx: TyCtxt<'tcx>, name: &str) -> SymbolName<'tcx> {
-        SymbolName {
-            name: unsafe { str::from_utf8_unchecked(tcx.arena.alloc_slice(name.as_bytes())) },
-        }
+        SymbolName { name: tcx.arena.alloc_str(name) }
     }
 }
 

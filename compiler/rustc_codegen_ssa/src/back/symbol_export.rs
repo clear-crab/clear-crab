@@ -16,7 +16,7 @@ use rustc_middle::ty::{self, SymbolName, TyCtxt};
 use rustc_middle::ty::{GenericArgKind, GenericArgsRef};
 use rustc_middle::util::Providers;
 use rustc_session::config::{CrateType, OomStrategy};
-use rustc_target::spec::SanitizerSet;
+use rustc_target::spec::{SanitizerSet, TlsModel};
 
 pub fn threshold(tcx: TyCtxt<'_>) -> SymbolExportLevel {
     crates_export_threshold(tcx.crate_types())
@@ -105,20 +105,21 @@ fn reachable_non_generics_provider(tcx: TyCtxt<'_>, _: LocalCrate) -> DefIdMap<S
             }
         })
         .map(|def_id| {
+            let codegen_attrs = tcx.codegen_fn_attrs(def_id.to_def_id());
             // We won't link right if this symbol is stripped during LTO.
             let name = tcx.symbol_name(Instance::mono(tcx, def_id.to_def_id())).name;
             // We have to preserve the symbols of the built-in functions during LTO.
             let is_builtin_fn = is_compiler_builtins
                 && symbol_export_level(tcx, def_id.to_def_id())
-                    .is_below_threshold(SymbolExportLevel::C);
-            let used = is_builtin_fn || name == "rust_eh_personality";
+                    .is_below_threshold(SymbolExportLevel::C)
+                && codegen_attrs.flags.contains(CodegenFnAttrFlags::NO_MANGLE);
+            let used = name == "rust_eh_personality";
 
             let export_level = if special_runtime_crate {
                 SymbolExportLevel::Rust
             } else {
                 symbol_export_level(tcx, def_id.to_def_id())
             };
-            let codegen_attrs = tcx.codegen_fn_attrs(def_id.to_def_id());
             debug!(
                 "EXPORTED SYMBOL (local): {} ({:?})",
                 tcx.symbol_name(Instance::mono(tcx, def_id.to_def_id())),
@@ -138,6 +139,7 @@ fn reachable_non_generics_provider(tcx: TyCtxt<'_>, _: LocalCrate) -> DefIdMap<S
                 used: codegen_attrs.flags.contains(CodegenFnAttrFlags::USED)
                     || codegen_attrs.flags.contains(CodegenFnAttrFlags::USED_LINKER)
                     || used,
+                used_compiler: is_builtin_fn,
             };
             (def_id.to_def_id(), info)
         })
@@ -150,6 +152,7 @@ fn reachable_non_generics_provider(tcx: TyCtxt<'_>, _: LocalCrate) -> DefIdMap<S
                 level: SymbolExportLevel::C,
                 kind: SymbolExportKind::Data,
                 used: false,
+                used_compiler: false,
             },
         );
     }
@@ -198,6 +201,7 @@ fn exported_symbols_provider_local(
                         level: info.level,
                         kind: SymbolExportKind::Text,
                         used: info.used,
+                        used_compiler: false,
                     },
                 )
             })
@@ -214,6 +218,7 @@ fn exported_symbols_provider_local(
                 level: SymbolExportLevel::C,
                 kind: SymbolExportKind::Text,
                 used: false,
+                used_compiler: false,
             },
         ));
     }
@@ -233,6 +238,7 @@ fn exported_symbols_provider_local(
                     level: SymbolExportLevel::Rust,
                     kind: SymbolExportKind::Text,
                     used: false,
+                    used_compiler: false,
                 },
             ));
         }
@@ -245,6 +251,7 @@ fn exported_symbols_provider_local(
                 level: SymbolExportLevel::Rust,
                 kind: SymbolExportKind::Data,
                 used: false,
+                used_compiler: false,
             },
         ))
     }
@@ -264,6 +271,7 @@ fn exported_symbols_provider_local(
                     level: SymbolExportLevel::C,
                     kind: SymbolExportKind::Data,
                     used: false,
+                    used_compiler: false,
                 },
             )
         }));
@@ -289,6 +297,7 @@ fn exported_symbols_provider_local(
                     level: SymbolExportLevel::C,
                     kind: SymbolExportKind::Data,
                     used: false,
+                    used_compiler: false,
                 },
             )
         }));
@@ -306,6 +315,7 @@ fn exported_symbols_provider_local(
                 level: SymbolExportLevel::C,
                 kind: SymbolExportKind::Data,
                 used: true,
+                used_compiler: false,
             },
         ));
     }
@@ -346,6 +356,7 @@ fn exported_symbols_provider_local(
                                 level: SymbolExportLevel::Rust,
                                 kind: SymbolExportKind::Text,
                                 used: false,
+                                used_compiler: false,
                             },
                         ));
                     }
@@ -362,6 +373,7 @@ fn exported_symbols_provider_local(
                             level: SymbolExportLevel::Rust,
                             kind: SymbolExportKind::Text,
                             used: false,
+                            used_compiler: false,
                         },
                     ));
                 }
@@ -552,6 +564,12 @@ pub fn linking_symbol_name_for_instance_in_crate<'tcx>(
 
     let mut undecorated = symbol_name_for_instance_in_crate(tcx, symbol, instantiating_crate);
 
+    // thread local will not be a function call,
+    // so it is safe to return before windows symbol decoration check.
+    if let Some(name) = maybe_emutls_symbol_name(tcx, symbol, &undecorated) {
+        return name;
+    }
+
     let target = &tcx.sess.target;
     if !target.is_like_windows {
         // Mach-O has a global "_" suffix and `object` crate will handle it.
@@ -610,6 +628,32 @@ pub fn linking_symbol_name_for_instance_in_crate<'tcx>(
         .map(|abi| abi.layout.size.bytes().next_multiple_of(target.pointer_width as u64 / 8))
         .sum();
     format!("{prefix}{undecorated}{suffix}{args_in_bytes}")
+}
+
+pub fn exporting_symbol_name_for_instance_in_crate<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    symbol: ExportedSymbol<'tcx>,
+    cnum: CrateNum,
+) -> String {
+    let undecorated = symbol_name_for_instance_in_crate(tcx, symbol, cnum);
+    maybe_emutls_symbol_name(tcx, symbol, &undecorated).unwrap_or(undecorated)
+}
+
+fn maybe_emutls_symbol_name<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    symbol: ExportedSymbol<'tcx>,
+    undecorated: &str,
+) -> Option<String> {
+    if matches!(tcx.sess.tls_model(), TlsModel::Emulated)
+        && let ExportedSymbol::NonGeneric(def_id) = symbol
+        && tcx.is_thread_local_static(def_id)
+    {
+        // When using emutls, LLVM will add the `__emutls_v.` prefix to thread local symbols,
+        // and exported symbol name need to match this.
+        Some(format!("__emutls_v.{undecorated}"))
+    } else {
+        None
+    }
 }
 
 fn wasm_import_module_map(tcx: TyCtxt<'_>, cnum: CrateNum) -> FxHashMap<DefId, String> {

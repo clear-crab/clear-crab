@@ -121,8 +121,8 @@ pub trait MutVisitor: Sized {
         noop_visit_fn_decl(d, self);
     }
 
-    fn visit_asyncness(&mut self, a: &mut Async) {
-        noop_visit_asyncness(a, self);
+    fn visit_coroutine_kind(&mut self, a: &mut CoroutineKind) {
+        noop_visit_coroutine_kind(a, self);
     }
 
     fn visit_closure_binder(&mut self, b: &mut ClosureBinder) {
@@ -453,7 +453,7 @@ pub fn noop_flat_map_arm<T: MutVisitor>(mut arm: Arm, vis: &mut T) -> SmallVec<[
     vis.visit_id(id);
     vis.visit_pat(pat);
     visit_opt(guard, |guard| vis.visit_expr(guard));
-    vis.visit_expr(body);
+    visit_opt(body, |body| vis.visit_expr(body));
     vis.visit_span(span);
     smallvec![arm]
 }
@@ -871,13 +871,15 @@ pub fn noop_visit_closure_binder<T: MutVisitor>(binder: &mut ClosureBinder, vis:
     }
 }
 
-pub fn noop_visit_asyncness<T: MutVisitor>(asyncness: &mut Async, vis: &mut T) {
-    match asyncness {
-        Async::Yes { span: _, closure_id, return_impl_trait_id } => {
+pub fn noop_visit_coroutine_kind<T: MutVisitor>(coroutine_kind: &mut CoroutineKind, vis: &mut T) {
+    match coroutine_kind {
+        CoroutineKind::Async { span, closure_id, return_impl_trait_id }
+        | CoroutineKind::Gen { span, closure_id, return_impl_trait_id }
+        | CoroutineKind::AsyncGen { span, closure_id, return_impl_trait_id } => {
+            vis.visit_span(span);
             vis.visit_id(closure_id);
             vis.visit_id(return_impl_trait_id);
         }
-        Async::No => {}
     }
 }
 
@@ -1170,9 +1172,9 @@ fn visit_const_item<T: MutVisitor>(
 }
 
 pub fn noop_visit_fn_header<T: MutVisitor>(header: &mut FnHeader, vis: &mut T) {
-    let FnHeader { unsafety, asyncness, constness, ext: _ } = header;
+    let FnHeader { unsafety, coroutine_kind, constness, ext: _ } = header;
     visit_constness(constness, vis);
-    vis.visit_asyncness(asyncness);
+    coroutine_kind.as_mut().map(|coroutine_kind| vis.visit_coroutine_kind(coroutine_kind));
     visit_unsafety(unsafety, vis);
 }
 
@@ -1406,7 +1408,7 @@ pub fn noop_visit_expr<T: MutVisitor>(
             binder,
             capture_clause,
             constness,
-            asyncness,
+            coroutine_kind,
             movability: _,
             fn_decl,
             body,
@@ -1415,7 +1417,7 @@ pub fn noop_visit_expr<T: MutVisitor>(
         }) => {
             vis.visit_closure_binder(binder);
             visit_constness(constness, vis);
-            vis.visit_asyncness(asyncness);
+            coroutine_kind.as_mut().map(|coroutine_kind| vis.visit_coroutine_kind(coroutine_kind));
             vis.visit_capture_by(capture_clause);
             vis.visit_fn_decl(fn_decl);
             vis.visit_expr(body);

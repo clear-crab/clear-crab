@@ -1,5 +1,5 @@
 use crate::middle::resolve_bound_vars as rbv;
-use crate::mir::interpret::{AllocId, ErrorHandled, LitToConstInput, Scalar};
+use crate::mir::interpret::{ErrorHandled, LitToConstInput, Scalar};
 use crate::ty::{self, GenericArgs, ParamEnv, ParamEnvAnd, Ty, TyCtxt, TypeVisitableExt};
 use rustc_data_structures::intern::Interned;
 use rustc_error_messages::MultiSpan;
@@ -7,7 +7,7 @@ use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::def_id::LocalDefId;
 use rustc_macros::HashStable;
-use rustc_type_ir::{TypeFlags, WithCachedTypeInfo};
+use rustc_type_ir::{ConstTy, IntoKind, TypeFlags, WithCachedTypeInfo};
 
 mod int;
 mod kind;
@@ -25,6 +25,20 @@ use super::sty::ConstKind;
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, HashStable)]
 #[rustc_pass_by_value]
 pub struct Const<'tcx>(pub(super) Interned<'tcx, WithCachedTypeInfo<ConstData<'tcx>>>);
+
+impl<'tcx> IntoKind for Const<'tcx> {
+    type Kind = ConstKind<'tcx>;
+
+    fn kind(self) -> ConstKind<'tcx> {
+        self.kind().clone()
+    }
+}
+
+impl<'tcx> ConstTy<TyCtxt<'tcx>> for Const<'tcx> {
+    fn ty(self) -> Ty<'tcx> {
+        self.ty()
+    }
+}
 
 /// Typed constant value.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, HashStable, TyEncodable, TyDecodable)]
@@ -413,7 +427,7 @@ impl<'tcx> Const<'tcx> {
     }
 
     #[inline]
-    pub fn try_to_scalar(self) -> Option<Scalar<AllocId>> {
+    pub fn try_to_scalar(self) -> Option<Scalar> {
         self.try_to_valtree()?.try_to_scalar()
     }
 

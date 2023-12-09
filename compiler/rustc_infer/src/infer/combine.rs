@@ -35,6 +35,7 @@ use rustc_middle::infer::unify_key::{ConstVariableOrigin, ConstVariableOriginKin
 use rustc_middle::ty::error::{ExpectedFound, TypeError};
 use rustc_middle::ty::relate::{RelateResult, TypeRelation};
 use rustc_middle::ty::{self, InferConst, ToPredicate, Ty, TyCtxt, TypeVisitableExt};
+use rustc_middle::ty::{AliasRelationDirection, TyVar};
 use rustc_middle::ty::{IntType, UintType};
 use rustc_span::DUMMY_SP;
 
@@ -326,7 +327,9 @@ impl<'tcx> InferCtxt<'tcx> {
     ) -> RelateResult<'tcx, ty::Const<'tcx>> {
         let span =
             self.inner.borrow_mut().const_unification_table().probe_value(target_vid).origin.span;
-        let Generalization { value, needs_wf: _ } = generalize::generalize(
+        // FIXME(generic_const_exprs): Occurs check failures for unevaluated
+        // constants and generic expressions are not yet handled correctly.
+        let Generalization { value_may_be_infer: value, needs_wf: _ } = generalize::generalize(
             self,
             &mut CombineDelegate { infcx: self, span, param_env },
             ct,
@@ -445,7 +448,7 @@ impl<'infcx, 'tcx> CombineFields<'infcx, 'tcx> {
         // `'?2` and `?3` are fresh region/type inference
         // variables. (Down below, we will relate `a_ty <: b_ty`,
         // adding constraints like `'x: '?2` and `?1 <: ?3`.)
-        let Generalization { value: b_ty, needs_wf } = generalize::generalize(
+        let Generalization { value_may_be_infer: b_ty, needs_wf } = generalize::generalize(
             self.infcx,
             &mut CombineDelegate {
                 infcx: self.infcx,
@@ -457,8 +460,12 @@ impl<'infcx, 'tcx> CombineFields<'infcx, 'tcx> {
             ambient_variance,
         )?;
 
-        debug!(?b_ty);
-        self.infcx.inner.borrow_mut().type_variables().instantiate(b_vid, b_ty);
+        // Constrain `b_vid` to the generalized type `b_ty`.
+        if let &ty::Infer(TyVar(b_ty_vid)) = b_ty.kind() {
+            self.infcx.inner.borrow_mut().type_variables().equate(b_vid, b_ty_vid);
+        } else {
+            self.infcx.inner.borrow_mut().type_variables().instantiate(b_vid, b_ty);
+        }
 
         if needs_wf {
             self.obligations.push(Obligation::new(
@@ -477,19 +484,65 @@ impl<'infcx, 'tcx> CombineFields<'infcx, 'tcx> {
         // relations wind up attributed to the same spans. We need
         // to associate causes/spans with each of the relations in
         // the stack to get this right.
-        match ambient_variance {
-            ty::Variance::Invariant => self.equate(a_is_expected).relate(a_ty, b_ty),
-            ty::Variance::Covariant => self.sub(a_is_expected).relate(a_ty, b_ty),
-            ty::Variance::Contravariant => self.sub(a_is_expected).relate_with_variance(
-                ty::Contravariant,
-                ty::VarianceDiagInfo::default(),
-                a_ty,
-                b_ty,
-            ),
-            ty::Variance::Bivariant => {
-                unreachable!("no code should be generalizing bivariantly (currently)")
+        if b_ty.is_ty_var() {
+            // This happens for cases like `<?0 as Trait>::Assoc == ?0`.
+            // We can't instantiate `?0` here as that would result in a
+            // cyclic type. We instead delay the unification in case
+            // the alias can be normalized to something which does not
+            // mention `?0`.
+            if self.infcx.next_trait_solver() {
+                let (lhs, rhs, direction) = match ambient_variance {
+                    ty::Variance::Invariant => {
+                        (a_ty.into(), b_ty.into(), AliasRelationDirection::Equate)
+                    }
+                    ty::Variance::Covariant => {
+                        (a_ty.into(), b_ty.into(), AliasRelationDirection::Subtype)
+                    }
+                    ty::Variance::Contravariant => {
+                        (b_ty.into(), a_ty.into(), AliasRelationDirection::Subtype)
+                    }
+                    ty::Variance::Bivariant => unreachable!("bivariant generalization"),
+                };
+                self.obligations.push(Obligation::new(
+                    self.tcx(),
+                    self.trace.cause.clone(),
+                    self.param_env,
+                    ty::PredicateKind::AliasRelate(lhs, rhs, direction),
+                ));
+            } else {
+                match a_ty.kind() {
+                    &ty::Alias(ty::AliasKind::Projection, data) => {
+                        // FIXME: This does not handle subtyping correctly, we could
+                        // instead create a new inference variable for `a_ty`, emitting
+                        // `Projection(a_ty, a_infer)` and `a_infer <: b_ty`.
+                        self.obligations.push(Obligation::new(
+                            self.tcx(),
+                            self.trace.cause.clone(),
+                            self.param_env,
+                            ty::ProjectionPredicate { projection_ty: data, term: b_ty.into() },
+                        ))
+                    }
+                    // The old solver only accepts projection predicates for associated types.
+                    ty::Alias(
+                        ty::AliasKind::Inherent | ty::AliasKind::Weak | ty::AliasKind::Opaque,
+                        _,
+                    ) => return Err(TypeError::CyclicTy(a_ty)),
+                    _ => bug!("generalizated `{a_ty:?} to infer, not an alias"),
+                }
             }
-        }?;
+        } else {
+            match ambient_variance {
+                ty::Variance::Invariant => self.equate(a_is_expected).relate(a_ty, b_ty),
+                ty::Variance::Covariant => self.sub(a_is_expected).relate(a_ty, b_ty),
+                ty::Variance::Contravariant => self.sub(a_is_expected).relate_with_variance(
+                    ty::Contravariant,
+                    ty::VarianceDiagInfo::default(),
+                    a_ty,
+                    b_ty,
+                ),
+                ty::Variance::Bivariant => unreachable!("bivariant generalization"),
+            }?;
+        }
 
         Ok(())
     }

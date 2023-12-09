@@ -105,7 +105,7 @@ impl<'a, 'tcx, V: CodegenObject> OperandRef<'tcx, V> {
                     bug!("from_const: invalid ScalarPair layout: {:#?}", layout);
                 };
                 let a = Scalar::from_pointer(
-                    Pointer::new(bx.tcx().reserve_and_set_memory_alloc(data), Size::ZERO),
+                    Pointer::new(bx.tcx().reserve_and_set_memory_alloc(data).into(), Size::ZERO),
                     &bx.tcx(),
                 );
                 let a_llval = bx.scalar_to_backend(
@@ -414,6 +414,7 @@ impl<'a, 'tcx, V: CodegenObject> OperandValue<V> {
                 // value is through `undef`/`poison`, and the store itself is useless.
             }
             OperandValue::Ref(r, None, source_align) => {
+                assert!(dest.layout.is_sized(), "cannot directly store unsized values");
                 if flags.contains(MemFlags::NONTEMPORAL) {
                     // HACK(nox): This is inefficient but there is no nontemporal memcpy.
                     let ty = bx.backend_type(dest.layout);
