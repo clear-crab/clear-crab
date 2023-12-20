@@ -720,7 +720,8 @@ where
 /// type or mutability, in particular if the code is refactored.
 #[inline(always)]
 #[must_use]
-#[unstable(feature = "ptr_from_ref", issue = "106116")]
+#[stable(feature = "ptr_from_ref", since = "CURRENT_RUSTC_VERSION")]
+#[rustc_const_stable(feature = "ptr_from_ref", since = "CURRENT_RUSTC_VERSION")]
 #[rustc_never_returns_null_ptr]
 #[rustc_diagnostic_item = "ptr_from_ref"]
 pub const fn from_ref<T: ?Sized>(r: &T) -> *const T {
@@ -733,7 +734,9 @@ pub const fn from_ref<T: ?Sized>(r: &T) -> *const T {
 /// type or mutability, in particular if the code is refactored.
 #[inline(always)]
 #[must_use]
-#[unstable(feature = "ptr_from_ref", issue = "106116")]
+#[stable(feature = "ptr_from_ref", since = "CURRENT_RUSTC_VERSION")]
+#[rustc_const_stable(feature = "ptr_from_ref", since = "CURRENT_RUSTC_VERSION")]
+#[rustc_allow_const_fn_unstable(const_mut_refs)]
 #[rustc_never_returns_null_ptr]
 pub const fn from_mut<T: ?Sized>(r: &mut T) -> *mut T {
     r
@@ -1897,6 +1900,7 @@ pub(crate) const unsafe fn align_offset<T: Sized>(p: *const T, a: usize) -> usiz
 #[inline(always)]
 #[must_use = "pointer comparison produces a value"]
 #[rustc_diagnostic_item = "ptr_eq"]
+#[cfg_attr(not(bootstrap), allow(ambiguous_wide_pointer_comparisons))] // it's actually clear here
 pub fn eq<T: ?Sized>(a: *const T, b: *const T) -> bool {
     a == b
 }

@@ -75,11 +75,6 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
         "example/arbitrary_self_types_pointers_and_wrappers.rs",
         &[],
     ),
-    TestCase::build_bin_and_run(
-        "aot.issue_91827_extern_types",
-        "example/issue-91827-extern-types.rs",
-        &[],
-    ),
     TestCase::build_lib("build.alloc_system", "example/alloc_system.rs", "lib"),
     TestCase::build_bin_and_run("aot.alloc_example", "example/alloc_example.rs", &[]),
     TestCase::jit_bin("jit.std_example", "example/std_example.rs", ""),
@@ -237,6 +232,13 @@ const EXTENDED_SYSROOT_SUITE: &[TestCase] = &[
         if runner.is_native {
             let mut test_cmd = PORTABLE_SIMD.test(&runner.target_compiler, &runner.dirs);
             test_cmd.arg("-q");
+            // FIXME remove after portable-simd update
+            test_cmd
+                .arg("--")
+                .arg("--skip")
+                .arg("core_simd::swizzle::simd_swizzle")
+                .arg("--skip")
+                .arg("core_simd::vector::Simd<T,N>::lanes");
             spawn_and_wait(test_cmd);
         }
     }),

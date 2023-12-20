@@ -23,14 +23,15 @@ use rustc_middle::ty::{
 use rustc_session::config::DumpSolverProofTree;
 use rustc_span::DUMMY_SP;
 use std::io::Write;
+use std::iter;
 use std::ops::ControlFlow;
 
 use crate::traits::vtable::{count_own_vtable_entries, prepare_vtable_segments, VtblSegment};
 
 use super::inspect::ProofTreeBuilder;
-use super::SolverMode;
 use super::{search_graph, GoalEvaluationKind};
 use super::{search_graph::SearchGraph, Goal};
+use super::{GoalSource, SolverMode};
 pub use select::InferCtxtSelectExt;
 
 mod canonical;
@@ -105,7 +106,7 @@ pub(super) struct NestedGoals<'tcx> {
     /// can be unsound with more powerful coinduction in the future.
     pub(super) normalizes_to_hack_goal: Option<Goal<'tcx, ty::NormalizesTo<'tcx>>>,
     /// The rest of the goals which have not yet processed or remain ambiguous.
-    pub(super) goals: Vec<Goal<'tcx, ty::Predicate<'tcx>>>,
+    pub(super) goals: Vec<(GoalSource, Goal<'tcx, ty::Predicate<'tcx>>)>,
 }
 
 impl<'tcx> NestedGoals<'tcx> {
@@ -156,7 +157,7 @@ impl<'tcx> InferCtxtEvalExt<'tcx> for InferCtxt<'tcx> {
         Option<inspect::GoalEvaluation<'tcx>>,
     ) {
         EvalCtxt::enter_root(self, generate_proof_tree, |ecx| {
-            ecx.evaluate_goal(GoalEvaluationKind::Root, goal)
+            ecx.evaluate_goal(GoalEvaluationKind::Root, GoalSource::Misc, goal)
         })
     }
 }
@@ -200,9 +201,10 @@ impl<'a, 'tcx> EvalCtxt<'a, 'tcx> {
         let result = f(&mut ecx);
 
         let tree = ecx.inspect.finalize();
-        if let (Some(tree), DumpSolverProofTree::Always) =
-            (&tree, infcx.tcx.sess.opts.unstable_opts.dump_solver_proof_tree)
-        {
+        if let (Some(tree), DumpSolverProofTree::Always) = (
+            &tree,
+            infcx.tcx.sess.opts.unstable_opts.next_solver.map(|c| c.dump_tree).unwrap_or_default(),
+        ) {
             let mut lock = std::io::stdout().lock();
             let _ = lock.write_fmt(format_args!("{tree:?}\n"));
             let _ = lock.flush();
@@ -333,6 +335,7 @@ impl<'a, 'tcx> EvalCtxt<'a, 'tcx> {
     fn evaluate_goal(
         &mut self,
         goal_evaluation_kind: GoalEvaluationKind,
+        source: GoalSource,
         goal: Goal<'tcx, ty::Predicate<'tcx>>,
     ) -> Result<(bool, Certainty, Vec<Goal<'tcx, ty::Predicate<'tcx>>>), NoSolution> {
         let (orig_values, canonical_goal) = self.canonicalize_goal(goal);
@@ -352,13 +355,13 @@ impl<'a, 'tcx> EvalCtxt<'a, 'tcx> {
             Ok(response) => response,
         };
 
-        let has_changed = !canonical_response.value.var_values.is_identity_modulo_regions()
-            || !canonical_response.value.external_constraints.opaque_types.is_empty();
-        let (certainty, nested_goals) = match self.instantiate_and_apply_query_response(
-            goal.param_env,
-            orig_values,
-            canonical_response,
-        ) {
+        let (certainty, has_changed, nested_goals) = match self
+            .instantiate_response_discarding_overflow(
+                goal.param_env,
+                source,
+                orig_values,
+                canonical_response,
+            ) {
             Err(e) => {
                 self.inspect.goal_evaluation(goal_evaluation);
                 return Err(e);
@@ -377,12 +380,50 @@ impl<'a, 'tcx> EvalCtxt<'a, 'tcx> {
         //
         // This assert was removed as it did not hold for goals constraining
         // an inference variable to a recursive alias, e.g. in
-        // tests/ui/traits/new-solver/overflow/recursive-self-normalization.rs.
+        // tests/ui/traits/next-solver/overflow/recursive-self-normalization.rs.
         //
         // Once we have decided on how to handle trait-system-refactor-initiative#75,
         // we should re-add an assert here.
 
         Ok((has_changed, certainty, nested_goals))
+    }
+
+    fn instantiate_response_discarding_overflow(
+        &mut self,
+        param_env: ty::ParamEnv<'tcx>,
+        source: GoalSource,
+        original_values: Vec<ty::GenericArg<'tcx>>,
+        response: CanonicalResponse<'tcx>,
+    ) -> Result<(Certainty, bool, Vec<Goal<'tcx, ty::Predicate<'tcx>>>), NoSolution> {
+        // The old solver did not evaluate nested goals when normalizing.
+        // It returned the selection constraints allowing a `Projection`
+        // obligation to not hold in coherence while avoiding the fatal error
+        // from overflow.
+        //
+        // We match this behavior here by considering all constraints
+        // from nested goals which are not from where-bounds. We will already
+        // need to track which nested goals are required by impl where-bounds
+        // for coinductive cycles, so we simply reuse that here.
+        //
+        // While we could consider overflow constraints in more cases, this should
+        // not be necessary for backcompat and results in better perf. It also
+        // avoids a potential inconsistency which would otherwise require some
+        // tracking for root goals as well. See #119071 for an example.
+        let keep_overflow_constraints = || {
+            self.search_graph.current_goal_is_normalizes_to()
+                && source != GoalSource::ImplWhereBound
+        };
+
+        if response.value.certainty == Certainty::OVERFLOW && !keep_overflow_constraints() {
+            Ok((Certainty::OVERFLOW, false, Vec::new()))
+        } else {
+            let has_changed = !response.value.var_values.is_identity_modulo_regions()
+                || !response.value.external_constraints.opaque_types.is_empty();
+
+            let (certainty, nested_goals) =
+                self.instantiate_and_apply_query_response(param_env, original_values, response)?;
+            Ok((certainty, has_changed, nested_goals))
+        }
     }
 
     fn compute_goal(&mut self, goal: Goal<'tcx, ty::Predicate<'tcx>>) -> QueryResult<'tcx> {
@@ -421,7 +462,7 @@ impl<'a, 'tcx> EvalCtxt<'a, 'tcx> {
                     self.compute_const_evaluatable_goal(Goal { param_env, predicate: ct })
                 }
                 ty::PredicateKind::ConstEquate(_, _) => {
-                    bug!("ConstEquate should not be emitted when `-Ztrait-solver=next` is active")
+                    bug!("ConstEquate should not be emitted when `-Znext-solver` is active")
                 }
                 ty::PredicateKind::NormalizesTo(predicate) => {
                     self.compute_normalizes_to_goal(Goal { param_env, predicate })
@@ -438,7 +479,7 @@ impl<'a, 'tcx> EvalCtxt<'a, 'tcx> {
         } else {
             let kind = self.infcx.instantiate_binder_with_placeholders(kind);
             let goal = goal.with(self.tcx(), ty::Binder::dummy(kind));
-            self.add_goal(goal);
+            self.add_goal(GoalSource::Misc, goal);
             self.evaluate_added_goals_and_make_canonical_response(Certainty::Yes)
         }
     }
@@ -487,6 +528,13 @@ impl<'a, 'tcx> EvalCtxt<'a, 'tcx> {
         let mut goals = core::mem::replace(&mut self.nested_goals, NestedGoals::new());
 
         self.inspect.evaluate_added_goals_loop_start();
+
+        fn with_misc_source<'tcx>(
+            it: impl IntoIterator<Item = Goal<'tcx, ty::Predicate<'tcx>>>,
+        ) -> impl Iterator<Item = (GoalSource, Goal<'tcx, ty::Predicate<'tcx>>)> {
+            iter::zip(iter::repeat(GoalSource::Misc), it)
+        }
+
         // If this loop did not result in any progress, what's our final certainty.
         let mut unchanged_certainty = Some(Certainty::Yes);
         if let Some(goal) = goals.normalizes_to_hack_goal.take() {
@@ -500,9 +548,10 @@ impl<'a, 'tcx> EvalCtxt<'a, 'tcx> {
 
             let (_, certainty, instantiate_goals) = self.evaluate_goal(
                 GoalEvaluationKind::Nested { is_normalizes_to_hack: IsNormalizesToHack::Yes },
+                GoalSource::Misc,
                 unconstrained_goal,
             )?;
-            self.nested_goals.goals.extend(instantiate_goals);
+            self.nested_goals.goals.extend(with_misc_source(instantiate_goals));
 
             // Finally, equate the goal's RHS with the unconstrained var.
             // We put the nested goals from this into goals instead of
@@ -511,7 +560,7 @@ impl<'a, 'tcx> EvalCtxt<'a, 'tcx> {
             // matters in practice, though.
             let eq_goals =
                 self.eq_and_get_goals(goal.param_env, goal.predicate.term, unconstrained_rhs)?;
-            goals.goals.extend(eq_goals);
+            goals.goals.extend(with_misc_source(eq_goals));
 
             // We only look at the `projection_ty` part here rather than
             // looking at the "has changed" return from evaluate_goal,
@@ -532,12 +581,13 @@ impl<'a, 'tcx> EvalCtxt<'a, 'tcx> {
             }
         }
 
-        for goal in goals.goals.drain(..) {
+        for (source, goal) in goals.goals.drain(..) {
             let (has_changed, certainty, instantiate_goals) = self.evaluate_goal(
                 GoalEvaluationKind::Nested { is_normalizes_to_hack: IsNormalizesToHack::No },
+                source,
                 goal,
             )?;
-            self.nested_goals.goals.extend(instantiate_goals);
+            self.nested_goals.goals.extend(with_misc_source(instantiate_goals));
             if has_changed {
                 unchanged_certainty = None;
             }
@@ -545,7 +595,7 @@ impl<'a, 'tcx> EvalCtxt<'a, 'tcx> {
             match certainty {
                 Certainty::Yes => {}
                 Certainty::Maybe(_) => {
-                    self.nested_goals.goals.push(goal);
+                    self.nested_goals.goals.push((source, goal));
                     unchanged_certainty = unchanged_certainty.map(|c| c.unify_with(certainty));
                 }
             }
@@ -669,7 +719,7 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
             .at(&ObligationCause::dummy(), param_env)
             .eq(DefineOpaqueTypes::No, lhs, rhs)
             .map(|InferOk { value: (), obligations }| {
-                self.add_goals(obligations.into_iter().map(|o| o.into()));
+                self.add_goals(GoalSource::Misc, obligations.into_iter().map(|o| o.into()));
             })
             .map_err(|e| {
                 debug!(?e, "failed to equate");
@@ -688,7 +738,7 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
             .at(&ObligationCause::dummy(), param_env)
             .sub(DefineOpaqueTypes::No, sub, sup)
             .map(|InferOk { value: (), obligations }| {
-                self.add_goals(obligations.into_iter().map(|o| o.into()));
+                self.add_goals(GoalSource::Misc, obligations.into_iter().map(|o| o.into()));
             })
             .map_err(|e| {
                 debug!(?e, "failed to subtype");
@@ -708,7 +758,7 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
             .at(&ObligationCause::dummy(), param_env)
             .relate(DefineOpaqueTypes::No, lhs, variance, rhs)
             .map(|InferOk { value: (), obligations }| {
-                self.add_goals(obligations.into_iter().map(|o| o.into()));
+                self.add_goals(GoalSource::Misc, obligations.into_iter().map(|o| o.into()));
             })
             .map_err(|e| {
                 debug!(?e, "failed to relate");
@@ -841,7 +891,7 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
             true,
             &mut obligations,
         )?;
-        self.add_goals(obligations.into_iter().map(|o| o.into()));
+        self.add_goals(GoalSource::Misc, obligations.into_iter().map(|o| o.into()));
         Ok(())
     }
 
@@ -861,7 +911,7 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
             hidden_ty,
             &mut obligations,
         );
-        self.add_goals(obligations.into_iter().map(|o| o.into()));
+        self.add_goals(GoalSource::Misc, obligations.into_iter().map(|o| o.into()));
     }
 
     // Do something for each opaque/hidden pair defined with `def_id` in the

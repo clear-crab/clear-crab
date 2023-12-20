@@ -1226,11 +1226,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         if unbound_input_types
             && stack.iter().skip(1).any(|prev| {
                 stack.obligation.param_env == prev.obligation.param_env
-                    && self.match_fresh_trait_refs(
-                        stack.fresh_trait_pred,
-                        prev.fresh_trait_pred,
-                        prev.obligation.param_env,
-                    )
+                    && self.match_fresh_trait_refs(stack.fresh_trait_pred, prev.fresh_trait_pred)
             })
         {
             debug!("evaluate_stack --> unbound argument, recursive --> giving up",);
@@ -1865,7 +1861,9 @@ impl<'tcx> SelectionContext<'_, 'tcx> {
             }
 
             // Drop otherwise equivalent non-const fn pointer candidates
-            (FnPointerCandidate { .. }, FnPointerCandidate { is_const: false }) => DropVictim::Yes,
+            (FnPointerCandidate { .. }, FnPointerCandidate { fn_host_effect }) => {
+                DropVictim::drop_if(*fn_host_effect == self.tcx().consts.true_)
+            }
 
             (
                 ParamCandidate(ref other_cand),
@@ -1883,7 +1881,7 @@ impl<'tcx> SelectionContext<'_, 'tcx> {
                 | BuiltinCandidate { .. }
                 | TraitAliasCandidate
                 | ObjectCandidate(_)
-                | ProjectionCandidate(..),
+                | ProjectionCandidate(_),
             ) => {
                 // We have a where clause so don't go around looking
                 // for impls. Arbitrarily give param candidates priority
@@ -1893,7 +1891,7 @@ impl<'tcx> SelectionContext<'_, 'tcx> {
                 // here (see issue #50825).
                 DropVictim::drop_if(!is_global(other_cand))
             }
-            (ObjectCandidate(_) | ProjectionCandidate(..), ParamCandidate(ref victim_cand)) => {
+            (ObjectCandidate(_) | ProjectionCandidate(_), ParamCandidate(ref victim_cand)) => {
                 // Prefer these to a global where-clause bound
                 // (see issue #50825).
                 if is_global(victim_cand) { DropVictim::Yes } else { DropVictim::No }
@@ -1921,20 +1919,20 @@ impl<'tcx> SelectionContext<'_, 'tcx> {
                 )
             }
 
-            (ProjectionCandidate(i, _), ProjectionCandidate(j, _))
+            (ProjectionCandidate(i), ProjectionCandidate(j))
             | (ObjectCandidate(i), ObjectCandidate(j)) => {
                 // Arbitrarily pick the lower numbered candidate for backwards
                 // compatibility reasons. Don't let this affect inference.
                 DropVictim::drop_if(i < j && !has_non_region_infer)
             }
-            (ObjectCandidate(_), ProjectionCandidate(..))
-            | (ProjectionCandidate(..), ObjectCandidate(_)) => {
+            (ObjectCandidate(_), ProjectionCandidate(_))
+            | (ProjectionCandidate(_), ObjectCandidate(_)) => {
                 bug!("Have both object and projection candidate")
             }
 
             // Arbitrarily give projection and object candidates priority.
             (
-                ObjectCandidate(_) | ProjectionCandidate(..),
+                ObjectCandidate(_) | ProjectionCandidate(_),
                 ImplCandidate(..)
                 | AutoImplCandidate
                 | ClosureCandidate { .. }
@@ -1964,7 +1962,7 @@ impl<'tcx> SelectionContext<'_, 'tcx> {
                 | TraitUpcastingUnsizeCandidate(_)
                 | BuiltinCandidate { .. }
                 | TraitAliasCandidate,
-                ObjectCandidate(_) | ProjectionCandidate(..),
+                ObjectCandidate(_) | ProjectionCandidate(_),
             ) => DropVictim::No,
 
             (&ImplCandidate(other_def), &ImplCandidate(victim_def)) => {
@@ -2630,9 +2628,8 @@ impl<'tcx> SelectionContext<'_, 'tcx> {
         &self,
         previous: ty::PolyTraitPredicate<'tcx>,
         current: ty::PolyTraitPredicate<'tcx>,
-        param_env: ty::ParamEnv<'tcx>,
     ) -> bool {
-        let mut matcher = MatchAgainstFreshVars::new(self.tcx(), param_env);
+        let mut matcher = MatchAgainstFreshVars::new(self.tcx());
         matcher.relate(previous, current).is_ok()
     }
 
@@ -2660,6 +2657,7 @@ impl<'tcx> SelectionContext<'_, 'tcx> {
         &mut self,
         obligation: &PolyTraitObligation<'tcx>,
         args: GenericArgsRef<'tcx>,
+        fn_host_effect: ty::Const<'tcx>,
     ) -> ty::PolyTraitRef<'tcx> {
         let closure_sig = args.as_closure().sig();
 
@@ -2680,6 +2678,7 @@ impl<'tcx> SelectionContext<'_, 'tcx> {
             self_ty,
             closure_sig,
             util::TupleArgumentsFlag::No,
+            fn_host_effect,
         )
         .map_bound(|(trait_ref, _)| trait_ref)
     }

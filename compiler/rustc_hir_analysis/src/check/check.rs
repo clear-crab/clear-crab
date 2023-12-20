@@ -1,5 +1,5 @@
 use crate::check::intrinsicck::InlineAsmCtxt;
-use crate::errors::{self, LinkageType};
+use crate::errors::LinkageType;
 
 use super::compare_impl_item::check_type_bounds;
 use super::compare_impl_item::{compare_impl_method, compare_impl_ty};
@@ -8,9 +8,8 @@ use rustc_attr as attr;
 use rustc_errors::{ErrorGuaranteed, MultiSpan};
 use rustc_hir as hir;
 use rustc_hir::def::{CtorKind, DefKind};
-use rustc_hir::def_id::{DefId, LocalDefId, LocalModDefId};
+use rustc_hir::def_id::LocalModDefId;
 use rustc_hir::Node;
-use rustc_infer::infer::outlives::env::OutlivesEnvironment;
 use rustc_infer::infer::{RegionVariableOrigin, TyCtxtInferExt};
 use rustc_infer::traits::{Obligation, TraitEngineExt as _};
 use rustc_lint_defs::builtin::REPR_TRANSPARENT_EXTERNAL_PRIVATE_FIELDS;
@@ -21,18 +20,15 @@ use rustc_middle::ty::layout::{LayoutError, MAX_SIMD_LANES};
 use rustc_middle::ty::util::{Discr, IntTypeExt};
 use rustc_middle::ty::GenericArgKind;
 use rustc_middle::ty::{
-    self, AdtDef, ParamEnv, RegionKind, Ty, TyCtxt, TypeSuperVisitable, TypeVisitable,
-    TypeVisitableExt,
+    AdtDef, ParamEnv, RegionKind, TypeSuperVisitable, TypeVisitable, TypeVisitableExt,
 };
 use rustc_session::lint::builtin::{UNINHABITED_STATIC, UNSUPPORTED_CALLING_CONVENTIONS};
 use rustc_span::symbol::sym;
-use rustc_span::{self, Span};
 use rustc_target::abi::FieldIdx;
-use rustc_target::spec::abi::Abi;
 use rustc_trait_selection::traits::error_reporting::on_unimplemented::OnUnimplementedDirective;
 use rustc_trait_selection::traits::error_reporting::TypeErrCtxtExt as _;
 use rustc_trait_selection::traits::outlives_bounds::InferCtxtExt as _;
-use rustc_trait_selection::traits::{self, ObligationCtxt, TraitEngine, TraitEngineExt as _};
+use rustc_trait_selection::traits::{self, TraitEngine, TraitEngineExt as _};
 use rustc_type_ir::fold::TypeFoldable;
 
 use std::ops::ControlFlow;
@@ -55,7 +51,7 @@ pub fn check_abi(tcx: TyCtxt<'_>, hir_id: hir::HirId, span: Span, abi: Abi) {
                 hir_id,
                 span,
                 "use of calling convention not supported on this target",
-                |lint| lint,
+                |_| {},
             );
         }
     }
@@ -194,7 +190,7 @@ fn check_static_inhabited(tcx: TyCtxt<'_>, def_id: LocalDefId) {
             "static of uninhabited type",
             |lint| {
                 lint
-                .note("uninhabited statics cannot be initialized, and any access would be an immediate error")
+                .note("uninhabited statics cannot be initialized, and any access would be an immediate error");
             },
         );
     }
@@ -483,7 +479,7 @@ fn check_item_type(tcx: TyCtxt<'_>, id: hir::ItemId) {
                 match assoc_item.kind {
                     ty::AssocKind::Fn => {
                         let abi = tcx.fn_sig(assoc_item.def_id).skip_binder().abi();
-                        fn_maybe_err(tcx, assoc_item.ident(tcx).span, abi);
+                        forbid_intrinsic_abi(tcx, assoc_item.ident(tcx).span, abi);
                     }
                     ty::AssocKind::Type if assoc_item.defaultness(tcx).has_value() => {
                         let trait_args = GenericArgs::identity_for_item(tcx, id.owner_id);
@@ -508,7 +504,7 @@ fn check_item_type(tcx: TyCtxt<'_>, id: hir::ItemId) {
             let origin = tcx.opaque_type_origin(id.owner_id.def_id);
             if let hir::OpaqueTyOrigin::FnReturn(fn_def_id)
             | hir::OpaqueTyOrigin::AsyncFn(fn_def_id) = origin
-                && let hir::Node::TraitItem(trait_item) = tcx.hir().get_by_def_id(fn_def_id)
+                && let hir::Node::TraitItem(trait_item) = tcx.hir_node_by_def_id(fn_def_id)
                 && let (_, hir::TraitFn::Required(..)) = trait_item.expect_fn()
             {
                 // Skip opaques from RPIT in traits with no default body.
@@ -1097,7 +1093,7 @@ pub(super) fn check_transparent<'tcx>(tcx: TyCtxt<'tcx>, adt: ty::AdtDef<'tcx>) 
                             "this {descr} contains `{field_ty}`, which {note}, \
                                 and makes it not a breaking change to become \
                                 non-zero-sized in the future."
-                        ))
+                        ));
                     },
                 )
             } else {
@@ -1177,7 +1173,7 @@ fn detect_discriminant_duplicate<'tcx>(tcx: TyCtxt<'tcx>, adt: ty::AdtDef<'tcx>)
             ty::VariantDiscr::Explicit(discr_def_id) => {
                 // In the case the discriminant is both a duplicate and overflowed, let the user know
                 if let hir::Node::AnonConst(expr) =
-                    tcx.hir().get_by_def_id(discr_def_id.expect_local())
+                    tcx.hir_node_by_def_id(discr_def_id.expect_local())
                     && let hir::ExprKind::Lit(lit) = &tcx.hir().body(expr.body).value.kind
                     && let rustc_ast::LitKind::Int(lit_value, _int_kind) = &lit.node
                     && *lit_value != dis.val

@@ -94,9 +94,6 @@ pub use array_into_iter::ARRAY_INTO_ITER;
 use rustc_hir::def_id::LocalModDefId;
 use rustc_middle::query::Providers;
 use rustc_middle::ty::TyCtxt;
-use rustc_session::lint::builtin::{
-    BARE_TRAIT_OBJECTS, ELIDED_LIFETIMES_IN_PATHS, EXPLICIT_OUTLIVES_REQUIREMENTS,
-};
 
 use array_into_iter::ArrayIntoIter;
 use async_fn_in_trait::AsyncFnInTrait;
@@ -511,6 +508,11 @@ fn register_builtins(store: &mut LintStore) {
         "invalid_alignment",
         "converted into hard error, see PR #104616 \
          <https://github.com/rust-lang/rust/pull/104616> for more information",
+    );
+    store.register_removed(
+        "implied_bounds_entailment",
+        "converted into hard error, see PR #117984 \
+        <https://github.com/rust-lang/rust/pull/117984> for more information",
     );
 }
 

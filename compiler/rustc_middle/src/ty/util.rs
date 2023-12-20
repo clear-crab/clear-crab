@@ -421,13 +421,10 @@ impl<'tcx> TyCtxt<'tcx> {
 
         let impl_args = match *self.type_of(impl_def_id).instantiate_identity().kind() {
             ty::Adt(def_, args) if def_ == def => args,
-            _ => bug!(),
+            _ => span_bug!(self.def_span(impl_def_id), "expected ADT for self type of `Drop` impl"),
         };
 
-        let item_args = match *self.type_of(def.did()).instantiate_identity().kind() {
-            ty::Adt(def_, args) if def_ == def => args,
-            _ => bug!(),
-        };
+        let item_args = ty::GenericArgs::identity_for_item(self, def.did());
 
         let result = iter::zip(item_args, impl_args)
             .filter(|&(_, k)| {
@@ -782,7 +779,8 @@ impl<'tcx> TyCtxt<'tcx> {
             || self.extern_crate(key.as_def_id()).is_some_and(|e| e.is_direct())
     }
 
-    pub fn expected_const_effect_param_for_body(self, def_id: LocalDefId) -> ty::Const<'tcx> {
+    pub fn expected_host_effect_param_for_body(self, def_id: impl Into<DefId>) -> ty::Const<'tcx> {
+        let def_id = def_id.into();
         // FIXME(effects): This is suspicious and should probably not be done,
         // especially now that we enforce host effects and then properly handle
         // effect vars during fallback.
@@ -817,7 +815,7 @@ impl<'tcx> TyCtxt<'tcx> {
     }
 
     /// Constructs generic args for an item, optionally appending a const effect param type
-    pub fn with_opt_const_effect_param(
+    pub fn with_opt_host_effect_param(
         self,
         caller_def_id: LocalDefId,
         callee_def_id: DefId,
@@ -826,9 +824,10 @@ impl<'tcx> TyCtxt<'tcx> {
         let generics = self.generics_of(callee_def_id);
         assert_eq!(generics.parent, None);
 
-        let opt_const_param = generics.host_effect_index.is_some().then(|| {
-            ty::GenericArg::from(self.expected_const_effect_param_for_body(caller_def_id))
-        });
+        let opt_const_param = generics
+            .host_effect_index
+            .is_some()
+            .then(|| ty::GenericArg::from(self.expected_host_effect_param_for_body(caller_def_id)));
 
         self.mk_args_from_iter(args.into_iter().map(|arg| arg.into()).chain(opt_const_param))
     }

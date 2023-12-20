@@ -55,7 +55,6 @@ use crate::deref_separator::deref_finder;
 use crate::errors;
 use crate::pass_manager as pm;
 use crate::simplify;
-use crate::MirPass;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_errors::pluralize;
 use rustc_hir as hir;
@@ -63,7 +62,6 @@ use rustc_hir::lang_items::LangItem;
 use rustc_hir::CoroutineKind;
 use rustc_index::bit_set::{BitMatrix, BitSet, GrowableBitSet};
 use rustc_index::{Idx, IndexVec};
-use rustc_middle::mir::dump_mir;
 use rustc_middle::mir::visit::{MutVisitor, PlaceContext, Visitor};
 use rustc_middle::mir::*;
 use rustc_middle::ty::CoroutineArgs;
@@ -73,7 +71,7 @@ use rustc_mir_dataflow::impls::{
     MaybeBorrowedLocals, MaybeLiveLocals, MaybeRequiresStorage, MaybeStorageLive,
 };
 use rustc_mir_dataflow::storage::always_storage_live_locals;
-use rustc_mir_dataflow::{self, Analysis};
+use rustc_mir_dataflow::Analysis;
 use rustc_span::def_id::{DefId, LocalDefId};
 use rustc_span::symbol::sym;
 use rustc_span::Span;
@@ -529,12 +527,26 @@ impl<'tcx> MutVisitor<'tcx> for TransformVisitor<'tcx> {
                         resume_arg
                     };
 
+                let storage_liveness: GrowableBitSet<Local> =
+                    self.storage_liveness[block].clone().unwrap().into();
+
+                for i in 0..self.always_live_locals.domain_size() {
+                    let l = Local::new(i);
+                    let needs_storage_dead = storage_liveness.contains(l)
+                        && !self.remap.contains_key(&l)
+                        && !self.always_live_locals.contains(l);
+                    if needs_storage_dead {
+                        data.statements
+                            .push(Statement { source_info, kind: StatementKind::StorageDead(l) });
+                    }
+                }
+
                 self.suspension_points.push(SuspensionPoint {
                     state,
                     resume,
                     resume_arg,
                     drop,
-                    storage_liveness: self.storage_liveness[block].clone().unwrap().into(),
+                    storage_liveness,
                 });
 
                 VariantIdx::new(state)
@@ -1498,13 +1510,6 @@ fn create_cases<'tcx>(
 
                 // Create StorageLive instructions for locals with live storage
                 for i in 0..(body.local_decls.len()) {
-                    if i == 2 {
-                        // The resume argument is live on function entry. Don't insert a
-                        // `StorageLive`, or the following `Assign` will read from uninitialized
-                        // memory.
-                        continue;
-                    }
-
                     let l = Local::new(i);
                     let needs_storage_live = point.storage_liveness.contains(l)
                         && !transform.remap.contains_key(&l)

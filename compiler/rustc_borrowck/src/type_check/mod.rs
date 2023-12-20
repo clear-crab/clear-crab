@@ -24,7 +24,6 @@ use rustc_infer::infer::{
 };
 use rustc_middle::mir::tcx::PlaceTy;
 use rustc_middle::mir::visit::{NonMutatingUseContext, PlaceContext, Visitor};
-use rustc_middle::mir::AssertKind;
 use rustc_middle::mir::*;
 use rustc_middle::traits::query::NoSolution;
 use rustc_middle::traits::ObligationCause;
@@ -269,7 +268,7 @@ fn mirbug(tcx: TyCtxt<'_>, span: Span, msg: String) {
     // We sometimes see MIR failures (notably predicate failures) due to
     // the fact that we check rvalue sized predicates here. So use `span_delayed_bug`
     // to avoid reporting bugs in those cases.
-    tcx.sess.diagnostic().span_delayed_bug(span, msg);
+    tcx.sess.dcx().span_delayed_bug(span, msg);
 }
 
 enum FieldAccessError {
@@ -1004,16 +1003,16 @@ impl<'a, 'tcx> TypeChecker<'a, 'tcx> {
             reported_errors: Default::default(),
         };
 
-        // FIXME(-Ztrait-solver=next): A bit dubious that we're only registering
+        // FIXME(-Znext-solver): A bit dubious that we're only registering
         // predefined opaques in the typeck root.
         if infcx.next_trait_solver() && !infcx.tcx.is_typeck_child(body.source.def_id()) {
-            checker.register_predefined_opaques_in_new_solver();
+            checker.register_predefined_opaques_for_next_solver();
         }
 
         checker
     }
 
-    pub(super) fn register_predefined_opaques_in_new_solver(&mut self) {
+    pub(super) fn register_predefined_opaques_for_next_solver(&mut self) {
         // OK to use the identity arguments for each opaque type key, since
         // we remap opaques from HIR typeck back to their definition params.
         let opaques: Vec<_> = self

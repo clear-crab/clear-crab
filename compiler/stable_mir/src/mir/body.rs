@@ -22,6 +22,14 @@ pub struct Body {
 
     /// Debug information pertaining to user variables, including captures.
     pub var_debug_info: Vec<VarDebugInfo>,
+
+    /// Mark an argument (which must be a tuple) as getting passed as its individual components.
+    ///
+    /// This is used for the "rust-call" ABI such as closures.
+    pub(super) spread_arg: Option<Local>,
+
+    /// The span that covers the entire function body.
+    pub span: Span,
 }
 
 pub type BasicBlockIdx = usize;
@@ -36,6 +44,8 @@ impl Body {
         locals: LocalDecls,
         arg_count: usize,
         var_debug_info: Vec<VarDebugInfo>,
+        spread_arg: Option<Local>,
+        span: Span,
     ) -> Self {
         // If locals doesn't contain enough entries, it can lead to panics in
         // `ret_local`, `arg_locals`, and `inner_locals`.
@@ -43,7 +53,7 @@ impl Body {
             locals.len() > arg_count,
             "A Body must contain at least a local for the return value and each of the function's arguments"
         );
-        Self { blocks, locals, arg_count, var_debug_info }
+        Self { blocks, locals, arg_count, var_debug_info, spread_arg, span }
     }
 
     /// Return local that holds this function's return value.
@@ -75,6 +85,11 @@ impl Body {
         self.locals.get(local)
     }
 
+    /// Get an iterator for all local declarations.
+    pub fn local_decls(&self) -> impl Iterator<Item = (Local, &LocalDecl)> {
+        self.locals.iter().enumerate()
+    }
+
     pub fn dump<W: io::Write>(&self, w: &mut W) -> io::Result<()> {
         writeln!(w, "{}", function_body(self))?;
         self.blocks
@@ -97,6 +112,10 @@ impl Body {
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(())
+    }
+
+    pub fn spread_arg(&self) -> Option<Local> {
+        self.spread_arg
     }
 }
 
@@ -228,7 +247,7 @@ pub struct InlineAsmOperand {
     pub raw_rpr: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum UnwindAction {
     Continue,
     Unreachable,
@@ -248,7 +267,58 @@ pub enum AssertMessage {
     MisalignedPointerDereference { required: Operand, found: Operand },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+impl AssertMessage {
+    pub fn description(&self) -> Result<&'static str, Error> {
+        match self {
+            AssertMessage::Overflow(BinOp::Add, _, _) => Ok("attempt to add with overflow"),
+            AssertMessage::Overflow(BinOp::Sub, _, _) => Ok("attempt to subtract with overflow"),
+            AssertMessage::Overflow(BinOp::Mul, _, _) => Ok("attempt to multiply with overflow"),
+            AssertMessage::Overflow(BinOp::Div, _, _) => Ok("attempt to divide with overflow"),
+            AssertMessage::Overflow(BinOp::Rem, _, _) => {
+                Ok("attempt to calculate the remainder with overflow")
+            }
+            AssertMessage::OverflowNeg(_) => Ok("attempt to negate with overflow"),
+            AssertMessage::Overflow(BinOp::Shr, _, _) => Ok("attempt to shift right with overflow"),
+            AssertMessage::Overflow(BinOp::Shl, _, _) => Ok("attempt to shift left with overflow"),
+            AssertMessage::Overflow(op, _, _) => Err(error!("`{:?}` cannot overflow", op)),
+            AssertMessage::DivisionByZero(_) => Ok("attempt to divide by zero"),
+            AssertMessage::RemainderByZero(_) => {
+                Ok("attempt to calculate the remainder with a divisor of zero")
+            }
+            AssertMessage::ResumedAfterReturn(CoroutineKind::Coroutine) => {
+                Ok("coroutine resumed after completion")
+            }
+            AssertMessage::ResumedAfterReturn(CoroutineKind::Async(_)) => {
+                Ok("`async fn` resumed after completion")
+            }
+            AssertMessage::ResumedAfterReturn(CoroutineKind::Gen(_)) => {
+                Ok("`async gen fn` resumed after completion")
+            }
+            AssertMessage::ResumedAfterReturn(CoroutineKind::AsyncGen(_)) => {
+                Ok("`gen fn` should just keep returning `AssertMessage::None` after completion")
+            }
+            AssertMessage::ResumedAfterPanic(CoroutineKind::Coroutine) => {
+                Ok("coroutine resumed after panicking")
+            }
+            AssertMessage::ResumedAfterPanic(CoroutineKind::Async(_)) => {
+                Ok("`async fn` resumed after panicking")
+            }
+            AssertMessage::ResumedAfterPanic(CoroutineKind::Gen(_)) => {
+                Ok("`async gen fn` resumed after panicking")
+            }
+            AssertMessage::ResumedAfterPanic(CoroutineKind::AsyncGen(_)) => {
+                Ok("`gen fn` should just keep returning `AssertMessage::None` after panicking")
+            }
+
+            AssertMessage::BoundsCheck { .. } => Ok("index out of bounds"),
+            AssertMessage::MisalignedPointerDereference { .. } => {
+                Ok("misaligned pointer dereference")
+            }
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum BinOp {
     Add,
     AddUnchecked,
@@ -278,8 +348,6 @@ impl BinOp {
     /// Return the type of this operation for the given input Ty.
     /// This function does not perform type checking, and it currently doesn't handle SIMD.
     pub fn ty(&self, lhs_ty: Ty, rhs_ty: Ty) -> Ty {
-        assert!(lhs_ty.kind().is_primitive());
-        assert!(rhs_ty.kind().is_primitive());
         match self {
             BinOp::Add
             | BinOp::AddUnchecked
@@ -293,20 +361,30 @@ impl BinOp {
             | BinOp::BitAnd
             | BinOp::BitOr => {
                 assert_eq!(lhs_ty, rhs_ty);
+                assert!(lhs_ty.kind().is_primitive());
                 lhs_ty
             }
-            BinOp::Shl | BinOp::ShlUnchecked | BinOp::Shr | BinOp::ShrUnchecked | BinOp::Offset => {
+            BinOp::Shl | BinOp::ShlUnchecked | BinOp::Shr | BinOp::ShrUnchecked => {
+                assert!(lhs_ty.kind().is_primitive());
+                assert!(rhs_ty.kind().is_primitive());
+                lhs_ty
+            }
+            BinOp::Offset => {
+                assert!(lhs_ty.kind().is_raw_ptr());
+                assert!(rhs_ty.kind().is_integral());
                 lhs_ty
             }
             BinOp::Eq | BinOp::Lt | BinOp::Le | BinOp::Ne | BinOp::Ge | BinOp::Gt => {
                 assert_eq!(lhs_ty, rhs_ty);
+                let lhs_kind = lhs_ty.kind();
+                assert!(lhs_kind.is_primitive() || lhs_kind.is_raw_ptr() || lhs_kind.is_fn_ptr());
                 Ty::bool_ty()
             }
         }
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum UnOp {
     Not,
     Neg,
@@ -317,9 +395,10 @@ pub enum CoroutineKind {
     Async(CoroutineSource),
     Coroutine,
     Gen(CoroutineSource),
+    AsyncGen(CoroutineSource),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum CoroutineSource {
     Block,
     Closure,
@@ -343,7 +422,7 @@ pub enum FakeReadCause {
 }
 
 /// Describes what kind of retag is to be performed
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum RetagKind {
     FnEntry,
     TwoPhase,
@@ -351,7 +430,7 @@ pub enum RetagKind {
     Default,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum Variance {
     Covariant,
     Invariant,
@@ -862,7 +941,7 @@ pub enum Safety {
     Normal,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum PointerCoercion {
     /// Go from a fn-item type to a fn-pointer type.
     ReifyFnPointer,
@@ -889,7 +968,7 @@ pub enum PointerCoercion {
     Unsize,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum CastKind {
     PointerExposeAddress,
     PointerFromExposedAddress,

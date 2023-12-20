@@ -10,13 +10,13 @@ use crate::errors::{
     ConstGenericWithoutBracesSugg, DocCommentDoesNotDocumentAnything, DocCommentOnParamType,
     DoubleColonInBound, ExpectedIdentifier, ExpectedSemi, ExpectedSemiSugg,
     GenericParamsWithoutAngleBrackets, GenericParamsWithoutAngleBracketsSugg,
-    HelpIdentifierStartsWithNumber, InInTypo, IncorrectAwait, IncorrectSemicolon,
-    IncorrectUseOfAwait, PatternMethodParamWithoutBody, QuestionMarkInType, QuestionMarkInTypeSugg,
-    SelfParamNotFirst, StructLiteralBodyWithoutPath, StructLiteralBodyWithoutPathSugg,
-    StructLiteralNeedingParens, StructLiteralNeedingParensSugg, SuggAddMissingLetStmt,
-    SuggEscapeIdentifier, SuggRemoveComma, TernaryOperator, UnexpectedConstInGenericParam,
-    UnexpectedConstParamDeclaration, UnexpectedConstParamDeclarationSugg, UnmatchedAngleBrackets,
-    UseEqInstead, WrapType,
+    HelpIdentifierStartsWithNumber, HelpUseLatestEdition, InInTypo, IncorrectAwait,
+    IncorrectSemicolon, IncorrectUseOfAwait, PatternMethodParamWithoutBody, QuestionMarkInType,
+    QuestionMarkInTypeSugg, SelfParamNotFirst, StructLiteralBodyWithoutPath,
+    StructLiteralBodyWithoutPathSugg, StructLiteralNeedingParens, StructLiteralNeedingParensSugg,
+    SuggAddMissingLetStmt, SuggEscapeIdentifier, SuggRemoveComma, TernaryOperator,
+    UnexpectedConstInGenericParam, UnexpectedConstParamDeclaration,
+    UnexpectedConstParamDeclarationSugg, UnmatchedAngleBrackets, UseEqInstead, WrapType,
 };
 use crate::fluent_generated as fluent;
 use crate::parser;
@@ -34,8 +34,8 @@ use rustc_ast::{
 use rustc_ast_pretty::pprust;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::{
-    pluralize, AddToDiagnostic, Applicability, Diagnostic, DiagnosticBuilder, DiagnosticMessage,
-    ErrorGuaranteed, FatalError, Handler, IntoDiagnostic, MultiSpan, PResult,
+    pluralize, AddToDiagnostic, Applicability, DiagCtxt, Diagnostic, DiagnosticBuilder,
+    DiagnosticMessage, ErrorGuaranteed, FatalError, IntoDiagnostic, MultiSpan, PResult,
 };
 use rustc_session::errors::ExprParenthesesNeeded;
 use rustc_span::source_map::Spanned;
@@ -246,15 +246,15 @@ impl<'a> Parser<'a> {
         sp: S,
         m: impl Into<DiagnosticMessage>,
     ) -> DiagnosticBuilder<'a, ErrorGuaranteed> {
-        self.diagnostic().struct_span_err(sp, m)
+        self.dcx().struct_span_err(sp, m)
     }
 
-    pub fn span_bug<S: Into<MultiSpan>>(&self, sp: S, m: impl Into<String>) -> ! {
-        self.diagnostic().span_bug(sp, m)
+    pub fn span_bug<S: Into<MultiSpan>>(&self, sp: S, msg: impl Into<DiagnosticMessage>) -> ! {
+        self.dcx().span_bug(sp, msg)
     }
 
-    pub(super) fn diagnostic(&self) -> &'a Handler {
-        &self.sess.span_diagnostic
+    pub(super) fn dcx(&self) -> &'a DiagCtxt {
+        &self.sess.dcx
     }
 
     /// Replace `self` with `snapshot.parser`.
@@ -284,7 +284,7 @@ impl<'a> Parser<'a> {
                 span: self.prev_token.span,
                 missing_comma: None,
             }
-            .into_diagnostic(self.diagnostic()));
+            .into_diagnostic(self.dcx()));
         }
 
         let valid_follow = &[
@@ -347,7 +347,7 @@ impl<'a> Parser<'a> {
             suggest_remove_comma,
             help_cannot_start_number,
         };
-        let mut err = err.into_diagnostic(self.diagnostic());
+        let mut err = err.into_diagnostic(self.dcx());
 
         // if the token we have is a `<`
         // it *might* be a misplaced generic
@@ -638,6 +638,28 @@ impl<'a> Parser<'a> {
                     Applicability::MachineApplicable,
                 );
             }
+        }
+
+        // Try to detect an intended c-string literal while using a pre-2021 edition. The heuristic
+        // here is to identify a cooked, uninterpolated `c` id immediately followed by a string, or
+        // a cooked, uninterpolated `cr` id immediately followed by a string or a `#`, in an edition
+        // where c-string literals are not allowed. There is the very slight possibility of a false
+        // positive for a `cr#` that wasn't intended to start a c-string literal, but identifying
+        // that in the parser requires unbounded lookahead, so we only add a hint to the existing
+        // error rather than replacing it entirely.
+        if ((self.prev_token.kind == TokenKind::Ident(sym::c, false)
+            && matches!(&self.token.kind, TokenKind::Literal(token::Lit { kind: token::Str, .. })))
+            || (self.prev_token.kind == TokenKind::Ident(sym::cr, false)
+                && matches!(
+                    &self.token.kind,
+                    TokenKind::Literal(token::Lit { kind: token::Str, .. }) | token::Pound
+                )))
+            && self.prev_token.span.hi() == self.token.span.lo()
+            && !self.token.span.at_least_rust_2021()
+        {
+            err.note("you may be trying to write a c-string literal");
+            err.note("c-string literals require Rust 2021 or later");
+            HelpUseLatestEdition::new().add_to_diagnostic(&mut err);
         }
 
         // `pub` may be used for an item or `pub(crate)`
@@ -1410,7 +1432,7 @@ impl<'a> Parser<'a> {
                                 // Not entirely sure now, but we bubble the error up with the
                                 // suggestion.
                                 self.restore_snapshot(snapshot);
-                                Err(err.into_diagnostic(self.diagnostic()))
+                                Err(err.into_diagnostic(self.dcx()))
                             }
                         }
                     } else if token::OpenDelim(Delimiter::Parenthesis) == self.token.kind {
@@ -1425,7 +1447,7 @@ impl<'a> Parser<'a> {
                         }
                         // Consume the fn call arguments.
                         match self.consume_fn_args() {
-                            Err(()) => Err(err.into_diagnostic(self.diagnostic())),
+                            Err(()) => Err(err.into_diagnostic(self.dcx())),
                             Ok(()) => {
                                 self.sess.emit_err(err);
                                 // FIXME: actually check that the two expressions in the binop are
@@ -1451,7 +1473,7 @@ impl<'a> Parser<'a> {
                             mk_err_expr(self, inner_op.span.to(self.prev_token.span))
                         } else {
                             // These cases cause too many knock-down errors, bail out (#61329).
-                            Err(err.into_diagnostic(self.diagnostic()))
+                            Err(err.into_diagnostic(self.dcx()))
                         }
                     };
                 }
@@ -2539,7 +2561,7 @@ impl<'a> Parser<'a> {
             Ok(Some(GenericArg::Const(self.parse_const_arg()?)))
         } else {
             let after_kw_const = self.token.span;
-            self.recover_const_arg(after_kw_const, err.into_diagnostic(self.diagnostic())).map(Some)
+            self.recover_const_arg(after_kw_const, err.into_diagnostic(self.dcx())).map(Some)
         }
     }
 
@@ -2897,7 +2919,7 @@ impl<'a> Parser<'a> {
                         span: path.span.shrink_to_hi(),
                         between: between_span,
                     }
-                    .into_diagnostic(self.diagnostic()));
+                    .into_diagnostic(self.dcx()));
                 }
             }
         }

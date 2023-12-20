@@ -20,7 +20,6 @@ use rustc_span::DUMMY_SP;
 use rustc_target::abi::{Abi, FieldIdx, Size, VariantIdx, FIRST_VARIANT};
 
 use crate::const_prop::throw_machine_stop_str;
-use crate::MirPass;
 
 // These constants are somewhat random guesses and have not been optimized.
 // If `tcx.sess.mir_opt_level() >= 4`, we ignore the limits (this can become very expensive).
@@ -497,7 +496,7 @@ impl<'a, 'tcx> ConstAnalysis<'a, 'tcx> {
             FlatSet::Elem(scalar) => {
                 let ty = op.ty(self.local_decls, self.tcx);
                 self.tcx.layout_of(self.param_env.and(ty)).map_or(FlatSet::Top, |layout| {
-                    FlatSet::Elem(ImmTy::from_scalar(scalar.into(), layout))
+                    FlatSet::Elem(ImmTy::from_scalar(scalar, layout))
                 })
             }
             FlatSet::Bottom => FlatSet::Bottom,

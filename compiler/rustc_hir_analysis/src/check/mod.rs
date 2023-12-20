@@ -77,6 +77,7 @@ use std::num::NonZeroU32;
 
 use check::check_mod_item_types;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use rustc_errors::ErrorGuaranteed;
 use rustc_errors::{pluralize, struct_span_err, Diagnostic, DiagnosticBuilder};
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_hir::intravisit::Visitor;
@@ -130,7 +131,7 @@ fn get_owner_return_paths(
 ) -> Option<(LocalDefId, ReturnsVisitor<'_>)> {
     let hir_id = tcx.local_def_id_to_hir_id(def_id);
     let parent_id = tcx.hir().get_parent_item(hir_id).def_id;
-    tcx.hir().find_by_def_id(parent_id).and_then(|node| node.body_id()).map(|body_id| {
+    tcx.opt_hir_node_by_def_id(parent_id).and_then(|node| node.body_id()).map(|body_id| {
         let body = tcx.hir().body(body_id);
         let mut visitor = ReturnsVisitor::default();
         visitor.visit_body(body);
@@ -141,7 +142,7 @@ fn get_owner_return_paths(
 /// Forbid defining intrinsics in Rust code,
 /// as they must always be defined by the compiler.
 // FIXME: Move this to a more appropriate place.
-pub fn fn_maybe_err(tcx: TyCtxt<'_>, sp: Span, abi: Abi) {
+pub fn forbid_intrinsic_abi(tcx: TyCtxt<'_>, sp: Span, abi: Abi) {
     if let Abi::RustIntrinsic | Abi::PlatformIntrinsic = abi {
         tcx.sess.span_err(sp, "intrinsic must be in `extern \"rust-intrinsic\" { ... }` block");
     }
@@ -570,7 +571,26 @@ pub fn check_function_signature<'tcx>(
     mut cause: ObligationCause<'tcx>,
     fn_id: DefId,
     expected_sig: ty::PolyFnSig<'tcx>,
-) {
+) -> Result<(), ErrorGuaranteed> {
+    fn extract_span_for_error_reporting<'tcx>(
+        tcx: TyCtxt<'tcx>,
+        err: TypeError<'_>,
+        cause: &ObligationCause<'tcx>,
+        fn_id: LocalDefId,
+    ) -> rustc_span::Span {
+        let mut args = {
+            let node = tcx.hir().expect_owner(fn_id);
+            let decl = node.fn_decl().unwrap_or_else(|| bug!("expected fn decl, found {:?}", node));
+            decl.inputs.iter().map(|t| t.span).chain(std::iter::once(decl.output.span()))
+        };
+
+        match err {
+            TypeError::ArgumentMutability(i)
+            | TypeError::ArgumentSorts(ExpectedFound { .. }, i) => args.nth(i).unwrap(),
+            _ => cause.span(),
+        }
+    }
+
     let local_id = fn_id.as_local().unwrap_or(CRATE_DEF_ID);
 
     let param_env = ty::ParamEnv::empty();
@@ -587,8 +607,7 @@ pub fn check_function_signature<'tcx>(
         Ok(()) => {
             let errors = ocx.select_all_or_error();
             if !errors.is_empty() {
-                infcx.err_ctxt().report_fulfillment_errors(errors);
-                return;
+                return Err(infcx.err_ctxt().report_fulfillment_errors(errors));
             }
         }
         Err(err) => {
@@ -610,30 +629,14 @@ pub fn check_function_signature<'tcx>(
                 false,
                 false,
             );
-            diag.emit();
-            return;
+            return Err(diag.emit());
         }
     }
 
     let outlives_env = OutlivesEnvironment::new(param_env);
-    let _ = ocx.resolve_regions_and_report_errors(local_id, &outlives_env);
-
-    fn extract_span_for_error_reporting<'tcx>(
-        tcx: TyCtxt<'tcx>,
-        err: TypeError<'_>,
-        cause: &ObligationCause<'tcx>,
-        fn_id: LocalDefId,
-    ) -> rustc_span::Span {
-        let mut args = {
-            let node = tcx.hir().expect_owner(fn_id);
-            let decl = node.fn_decl().unwrap_or_else(|| bug!("expected fn decl, found {:?}", node));
-            decl.inputs.iter().map(|t| t.span).chain(std::iter::once(decl.output.span()))
-        };
-
-        match err {
-            TypeError::ArgumentMutability(i)
-            | TypeError::ArgumentSorts(ExpectedFound { .. }, i) => args.nth(i).unwrap(),
-            _ => cause.span(),
-        }
+    if let Err(e) = ocx.resolve_regions_and_report_errors(local_id, &outlives_env) {
+        return Err(e);
     }
+
+    Ok(())
 }

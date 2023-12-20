@@ -870,7 +870,7 @@ impl Step for Rustc {
         // is already on by default in MSVC optimized builds, which is interpreted as --icf=all:
         // https://github.com/llvm/llvm-project/blob/3329cec2f79185bafd678f310fafadba2a8c76d2/lld/COFF/Driver.cpp#L1746
         // https://github.com/rust-lang/rust/blob/f22819bcce4abaff7d1246a56eec493418f9f4ee/compiler/rustc_codegen_ssa/src/back/linker.rs#L827
-        if builder.config.use_lld && !compiler.host.contains("msvc") {
+        if builder.config.lld_mode.is_used() && !compiler.host.is_msvc() {
             cargo.rustflag("-Clink-args=-Wl,--icf=all");
         }
 
@@ -1089,7 +1089,7 @@ fn rustc_llvm_env(builder: &Builder<'_>, cargo: &mut Cargo, target: TargetSelect
     // found. This is to avoid the linker errors about undefined references to
     // `__llvm_profile_instrument_memop` when linking `rustc_driver`.
     let mut llvm_linker_flags = String::new();
-    if builder.config.llvm_profile_generate && target.contains("msvc") {
+    if builder.config.llvm_profile_generate && target.is_msvc() {
         if let Some(ref clang_cl_path) = builder.config.llvm_clang_cl {
             // Add clang's runtime library directory to the search path
             let clang_rt_dir = get_clang_cl_resource_dir(clang_cl_path);
@@ -1114,7 +1114,7 @@ fn rustc_llvm_env(builder: &Builder<'_>, cargo: &mut Cargo, target: TargetSelect
     // not for MSVC or macOS
     if builder.config.llvm_static_stdcpp
         && !target.contains("freebsd")
-        && !target.contains("msvc")
+        && !target.is_msvc()
         && !target.contains("apple")
         && !target.contains("solaris")
     {
@@ -1722,7 +1722,7 @@ impl Step for Assemble {
             let dst_exe = exe("rust-lld", target_compiler.host);
             builder.copy(&lld_install.join("bin").join(&src_exe), &libdir_bin.join(&dst_exe));
             let self_contained_lld_dir = libdir_bin.join("gcc-ld");
-            t!(fs::create_dir(&self_contained_lld_dir));
+            t!(fs::create_dir_all(&self_contained_lld_dir));
             let lld_wrapper_exe = builder.ensure(crate::core::build_steps::tool::LldWrapper {
                 compiler: build_compiler,
                 target: target_compiler.host,
@@ -1809,10 +1809,6 @@ pub fn run_cargo(
     is_check: bool,
     rlib_only_metadata: bool,
 ) -> Vec<PathBuf> {
-    if builder.config.dry_run() {
-        return Vec::new();
-    }
-
     // `target_root_dir` looks like $dir/$target/release
     let target_root_dir = stamp.parent().unwrap();
     // `target_deps_dir` looks like $dir/$target/release/deps
@@ -1919,6 +1915,10 @@ pub fn run_cargo(
         crate::exit!(1);
     }
 
+    if builder.config.dry_run() {
+        return Vec::new();
+    }
+
     // Ok now we need to actually find all the files listed in `toplevel`. We've
     // got a list of prefix/extensions and we basically just need to find the
     // most recent file in the `deps` folder corresponding to each one.
@@ -1974,9 +1974,6 @@ pub fn stream_cargo(
     cb: &mut dyn FnMut(CargoMessage<'_>),
 ) -> bool {
     let mut cargo = Command::from(cargo);
-    if builder.config.dry_run() {
-        return true;
-    }
     // Instruct Cargo to give us json messages on stdout, critically leaving
     // stderr as piped so we can get those pretty colors.
     let mut message_format = if builder.config.json_output {
@@ -1995,6 +1992,11 @@ pub fn stream_cargo(
     }
 
     builder.verbose(&format!("running: {cargo:?}"));
+
+    if builder.config.dry_run() {
+        return true;
+    }
+
     let mut child = match cargo.spawn() {
         Ok(child) => child,
         Err(e) => panic!("failed to execute command: {cargo:?}\nERROR: {e}"),

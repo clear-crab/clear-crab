@@ -1,3 +1,5 @@
+use crate::solve::GoalSource;
+
 use super::EvalCtxt;
 use rustc_middle::traits::solve::{Certainty, Goal, QueryResult};
 use rustc_middle::ty::{self, ProjectionPredicate};
@@ -8,16 +10,29 @@ impl<'tcx> EvalCtxt<'_, 'tcx> {
         &mut self,
         goal: Goal<'tcx, ProjectionPredicate<'tcx>>,
     ) -> QueryResult<'tcx> {
-        match goal.predicate.term.unpack() {
-            ty::TermKind::Ty(term) => {
-                let alias = goal.predicate.projection_ty.to_ty(self.tcx());
-                self.eq(goal.param_env, alias, term)?;
-                self.evaluate_added_goals_and_make_canonical_response(Certainty::Yes)
-            }
-            // FIXME(associated_const_equality): actually do something here.
-            ty::TermKind::Const(_) => {
-                self.evaluate_added_goals_and_make_canonical_response(Certainty::Yes)
-            }
-        }
+        let tcx = self.tcx();
+        let projection_term = match goal.predicate.term.unpack() {
+            ty::TermKind::Ty(_) => goal.predicate.projection_ty.to_ty(tcx).into(),
+            ty::TermKind::Const(_) => ty::Const::new_unevaluated(
+                tcx,
+                ty::UnevaluatedConst::new(
+                    goal.predicate.projection_ty.def_id,
+                    goal.predicate.projection_ty.args,
+                ),
+                tcx.type_of(goal.predicate.projection_ty.def_id)
+                    .instantiate(tcx, goal.predicate.projection_ty.args),
+            )
+            .into(),
+        };
+        let goal = goal.with(
+            tcx,
+            ty::PredicateKind::AliasRelate(
+                projection_term,
+                goal.predicate.term,
+                ty::AliasRelationDirection::Equate,
+            ),
+        );
+        self.add_goal(GoalSource::Misc, goal);
+        self.evaluate_added_goals_and_make_canonical_response(Certainty::Yes)
     }
 }

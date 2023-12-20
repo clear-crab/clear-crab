@@ -33,7 +33,7 @@ use rustc_middle::ty::visit::TypeVisitableExt;
 use rustc_middle::ty::{self, IsSuggestable, Ty, TyCtxt};
 use rustc_session::Session;
 use rustc_span::symbol::{kw, Ident};
-use rustc_span::{self, sym, BytePos, Span};
+use rustc_span::{sym, BytePos, Span};
 use rustc_trait_selection::traits::{self, ObligationCauseCode, SelectionContext};
 
 use std::iter;
@@ -230,11 +230,6 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let minimum_input_count = expected_input_tys.len();
         let provided_arg_count = provided_args.len();
 
-        let is_const_eval_select = matches!(fn_def_id, Some(def_id) if
-            self.tcx.def_kind(def_id) == hir::def::DefKind::Fn
-            && self.tcx.is_intrinsic(def_id)
-            && self.tcx.item_name(def_id) == sym::const_eval_select);
-
         // We introduce a helper function to demand that a given argument satisfy a given input
         // This is more complicated than just checking type equality, as arguments could be coerced
         // This version writes those types back so further type checking uses the narrowed types
@@ -267,30 +262,6 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
             if coerce_error.is_some() {
                 return Compatibility::Incompatible(coerce_error);
-            }
-
-            // Check that second and third argument of `const_eval_select` must be `FnDef`, and additionally that
-            // the second argument must be `const fn`. The first argument must be a tuple, but this is already expressed
-            // in the function signature (`F: FnOnce<ARG>`), so I did not bother to add another check here.
-            //
-            // This check is here because there is currently no way to express a trait bound for `FnDef` types only.
-            if is_const_eval_select && (1..=2).contains(&idx) {
-                if let ty::FnDef(def_id, args) = *checked_ty.kind() {
-                    if idx == 1 {
-                        if !self.tcx.is_const_fn_raw(def_id) {
-                            self.tcx.sess.emit_err(errors::ConstSelectMustBeConst {
-                                span: provided_arg.span,
-                            });
-                        } else {
-                            self.enforce_context_effects(provided_arg.span, def_id, args)
-                        }
-                    }
-                } else {
-                    self.tcx.sess.emit_err(errors::ConstSelectMustBeFn {
-                        span: provided_arg.span,
-                        ty: checked_ty,
-                    });
-                }
             }
 
             // 3. Check if the formal type is a supertype of the checked one
@@ -993,7 +964,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     }) {
                         match e {
                             Error::Missing(expected_idx) => missing_idxs.push(expected_idx),
-                            _ => unreachable!(),
+                            _ => unreachable!(
+                                "control flow ensures that we should always get an `Error::Missing`"
+                            ),
                         }
                     }
 
@@ -1734,7 +1707,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     }
 
     fn parent_item_span(&self, id: hir::HirId) -> Option<Span> {
-        let node = self.tcx.hir().get_by_def_id(self.tcx.hir().get_parent_item(id).def_id);
+        let node = self.tcx.hir_node_by_def_id(self.tcx.hir().get_parent_item(id).def_id);
         match node {
             Node::Item(&hir::Item { kind: hir::ItemKind::Fn(_, _, body_id), .. })
             | Node::ImplItem(&hir::ImplItem { kind: hir::ImplItemKind::Fn(_, body_id), .. }) => {
@@ -1750,7 +1723,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
     /// Given a function block's `HirId`, returns its `FnDecl` if it exists, or `None` otherwise.
     fn get_parent_fn_decl(&self, blk_id: hir::HirId) -> Option<(&'tcx hir::FnDecl<'tcx>, Ident)> {
-        let parent = self.tcx.hir().get_by_def_id(self.tcx.hir().get_parent_item(blk_id).def_id);
+        let parent = self.tcx.hir_node_by_def_id(self.tcx.hir().get_parent_item(blk_id).def_id);
         self.get_node_fn_decl(parent).map(|(_, fn_decl, ident, _)| (fn_decl, ident))
     }
 
@@ -1850,7 +1823,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     ) {
         for (span, code) in errors_causecode {
             let Some(mut diag) =
-                self.tcx.sess.diagnostic().steal_diagnostic(span, StashKey::MaybeForgetReturn)
+                self.tcx.sess.dcx().steal_diagnostic(span, StashKey::MaybeForgetReturn)
             else {
                 continue;
             };
@@ -2018,7 +1991,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     let new_def_id = self.probe(|_| {
                         let trait_ref = ty::TraitRef::new(
                             self.tcx,
-                            call_kind.to_def_id(self.tcx),
+                            self.tcx.fn_trait_kind_to_def_id(call_kind)?,
                             [
                                 callee_ty,
                                 self.next_ty_var(TypeVariableOrigin {
@@ -2084,7 +2057,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 let node = self
                     .tcx
                     .opt_local_def_id_to_hir_id(self.tcx.hir().get_parent_item(call_expr.hir_id))
-                    .and_then(|hir_id| self.tcx.hir().find(hir_id));
+                    .and_then(|hir_id| self.tcx.opt_hir_node(hir_id));
                 match node {
                     Some(hir::Node::Item(item)) => call_finder.visit_item(item),
                     Some(hir::Node::TraitItem(item)) => call_finder.visit_trait_item(item),

@@ -127,7 +127,7 @@ fn has_typeck_results(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
     }
 
     if let Some(def_id) = def_id.as_local() {
-        primary_body_of(tcx.hir().get_by_def_id(def_id)).is_some()
+        primary_body_of(tcx.hir_node_by_def_id(def_id)).is_some()
     } else {
         false
     }
@@ -166,7 +166,7 @@ fn typeck_with_fallback<'tcx>(
     }
 
     let id = tcx.local_def_id_to_hir_id(def_id);
-    let node = tcx.hir().get(id);
+    let node = tcx.hir_node(id);
     let span = tcx.hir().span(id);
 
     // Figure out what primary body this item has.
@@ -201,7 +201,7 @@ fn typeck_with_fallback<'tcx>(
                 span,
             }))
         } else if let Node::AnonConst(_) = node {
-            match tcx.hir().get(tcx.hir().parent_id(id)) {
+            match tcx.hir_node(tcx.hir().parent_id(id)) {
                 Node::Ty(&hir::Ty { kind: hir::TyKind::Typeof(ref anon_const), .. })
                     if anon_const.hir_id == id =>
                 {
@@ -282,8 +282,6 @@ fn typeck_with_fallback<'tcx>(
     }
 
     fcx.check_asms();
-
-    fcx.infcx.skip_region_resolution();
 
     let typeck_results = fcx.resolve_type_vars_in_body(body);
 
@@ -415,21 +413,21 @@ enum TupleArgumentsFlag {
 }
 
 fn fatally_break_rust(tcx: TyCtxt<'_>) {
-    let handler = tcx.sess.diagnostic();
-    handler.span_bug_no_panic(
+    let dcx = tcx.sess.dcx();
+    dcx.span_bug_no_panic(
         MultiSpan::new(),
         "It looks like you're trying to break rust; would you like some ICE?",
     );
-    handler.note("the compiler expectedly panicked. this is a feature.");
-    handler.note(
+    dcx.note("the compiler expectedly panicked. this is a feature.");
+    dcx.note(
         "we would appreciate a joke overview: \
          https://github.com/rust-lang/rust/issues/43162#issuecomment-320764675",
     );
-    handler.note(format!("rustc {} running on {}", tcx.sess.cfg_version, config::host_triple(),));
+    dcx.note(format!("rustc {} running on {}", tcx.sess.cfg_version, config::host_triple(),));
     if let Some((flags, excluded_cargo_defaults)) = rustc_session::utils::extra_compiler_flags() {
-        handler.note(format!("compiler flags: {}", flags.join(" ")));
+        dcx.note(format!("compiler flags: {}", flags.join(" ")));
         if excluded_cargo_defaults {
-            handler.note("some of the compiler flags provided by cargo are hidden");
+            dcx.note("some of the compiler flags provided by cargo are hidden");
         }
     }
 }

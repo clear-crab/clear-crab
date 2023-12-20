@@ -1,6 +1,6 @@
 //! See `CompletionItem` structure.
 
-use std::fmt;
+use std::{fmt, mem};
 
 use hir::Mutability;
 use ide_db::{
@@ -458,13 +458,11 @@ impl Builder {
         }
         if let [import_edit] = &*self.imports_to_add {
             // snippets can have multiple imports, but normal completions only have up to one
-            if let Some(original_path) = import_edit.original_path.as_ref() {
-                label_detail.replace(SmolStr::from(format!(
-                    "{} (use {})",
-                    label_detail.as_deref().unwrap_or_default(),
-                    original_path.display(db)
-                )));
-            }
+            label_detail.replace(SmolStr::from(format!(
+                "{} (use {})",
+                label_detail.as_deref().unwrap_or_default(),
+                import_edit.import_path.display(db)
+            )));
         } else if let Some(trait_name) = self.trait_name {
             label_detail.replace(SmolStr::from(format!(
                 "{} (as {trait_name})",
@@ -568,6 +566,13 @@ impl Builder {
     }
     pub(crate) fn set_relevance(&mut self, relevance: CompletionRelevance) -> &mut Builder {
         self.relevance = relevance;
+        self
+    }
+    pub(crate) fn with_relevance(
+        &mut self,
+        relevance: impl FnOnce(CompletionRelevance) -> CompletionRelevance,
+    ) -> &mut Builder {
+        self.relevance = relevance(mem::take(&mut self.relevance));
         self
     }
     pub(crate) fn trigger_call_info(&mut self) -> &mut Builder {

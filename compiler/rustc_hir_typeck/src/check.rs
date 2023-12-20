@@ -8,7 +8,7 @@ use rustc_hir as hir;
 use rustc_hir::def::DefKind;
 use rustc_hir::intravisit::Visitor;
 use rustc_hir::lang_items::LangItem;
-use rustc_hir_analysis::check::{check_function_signature, fn_maybe_err};
+use rustc_hir_analysis::check::{check_function_signature, forbid_intrinsic_abi};
 use rustc_infer::infer::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
 use rustc_infer::infer::RegionVariableOrigin;
 use rustc_middle::ty::{self, Binder, Ty, TyCtxt};
@@ -53,7 +53,7 @@ pub(super) fn check_fn<'a, 'tcx>(
 
     let span = body.value.span;
 
-    fn_maybe_err(tcx, span, fn_sig.abi);
+    forbid_intrinsic_abi(tcx, span, fn_sig.abi);
 
     if let Some(kind) = body.coroutine_kind
         && can_be_coroutine.is_some()
@@ -261,7 +261,7 @@ fn check_panic_info_fn(tcx: TyCtxt<'_>, fn_id: LocalDefId, fn_sig: ty::FnSig<'_>
         bounds,
     );
 
-    check_function_signature(
+    let _ = check_function_signature(
         tcx,
         ObligationCause::new(
             tcx.def_span(fn_id),
@@ -300,7 +300,7 @@ fn check_lang_start_fn<'tcx>(tcx: TyCtxt<'tcx>, fn_sig: ty::FnSig<'tcx>, def_id:
         Abi::Rust,
     ));
 
-    check_function_signature(
+    let _ = check_function_signature(
         tcx,
         ObligationCause::new(
             tcx.def_span(def_id),

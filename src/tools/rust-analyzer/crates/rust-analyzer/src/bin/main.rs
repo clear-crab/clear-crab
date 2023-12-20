@@ -2,7 +2,7 @@
 //!
 //! Based on cli flags, either spawns an LSP server, or runs a batch analysis
 
-#![warn(rust_2018_idioms, unused_lifetimes, semicolon_in_expressions_from_macros)]
+#![warn(rust_2018_idioms, unused_lifetimes)]
 #![cfg_attr(feature = "in-rust-tree", feature(rustc_private))]
 #[cfg(feature = "in-rust-tree")]
 #[allow(unused_extern_crates)]
@@ -87,6 +87,7 @@ fn main() -> anyhow::Result<()> {
         flags::RustAnalyzerCmd::Lsif(cmd) => cmd.run()?,
         flags::RustAnalyzerCmd::Scip(cmd) => cmd.run()?,
         flags::RustAnalyzerCmd::RunTests(cmd) => cmd.run()?,
+        flags::RustAnalyzerCmd::RustcTests(cmd) => cmd.run()?,
     }
     Ok(())
 }

@@ -98,7 +98,7 @@ pub fn prebuilt_llvm_config(
     let out_dir = builder.llvm_out(target);
 
     let mut llvm_config_ret_dir = builder.llvm_out(builder.config.build);
-    if !builder.config.build.contains("msvc") || builder.ninja() {
+    if !builder.config.build.is_msvc() || builder.ninja() {
         llvm_config_ret_dir.push("build");
     }
     llvm_config_ret_dir.push("bin");
@@ -283,7 +283,7 @@ impl Step for Llvm {
         };
 
         builder.update_submodule(&Path::new("src").join("llvm-project"));
-        if builder.llvm_link_shared() && target.contains("windows") {
+        if builder.llvm_link_shared() && target.is_windows() {
             panic!("shared linking to LLVM is not currently supported on {}", target.triple);
         }
 
@@ -361,7 +361,7 @@ impl Step for Llvm {
         // Disable zstd to avoid a dependency on libzstd.so.
         cfg.define("LLVM_ENABLE_ZSTD", "OFF");
 
-        if !target.contains("windows") {
+        if !target.is_windows() {
             cfg.define("LLVM_ENABLE_ZLIB", "ON");
         } else {
             cfg.define("LLVM_ENABLE_ZLIB", "OFF");
@@ -411,7 +411,7 @@ impl Step for Llvm {
             ldflags.shared.push(" -latomic");
         }
 
-        if target.contains("msvc") {
+        if target.is_msvc() {
             cfg.define("LLVM_USE_CRT_DEBUG", "MT");
             cfg.define("LLVM_USE_CRT_RELEASE", "MT");
             cfg.define("LLVM_USE_CRT_RELWITHDEBINFO", "MT");
@@ -607,7 +607,7 @@ fn configure_cmake(
             cfg.define("CMAKE_SYSTEM_NAME", "DragonFly");
         } else if target.contains("freebsd") {
             cfg.define("CMAKE_SYSTEM_NAME", "FreeBSD");
-        } else if target.contains("windows") {
+        } else if target.is_windows() {
             cfg.define("CMAKE_SYSTEM_NAME", "Windows");
         } else if target.contains("haiku") {
             cfg.define("CMAKE_SYSTEM_NAME", "Haiku");
@@ -644,7 +644,7 @@ fn configure_cmake(
     }
 
     let sanitize_cc = |cc: &Path| {
-        if target.contains("msvc") {
+        if target.is_msvc() {
             OsString::from(cc.to_str().unwrap().replace("\\", "/"))
         } else {
             cc.as_os_str().to_owned()
@@ -654,7 +654,7 @@ fn configure_cmake(
     // MSVC with CMake uses msbuild by default which doesn't respect these
     // vars that we'd otherwise configure. In that case we just skip this
     // entirely.
-    if target.contains("msvc") && !builder.ninja() {
+    if target.is_msvc() && !builder.ninja() {
         return;
     }
 
@@ -664,7 +664,7 @@ fn configure_cmake(
     };
 
     // Handle msvc + ninja + ccache specially (this is what the bots use)
-    if target.contains("msvc") && builder.ninja() && builder.config.ccache.is_some() {
+    if target.is_msvc() && builder.ninja() && builder.config.ccache.is_some() {
         let mut wrap_cc = env::current_exe().expect("failed to get cwd");
         wrap_cc.set_file_name("sccache-plus-cl.exe");
 
@@ -768,11 +768,11 @@ fn configure_cmake(
     // For distribution we want the LLVM tools to be *statically* linked to libstdc++.
     // We also do this if the user explicitly requested static libstdc++.
     if builder.config.llvm_static_stdcpp
-        && !target.contains("msvc")
+        && !target.is_msvc()
         && !target.contains("netbsd")
         && !target.contains("solaris")
     {
-        if target.contains("apple") || target.contains("windows") {
+        if target.contains("apple") || target.is_windows() {
             ldflags.push_all("-static-libstdc++");
         } else {
             ldflags.push_all("-Wl,-Bsymbolic -static-libstdc++");
@@ -874,7 +874,7 @@ impl Step for Lld {
         // when doing PGO on CI, cmake or clang-cl don't automatically link clang's
         // profiler runtime in. In that case, we need to manually ask cmake to do it, to avoid
         // linking errors, much like LLVM's cmake setup does in that situation.
-        if builder.config.llvm_profile_generate && target.contains("msvc") {
+        if builder.config.llvm_profile_generate && target.is_msvc() {
             if let Some(clang_cl_path) = builder.config.llvm_clang_cl.as_ref() {
                 // Find clang's runtime library directory and push that as a search path to the
                 // cmake linker flags.
@@ -1295,7 +1295,7 @@ impl Step for Libunwind {
                 cfg.define("__LIBUNWIND_IS_NATIVE_ONLY", None);
                 cfg.define("NDEBUG", None);
             }
-            if self.target.contains("windows") {
+            if self.target.is_windows() {
                 cfg.define("_LIBUNWIND_HIDE_SYMBOLS", "1");
                 cfg.define("_LIBUNWIND_IS_NATIVE_ONLY", "1");
             }

@@ -5,13 +5,13 @@
 //! parent directory, and otherwise documentation can be found throughout the `build`
 //! directory in each respective module.
 
-#[cfg(all(any(unix, windows), not(target_os = "solaris")))]
 use std::io::Write;
 #[cfg(all(any(unix, windows), not(target_os = "solaris")))]
 use std::process;
 use std::{
-    env, fs,
-    io::{self, IsTerminal},
+    env,
+    fs::{self, OpenOptions},
+    io::{self, BufRead, BufReader, IsTerminal},
 };
 
 use bootstrap::{
@@ -26,35 +26,40 @@ fn main() {
     let mut build_lock;
     #[cfg(all(any(unix, windows), not(target_os = "solaris")))]
     let _build_lock_guard;
-    #[cfg(all(any(unix, windows), not(target_os = "solaris")))]
-    // Display PID of process holding the lock
-    // PID will be stored in a lock file
-    {
-        let path = config.out.join("lock");
-        let pid = match fs::read_to_string(&path) {
-            Ok(contents) => contents,
-            Err(_) => String::new(),
-        };
 
-        build_lock =
-            fd_lock::RwLock::new(t!(fs::OpenOptions::new().write(true).create(true).open(&path)));
-        _build_lock_guard = match build_lock.try_write() {
-            Ok(mut lock) => {
-                t!(lock.write(&process::id().to_string().as_ref()));
-                lock
-            }
-            err => {
-                drop(err);
-                println!("WARNING: build directory locked by process {pid}, waiting for lock");
-                let mut lock = t!(build_lock.write());
-                t!(lock.write(&process::id().to_string().as_ref()));
-                lock
-            }
-        };
+    if !config.bypass_bootstrap_lock {
+        // Display PID of process holding the lock
+        // PID will be stored in a lock file
+        #[cfg(all(any(unix, windows), not(target_os = "solaris")))]
+        {
+            let path = config.out.join("lock");
+            let pid = match fs::read_to_string(&path) {
+                Ok(contents) => contents,
+                Err(_) => String::new(),
+            };
+
+            build_lock = fd_lock::RwLock::new(t!(fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .open(&path)));
+            _build_lock_guard = match build_lock.try_write() {
+                Ok(mut lock) => {
+                    t!(lock.write(&process::id().to_string().as_ref()));
+                    lock
+                }
+                err => {
+                    drop(err);
+                    println!("WARNING: build directory locked by process {pid}, waiting for lock");
+                    let mut lock = t!(build_lock.write());
+                    t!(lock.write(&process::id().to_string().as_ref()));
+                    lock
+                }
+            };
+        }
+
+        #[cfg(any(not(any(unix, windows)), target_os = "solaris"))]
+        println!("WARNING: file locking not supported for target, not locking build directory");
     }
-
-    #[cfg(any(not(any(unix, windows)), target_os = "solaris"))]
-    println!("WARNING: file locking not supported for target, not locking build directory");
 
     // check_version warnings are not printed during setup
     let changelog_suggestion =
@@ -74,6 +79,9 @@ fn main() {
     }
 
     let pre_commit = config.src.join(".git").join("hooks").join("pre-commit");
+    let dump_bootstrap_shims = config.dump_bootstrap_shims;
+    let out_dir = config.out.clone();
+
     Build::new(config).build();
 
     if suggest_setup {
@@ -101,6 +109,29 @@ fn main() {
 
     if suggest_setup || changelog_suggestion.is_some() {
         println!("NOTE: this message was printed twice to make it more likely to be seen");
+    }
+
+    if dump_bootstrap_shims {
+        let dump_dir = out_dir.join("bootstrap-shims-dump");
+        assert!(dump_dir.exists());
+
+        for entry in walkdir::WalkDir::new(&dump_dir) {
+            let entry = t!(entry);
+
+            if !entry.file_type().is_file() {
+                continue;
+            }
+
+            let file = t!(fs::File::open(&entry.path()));
+
+            // To ensure deterministic results we must sort the dump lines.
+            // This is necessary because the order of rustc invocations different
+            // almost all the time.
+            let mut lines: Vec<String> = t!(BufReader::new(&file).lines().collect());
+            lines.sort_by_key(|t| t.to_lowercase());
+            let mut file = t!(OpenOptions::new().write(true).truncate(true).open(&entry.path()));
+            t!(file.write_all(lines.join("\n").as_bytes()));
+        }
     }
 }
 
@@ -143,7 +174,7 @@ fn check_version(config: &Config) -> Option<String> {
                 "update `config.toml` to use `change-id = {latest_change_id}` instead"
             ));
 
-            if io::stdout().is_terminal() {
+            if io::stdout().is_terminal() && !config.dry_run() {
                 t!(fs::write(warned_id_path, latest_change_id.to_string()));
             }
         }

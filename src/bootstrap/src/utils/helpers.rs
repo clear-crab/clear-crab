@@ -5,7 +5,7 @@
 
 use build_helper::util::fail;
 use std::env;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -16,8 +16,13 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::core::builder::Builder;
 use crate::core::config::{Config, TargetSelection};
+use crate::LldMode;
 
 pub use crate::utils::dylib::{dylib_path, dylib_path_var};
+
+#[cfg(test)]
+#[path = "../tests/helpers.rs"]
+mod tests;
 
 /// A helper macro to `unwrap` a result except also print out details like:
 ///
@@ -45,16 +50,8 @@ macro_rules! t {
 }
 pub use t;
 
-/// Given an executable called `name`, return the filename for the
-/// executable for a particular target.
 pub fn exe(name: &str, target: TargetSelection) -> String {
-    if target.contains("windows") {
-        format!("{name}.exe")
-    } else if target.contains("uefi") {
-        format!("{name}.efi")
-    } else {
-        name.to_string()
-    }
+    crate::utils::dylib::exe(name, &target.triple)
 }
 
 /// Returns `true` if the file name given looks like a dynamic library.
@@ -71,7 +68,7 @@ pub fn is_debug_info(name: &str) -> bool {
 /// Returns the corresponding relative library directory that the compiler's
 /// dylibs will be found in.
 pub fn libdir(target: TargetSelection) -> &'static str {
-    if target.contains("windows") { "bin" } else { "lib" }
+    if target.is_windows() { "bin" } else { "lib" }
 }
 
 /// Adds a list of lookup paths to `cmd`'s dynamic library lookup path.
@@ -190,7 +187,7 @@ pub fn target_supports_cranelift_backend(target: TargetSelection) -> bool {
             || target.contains("aarch64")
             || target.contains("s390x")
             || target.contains("riscv64gc")
-    } else if target.contains("darwin") || target.contains("windows") {
+    } else if target.contains("darwin") || target.is_windows() {
         target.contains("x86_64")
     } else {
         false
@@ -378,6 +375,7 @@ fn absolute_unix(path: &Path) -> io::Result<PathBuf> {
 
 #[cfg(windows)]
 fn absolute_windows(path: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+    use std::ffi::OsString;
     use std::io::Error;
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
     use std::ptr::null_mut;
@@ -443,17 +441,29 @@ pub fn get_clang_cl_resource_dir(clang_cl_path: &str) -> PathBuf {
     clang_rt_dir.to_path_buf()
 }
 
-pub fn lld_flag_no_threads(is_windows: bool) -> &'static str {
+/// Returns a flag that configures LLD to use only a single thread.
+/// If we use an external LLD, we need to find out which version is it to know which flag should we
+/// pass to it (LLD older than version 10 had a different flag).
+fn lld_flag_no_threads(lld_mode: LldMode, is_windows: bool) -> &'static str {
     static LLD_NO_THREADS: OnceLock<(&'static str, &'static str)> = OnceLock::new();
-    let (windows, other) = LLD_NO_THREADS.get_or_init(|| {
-        let out = output(Command::new("lld").arg("-flavor").arg("ld").arg("--version"));
-        let newer = match (out.find(char::is_numeric), out.find('.')) {
-            (Some(b), Some(e)) => out.as_str()[b..e].parse::<i32>().ok().unwrap_or(14) > 10,
+
+    let new_flags = ("/threads:1", "--threads=1");
+    let old_flags = ("/no-threads", "--no-threads");
+
+    let (windows_flag, other_flag) = LLD_NO_THREADS.get_or_init(|| {
+        let newer_version = match lld_mode {
+            LldMode::External => {
+                let out = output(Command::new("lld").arg("-flavor").arg("ld").arg("--version"));
+                match (out.find(char::is_numeric), out.find('.')) {
+                    (Some(b), Some(e)) => out.as_str()[b..e].parse::<i32>().ok().unwrap_or(14) > 10,
+                    _ => true,
+                }
+            }
             _ => true,
         };
-        if newer { ("/threads:1", "--threads=1") } else { ("/no-threads", "--no-threads") }
+        if newer_version { new_flags } else { old_flags }
     });
-    if is_windows { windows } else { other }
+    if is_windows { windows_flag } else { other_flag }
 }
 
 pub fn dir_is_empty(dir: &Path) -> bool {
@@ -476,22 +486,49 @@ pub enum LldThreads {
     No,
 }
 
-pub fn add_rustdoc_lld_flags(
-    cmd: &mut Command,
+/// Returns the linker arguments for rustc/rustdoc for the given builder and target.
+pub fn linker_args(
     builder: &Builder<'_>,
     target: TargetSelection,
     lld_threads: LldThreads,
-) {
-    cmd.args(build_rustdoc_lld_flags(builder, target, lld_threads));
+) -> Vec<String> {
+    let mut args = linker_flags(builder, target, lld_threads);
+
+    if let Some(linker) = builder.linker(target) {
+        args.push(format!("-Clinker={}", linker.display()));
+    }
+
+    args
 }
 
-pub fn add_rustdoc_cargo_lld_flags(
+/// Returns the linker arguments for rustc/rustdoc for the given builder and target, without the
+/// -Clinker flag.
+pub fn linker_flags(
+    builder: &Builder<'_>,
+    target: TargetSelection,
+    lld_threads: LldThreads,
+) -> Vec<String> {
+    let mut args = vec![];
+    if !builder.is_lld_direct_linker(target) && builder.config.lld_mode.is_used() {
+        args.push(String::from("-Clink-arg=-fuse-ld=lld"));
+
+        if matches!(lld_threads, LldThreads::No) {
+            args.push(format!(
+                "-Clink-arg=-Wl,{}",
+                lld_flag_no_threads(builder.config.lld_mode, target.is_windows())
+            ));
+        }
+    }
+    args
+}
+
+pub fn add_rustdoc_cargo_linker_args(
     cmd: &mut Command,
     builder: &Builder<'_>,
     target: TargetSelection,
     lld_threads: LldThreads,
 ) {
-    let args = build_rustdoc_lld_flags(builder, target, lld_threads);
+    let args = linker_args(builder, target, lld_threads);
     let mut flags = cmd
         .get_envs()
         .find_map(|(k, v)| if k == OsStr::new("RUSTDOCFLAGS") { v } else { None })
@@ -508,26 +545,10 @@ pub fn add_rustdoc_cargo_lld_flags(
     }
 }
 
-fn build_rustdoc_lld_flags(
-    builder: &Builder<'_>,
-    target: TargetSelection,
-    lld_threads: LldThreads,
-) -> Vec<OsString> {
-    let mut args = vec![];
-
-    if let Some(linker) = builder.linker(target) {
-        let mut flag = std::ffi::OsString::from("-Clinker=");
-        flag.push(linker);
-        args.push(flag);
-    }
-    if builder.is_fuse_ld_lld(target) {
-        args.push(OsString::from("-Clink-arg=-fuse-ld=lld"));
-        if matches!(lld_threads, LldThreads::No) {
-            args.push(OsString::from(format!(
-                "-Clink-arg=-Wl,{}",
-                lld_flag_no_threads(target.contains("windows"))
-            )));
-        }
-    }
-    args
+/// Converts `T` into a hexadecimal `String`.
+pub fn hex_encode<T>(input: T) -> String
+where
+    T: AsRef<[u8]>,
+{
+    input.as_ref().iter().map(|x| format!("{:02x}", x)).collect()
 }

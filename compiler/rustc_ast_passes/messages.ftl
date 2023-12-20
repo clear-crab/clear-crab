@@ -174,6 +174,10 @@ ast_passes_item_underscore = `{$kind}` items in this context need a name
 ast_passes_keyword_lifetime =
     lifetimes cannot use keyword names
 
+ast_passes_match_arm_with_no_body =
+    `match` arm with no body
+    .suggestion = add a body after the pattern
+
 ast_passes_module_nonascii = trying to load file for module `{$name}` with non-ascii identifier name
     .help = consider using the `#[path]` attribute to specify filesystem path
 
@@ -221,7 +225,8 @@ ast_passes_tilde_const_disallowed = `~const` is not allowed here
     .closure = closures cannot have `~const` trait bounds
     .function = this function is not `const`, so it cannot have `~const` trait bounds
     .trait = this trait is not a `#[const_trait]`, so it cannot have `~const` trait bounds
-    .impl = this impl is not `const`, so it cannot have `~const` trait bounds
+    .trait_impl = this impl is not `const`, so it cannot have `~const` trait bounds
+    .impl = inherent impls cannot have `~const` trait bounds
     .object = trait objects cannot have `~const` trait bounds
     .item = this item cannot have `~const` trait bounds
 

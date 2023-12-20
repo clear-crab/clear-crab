@@ -295,7 +295,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     ) {
         let hir = self.tcx.hir();
         let parent_hir_id = hir.parent_id(hir_id);
-        let parent_node = hir.get(parent_hir_id);
+        let parent_node = self.tcx.hir_node(parent_hir_id);
         if let (
             hir::Node::Expr(hir::Expr {
                 kind: hir::ExprKind::Closure(&hir::Closure { fn_decl_span, body, .. }),
@@ -313,7 +313,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 if let hir::Node::Expr(hir::Expr {
                     kind: hir::ExprKind::Closure(&hir::Closure { fn_decl_span, .. }),
                     ..
-                }) = hir.get(async_closure)
+                }) = self.tcx.hir_node(async_closure)
                 {
                     fn_decl_span
                 } else {
@@ -343,7 +343,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         callee_expr: &'tcx hir::Expr<'tcx>,
     ) -> bool {
         let hir_id = self.tcx.hir().parent_id(call_expr.hir_id);
-        let parent_node = self.tcx.hir().get(hir_id);
+        let parent_node = self.tcx.hir_node(hir_id);
         if let (
             hir::Node::Expr(hir::Expr { kind: hir::ExprKind::Array(_), .. }),
             hir::ExprKind::Tup(exp),
@@ -417,7 +417,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     && let Some(mut diag) = self
                         .tcx
                         .sess
-                        .diagnostic()
+                        .dcx()
                         .steal_diagnostic(segment.ident.span, StashKey::CallIntoMethod)
                 {
                     // Try suggesting `foo(a)` -> `a.foo()` if possible.
@@ -468,6 +468,65 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 self.require_type_is_sized(ty, sp, traits::RustCall);
             } else {
                 self.tcx.sess.emit_err(errors::RustCallIncorrectArgs { span: sp });
+            }
+        }
+
+        if let Some(def_id) = def_id
+            && self.tcx.def_kind(def_id) == hir::def::DefKind::Fn
+            && self.tcx.is_intrinsic(def_id)
+            && self.tcx.item_name(def_id) == sym::const_eval_select
+        {
+            let fn_sig = self.resolve_vars_if_possible(fn_sig);
+            for idx in 0..=1 {
+                let arg_ty = fn_sig.inputs()[idx + 1];
+                let span = arg_exprs.get(idx + 1).map_or(call_expr.span, |arg| arg.span);
+                // Check that second and third argument of `const_eval_select` must be `FnDef`, and additionally that
+                // the second argument must be `const fn`. The first argument must be a tuple, but this is already expressed
+                // in the function signature (`F: FnOnce<ARG>`), so I did not bother to add another check here.
+                //
+                // This check is here because there is currently no way to express a trait bound for `FnDef` types only.
+                if let ty::FnDef(def_id, _args) = *arg_ty.kind() {
+                    let fn_once_def_id =
+                        self.tcx.require_lang_item(hir::LangItem::FnOnce, Some(span));
+                    let fn_once_output_def_id =
+                        self.tcx.require_lang_item(hir::LangItem::FnOnceOutput, Some(span));
+                    if self.tcx.generics_of(fn_once_def_id).host_effect_index.is_none() {
+                        if idx == 0 && !self.tcx.is_const_fn_raw(def_id) {
+                            self.tcx.sess.emit_err(errors::ConstSelectMustBeConst { span });
+                        }
+                    } else {
+                        let const_param: ty::GenericArg<'tcx> =
+                            ([self.tcx.consts.false_, self.tcx.consts.true_])[idx].into();
+                        self.register_predicate(traits::Obligation::new(
+                            self.tcx,
+                            self.misc(span),
+                            self.param_env,
+                            ty::TraitRef::new(
+                                self.tcx,
+                                fn_once_def_id,
+                                [arg_ty.into(), fn_sig.inputs()[0].into(), const_param],
+                            ),
+                        ));
+
+                        self.register_predicate(traits::Obligation::new(
+                            self.tcx,
+                            self.misc(span),
+                            self.param_env,
+                            ty::ProjectionPredicate {
+                                projection_ty: ty::AliasTy::new(
+                                    self.tcx,
+                                    fn_once_output_def_id,
+                                    [arg_ty.into(), fn_sig.inputs()[0].into(), const_param],
+                                ),
+                                term: fn_sig.output().into(),
+                            },
+                        ));
+
+                        self.select_obligations_where_possible(|_| {});
+                    }
+                } else {
+                    self.tcx.sess.emit_err(errors::ConstSelectMustBeFn { span, ty: arg_ty });
+                }
             }
         }
 
@@ -780,7 +839,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let generics = tcx.generics_of(callee_did);
         let Some(host_effect_index) = generics.host_effect_index else { return };
 
-        let effect = tcx.expected_const_effect_param_for_body(self.body_id);
+        let effect = tcx.expected_host_effect_param_for_body(self.body_id);
 
         trace!(?effect, ?generics, ?callee_args);
 

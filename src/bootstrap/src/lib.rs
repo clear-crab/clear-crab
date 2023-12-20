@@ -34,10 +34,11 @@ use filetime::FileTime;
 use sha2::digest::Digest;
 use termcolor::{ColorChoice, StandardStream, WriteColor};
 use utils::channel::GitInfo;
+use utils::helpers::hex_encode;
 
 use crate::core::builder;
 use crate::core::builder::Kind;
-use crate::core::config::flags;
+use crate::core::config::{flags, LldMode};
 use crate::core::config::{DryRun, Target};
 use crate::core::config::{LlvmLibunwind, TargetSelection};
 use crate::utils::cache::{Interned, INTERNER};
@@ -77,14 +78,14 @@ const EXTRA_CHECK_CFGS: &[(Option<Mode>, &str, Option<&[&'static str]>)] = &[
     (None, "bootstrap", None),
     (Some(Mode::Rustc), "parallel_compiler", None),
     (Some(Mode::ToolRustc), "parallel_compiler", None),
+    (Some(Mode::ToolRustc), "rust_analyzer", None),
+    (Some(Mode::ToolStd), "rust_analyzer", None),
     (Some(Mode::Codegen), "parallel_compiler", None),
     (Some(Mode::Std), "stdarch_intel_sde", None),
     (Some(Mode::Std), "no_fp_fmt_parse", None),
     (Some(Mode::Std), "no_global_oom_handling", None),
     (Some(Mode::Std), "no_rc", None),
     (Some(Mode::Std), "no_sync", None),
-    (Some(Mode::Std), "freebsd12", None),
-    (Some(Mode::Std), "freebsd13", None),
     (Some(Mode::Std), "backtrace_in_libstd", None),
     /* Extra values not defined in the built-in targets yet, but used in std */
     (Some(Mode::Std), "target_env", Some(&["libnx"])),
@@ -864,7 +865,7 @@ impl Build {
             }
         } else {
             let base = self.llvm_out(target).join("build");
-            let base = if !self.ninja() && target.contains("msvc") {
+            let base = if !self.ninja() && target.is_msvc() {
                 if self.config.llvm_optimize {
                     if self.config.llvm_release_debuginfo {
                         base.join("RelWithDebInfo")
@@ -1257,35 +1258,27 @@ impl Build {
             Some(self.cxx.borrow()[&target].path().into())
         } else if target != self.config.build
             && helpers::use_host_linker(target)
-            && !target.contains("msvc")
+            && !target.is_msvc()
         {
             Some(self.cc(target))
-        } else if self.config.use_lld && !self.is_fuse_ld_lld(target) && self.build == target {
-            Some(self.initial_lld.clone())
+        } else if self.config.lld_mode.is_used()
+            && self.is_lld_direct_linker(target)
+            && self.build == target
+        {
+            match self.config.lld_mode {
+                LldMode::SelfContained => Some(self.initial_lld.clone()),
+                LldMode::External => Some("lld".into()),
+                LldMode::Unused => None,
+            }
         } else {
             None
         }
     }
 
-    // LLD is used through `-fuse-ld=lld` rather than directly.
+    // Is LLD configured directly through `-Clinker`?
     // Only MSVC targets use LLD directly at the moment.
-    fn is_fuse_ld_lld(&self, target: TargetSelection) -> bool {
-        self.config.use_lld && !target.contains("msvc")
-    }
-
-    fn lld_flags(&self, target: TargetSelection) -> impl Iterator<Item = String> {
-        let mut options = [None, None];
-
-        if self.config.use_lld {
-            if self.is_fuse_ld_lld(target) {
-                options[0] = Some("-Clink-arg=-fuse-ld=lld".to_string());
-            }
-
-            let no_threads = helpers::lld_flag_no_threads(target.contains("windows"));
-            options[1] = Some(format!("-Clink-arg=-Wl,{no_threads}"));
-        }
-
-        IntoIterator::into_iter(options).flatten()
+    fn is_lld_direct_linker(&self, target: TargetSelection) -> bool {
+        target.is_msvc()
     }
 
     /// Returns if this target should statically link the C runtime, if specified
@@ -1766,7 +1759,7 @@ to download LLVM rather than building it.
         // In these cases we automatically enable Ninja if we find it in the
         // environment.
         if !self.config.ninja_in_file
-            && self.config.build.contains("msvc")
+            && self.config.build.is_msvc()
             && cmd_finder.maybe_have("ninja").is_some()
         {
             return true;
@@ -1879,5 +1872,24 @@ pub fn generate_smart_stamp_hash(dir: &Path, additional_input: &str) -> String {
     hasher.update(status);
     hasher.update(additional_input);
 
-    hex::encode(hasher.finalize().as_slice())
+    hex_encode(hasher.finalize().as_slice())
+}
+
+/// Ensures that the behavior dump directory is properly initialized.
+pub fn prepare_behaviour_dump_dir(build: &Build) {
+    static INITIALIZED: OnceLock<bool> = OnceLock::new();
+
+    let dump_path = build.out.join("bootstrap-shims-dump");
+
+    let initialized = INITIALIZED.get().unwrap_or_else(|| &false);
+    if !initialized {
+        // clear old dumps
+        if dump_path.exists() {
+            t!(fs::remove_dir_all(&dump_path));
+        }
+
+        t!(fs::create_dir_all(&dump_path));
+
+        t!(INITIALIZED.set(true));
+    }
 }

@@ -12,7 +12,7 @@ use rustc_middle::traits::BuiltinImplSource;
 use rustc_middle::ty::GenericArgs;
 use rustc_middle::ty::{self, adjustment::PointerCoercion, Instance, InstanceDef, Ty, TyCtxt};
 use rustc_middle::ty::{TraitRef, TypeVisitableExt};
-use rustc_mir_dataflow::{self, Analysis};
+use rustc_mir_dataflow::Analysis;
 use rustc_span::{sym, Span, Symbol};
 use rustc_trait_selection::traits::error_reporting::TypeErrCtxtExt as _;
 use rustc_trait_selection::traits::{self, ObligationCauseCode, ObligationCtxt, SelectionContext};
@@ -277,8 +277,8 @@ impl<'mir, 'tcx> Checker<'mir, 'tcx> {
         // "secondary" errors if they occurred.
         let secondary_errors = mem::take(&mut self.secondary_errors);
         if self.error_emitted.is_none() {
-            for mut error in secondary_errors {
-                self.tcx.sess.diagnostic().emit_diagnostic(&mut error);
+            for error in secondary_errors {
+                self.tcx.sess.dcx().emit_diagnostic(error);
             }
         } else {
             assert!(self.tcx.sess.has_errors().is_some());

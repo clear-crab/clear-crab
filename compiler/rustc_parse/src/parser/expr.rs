@@ -1269,7 +1269,7 @@ impl<'a> Parser<'a> {
                                         .collect(),
                                 },
                             }
-                            .into_diagnostic(self.diagnostic());
+                            .into_diagnostic(self.dcx());
                             replacement_err.emit();
 
                             let old_err = mem::replace(err, replacement_err);
@@ -1440,21 +1440,23 @@ impl<'a> Parser<'a> {
             } else if this.eat_keyword(kw::Underscore) {
                 Ok(this.mk_expr(this.prev_token.span, ExprKind::Underscore))
             } else if this.token.uninterpolated_span().at_least_rust_2018() {
-                // `Span:.at_least_rust_2018()` is somewhat expensive; don't get it repeatedly.
-                if this.check_keyword(kw::Async) {
+                // `Span::at_least_rust_2018()` is somewhat expensive; don't get it repeatedly.
+                if this.token.uninterpolated_span().at_least_rust_2024()
+                    // check for `gen {}` and `gen move {}`
+                    // or `async gen {}` and `async gen move {}`
+                    && (this.is_gen_block(kw::Gen, 0)
+                        || (this.check_keyword(kw::Async) && this.is_gen_block(kw::Gen, 1)))
+                {
+                    // FIXME: (async) gen closures aren't yet parsed.
+                    this.parse_gen_block()
+                } else if this.check_keyword(kw::Async) {
                     // FIXME(gen_blocks): Parse `gen async` and suggest swap
                     if this.is_gen_block(kw::Async, 0) {
                         // Check for `async {` and `async move {`,
-                        // or `async gen {` and `async gen move {`.
                         this.parse_gen_block()
                     } else {
                         this.parse_expr_closure()
                     }
-                } else if this.token.uninterpolated_span().at_least_rust_2024()
-                    && (this.is_gen_block(kw::Gen, 0)
-                        || (this.check_keyword(kw::Async) && this.is_gen_block(kw::Gen, 1)))
-                {
-                    this.parse_gen_block()
                 } else if this.eat_keyword_noexpect(kw::Await) {
                     this.recover_incorrect_await_syntax(lo, this.prev_token.span)
                 } else {
@@ -1691,8 +1693,7 @@ impl<'a> Parser<'a> {
         mk_lit_char: impl FnOnce(Symbol, Span) -> L,
         err: impl FnOnce(&Self) -> DiagnosticBuilder<'a, ErrorGuaranteed>,
     ) -> L {
-        if let Some(mut diag) =
-            self.diagnostic().steal_diagnostic(lifetime.span, StashKey::LifetimeIsChar)
+        if let Some(mut diag) = self.dcx().steal_diagnostic(lifetime.span, StashKey::LifetimeIsChar)
         {
             diag.span_suggestion_verbose(
                 lifetime.span.shrink_to_hi(),
@@ -1882,8 +1883,8 @@ impl<'a> Parser<'a> {
         self.bump(); // `#`
 
         let Some((ident, false)) = self.token.ident() else {
-            let err = errors::ExpectedBuiltinIdent { span: self.token.span }
-                .into_diagnostic(self.diagnostic());
+            let err =
+                errors::ExpectedBuiltinIdent { span: self.token.span }.into_diagnostic(self.dcx());
             return Err(err);
         };
         self.sess.gated_spans.gate(sym::builtin_syntax, ident.span);
@@ -1894,7 +1895,7 @@ impl<'a> Parser<'a> {
             Ok(res)
         } else {
             let err = errors::UnknownBuiltinConstruct { span: lo.to(ident.span), name: ident.name }
-                .into_diagnostic(self.diagnostic());
+                .into_diagnostic(self.dcx());
             return Err(err);
         };
         self.expect(&TokenKind::CloseDelim(Delimiter::Parenthesis))?;
@@ -1958,7 +1959,7 @@ impl<'a> Parser<'a> {
             && matches!(e.kind, ExprKind::Err)
         {
             let mut err = errors::InvalidInterpolatedExpression { span: self.token.span }
-                .into_diagnostic(self.diagnostic());
+                .into_diagnostic(self.dcx());
             err.downgrade_to_delayed_bug();
             return Err(err);
         }
@@ -2170,7 +2171,7 @@ impl<'a> Parser<'a> {
                     return Err(errors::MissingSemicolonBeforeArray {
                         open_delim: open_delim_span,
                         semicolon: prev_span.shrink_to_hi(),
-                    }.into_diagnostic(self.diagnostic()));
+                    }.into_diagnostic(self.dcx()));
                 }
                 Ok(_) => (),
                 Err(err) => err.cancel(),
@@ -2276,7 +2277,7 @@ impl<'a> Parser<'a> {
         }
 
         if self.token.kind == TokenKind::Semi
-            && matches!(self.token_cursor.stack.last(), Some((_, Delimiter::Parenthesis, _)))
+            && matches!(self.token_cursor.stack.last(), Some((.., Delimiter::Parenthesis)))
             && self.may_recover()
         {
             // It is likely that the closure body is a block but where the
@@ -2318,7 +2319,7 @@ impl<'a> Parser<'a> {
             if self.check_keyword(kw::Async) {
                 let move_async_span = self.token.span.with_lo(self.prev_token.span.data().lo);
                 Err(errors::AsyncMoveOrderIncorrect { span: move_async_span }
-                    .into_diagnostic(self.diagnostic()))
+                    .into_diagnostic(self.dcx()))
             } else {
                 Ok(CaptureBy::Value { move_kw: move_kw_span })
             }
@@ -2508,7 +2509,7 @@ impl<'a> Parser<'a> {
             };
             if self.prev_token.kind == token::BinOp(token::Or) {
                 // This was part of a closure, the that part of the parser recover.
-                return Err(err.into_diagnostic(self.diagnostic()));
+                return Err(err.into_diagnostic(self.dcx()));
             } else {
                 Some(self.sess.emit_err(err))
             }
@@ -2918,7 +2919,15 @@ impl<'a> Parser<'a> {
             let mut result = if !is_fat_arrow && !is_almost_fat_arrow {
                 // A pattern without a body, allowed for never patterns.
                 arm_body = None;
-                this.expect_one_of(&[token::Comma], &[token::CloseDelim(Delimiter::Brace)])
+                this.expect_one_of(&[token::Comma], &[token::CloseDelim(Delimiter::Brace)]).map(
+                    |x| {
+                        // Don't gate twice
+                        if !pat.contains_never_pattern() {
+                            this.sess.gated_spans.gate(sym::never_patterns, pat.span);
+                        }
+                        x
+                    },
+                )
             } else {
                 if let Err(mut err) = this.expect(&token::FatArrow) {
                     // We might have a `=>` -> `=` or `->` typo (issue #89396).
@@ -3184,8 +3193,7 @@ impl<'a> Parser<'a> {
     fn parse_try_block(&mut self, span_lo: Span) -> PResult<'a, P<Expr>> {
         let (attrs, body) = self.parse_inner_attrs_and_block()?;
         if self.eat_keyword(kw::Catch) {
-            Err(errors::CatchAfterTry { span: self.prev_token.span }
-                .into_diagnostic(self.diagnostic()))
+            Err(errors::CatchAfterTry { span: self.prev_token.span }.into_diagnostic(self.dcx()))
         } else {
             let span = span_lo.to(body.span);
             self.sess.gated_spans.gate(sym::try_blocks, span);
@@ -3219,9 +3227,16 @@ impl<'a> Parser<'a> {
             if self.eat_keyword(kw::Gen) { GenBlockKind::AsyncGen } else { GenBlockKind::Async }
         } else {
             assert!(self.eat_keyword(kw::Gen));
-            self.sess.gated_spans.gate(sym::gen_blocks, lo.to(self.token.span));
             GenBlockKind::Gen
         };
+        match kind {
+            GenBlockKind::Async => {
+                // `async` blocks are stable
+            }
+            GenBlockKind::Gen | GenBlockKind::AsyncGen => {
+                self.sess.gated_spans.gate(sym::gen_blocks, lo.to(self.prev_token.span));
+            }
+        }
         let capture_clause = self.parse_capture_clause()?;
         let (attrs, body) = self.parse_inner_attrs_and_block()?;
         let kind = ExprKind::Gen(capture_clause, body, kind);
@@ -3520,7 +3535,7 @@ impl<'a> Parser<'a> {
                     ident_span: this.token.span,
                     token: this.look_ahead(1, |t| t.clone()),
                 }
-                .into_diagnostic(&self.sess.span_diagnostic));
+                .into_diagnostic(&self.sess.dcx));
             }
             let (ident, expr) = if is_shorthand {
                 // Mimic `x: x` for the `x` field shorthand.

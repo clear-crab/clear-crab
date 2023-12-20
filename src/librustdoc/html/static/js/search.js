@@ -80,10 +80,6 @@ const longItemTypes = [
 const TY_GENERIC = itemTypes.indexOf("generic");
 const ROOT_PATH = typeof window !== "undefined" ? window.rootPath : "../";
 
-function hasOwnPropertyRustdoc(obj, property) {
-    return Object.prototype.hasOwnProperty.call(obj, property);
-}
-
 // In the search display, allows to switch between tabs.
 function printTab(nb) {
     let iter = 0;
@@ -238,12 +234,16 @@ function initSearch(rawSearchIndex) {
      *  @type {Array<Row>}
      */
     let searchIndex;
+    /**
+     *  @type {Uint32Array}
+     */
+    let functionTypeFingerprint;
     let currentResults;
     /**
      * Map from normalized type names to integers. Used to make type search
      * more efficient.
      *
-     * @type {Map<string, integer>}
+     * @type {Map<string, {id: integer, assocOnly: boolean}>}
      */
     let typeNameIdMap;
     const ALIASES = new Map();
@@ -270,19 +270,22 @@ function initSearch(rawSearchIndex) {
      * get the same ID.
      *
      * @param {string} name
+     * @param {boolean} isAssocType - True if this is an assoc type
      *
      * @returns {integer}
      */
-    function buildTypeMapIndex(name) {
+    function buildTypeMapIndex(name, isAssocType) {
         if (name === "" || name === null) {
             return null;
         }
 
         if (typeNameIdMap.has(name)) {
-            return typeNameIdMap.get(name);
+            const obj = typeNameIdMap.get(name);
+            obj.assocOnly = isAssocType && obj.assocOnly;
+            return obj.id;
         } else {
             const id = typeNameIdMap.size;
-            typeNameIdMap.set(name, id);
+            typeNameIdMap.set(name, {id, assocOnly: isAssocType});
             return id;
         }
     }
@@ -293,10 +296,6 @@ function initSearch(rawSearchIndex) {
 
     function isEndCharacter(c) {
         return "=,>-]".indexOf(c) !== -1;
-    }
-
-    function isStopCharacter(c) {
-        return isEndCharacter(c);
     }
 
     function isErrorCharacter(c) {
@@ -500,6 +499,7 @@ function initSearch(rawSearchIndex) {
                 fullPath: ["never"],
                 pathWithoutLast: [],
                 pathLast: "never",
+                normalizedPathLast: "never",
                 generics: [],
                 bindings: new Map(),
                 typeFilter: "primitive",
@@ -538,12 +538,14 @@ function initSearch(rawSearchIndex) {
         const bindingName = parserState.isInBinding;
         parserState.isInBinding = null;
         const bindings = new Map();
+        const pathLast = pathSegments[pathSegments.length - 1];
         return {
             name: name.trim(),
             id: null,
             fullPath: pathSegments,
             pathWithoutLast: pathSegments.slice(0, pathSegments.length - 1),
-            pathLast: pathSegments[pathSegments.length - 1],
+            pathLast,
+            normalizedPathLast: pathLast.replace(/_/g, ""),
             generics: generics.filter(gen => {
                 // Syntactically, bindings are parsed as generics,
                 // but the query engine treats them differently.
@@ -614,8 +616,7 @@ function initSearch(rawSearchIndex) {
                     }
                 } else if (
                     c === "[" ||
-                    c === "=" ||
-                    isStopCharacter(c) ||
+                    isEndCharacter(c) ||
                     isSpecialStartCharacter(c) ||
                     isSeparatorCharacter(c)
                 ) {
@@ -691,6 +692,7 @@ function initSearch(rawSearchIndex) {
                 fullPath: ["[]"],
                 pathWithoutLast: [],
                 pathLast: "[]",
+                normalizedPathLast: "[]",
                 generics,
                 typeFilter: "primitive",
                 bindingName: isInBinding,
@@ -914,7 +916,7 @@ function initSearch(rawSearchIndex) {
 
         while (parserState.pos < parserState.length) {
             const c = parserState.userQuery[parserState.pos];
-            if (isStopCharacter(c)) {
+            if (isEndCharacter(c)) {
                 foundStopChar = true;
                 if (isSeparatorCharacter(c)) {
                     parserState.pos += 1;
@@ -1040,6 +1042,8 @@ function initSearch(rawSearchIndex) {
             correction: null,
             proposeCorrectionFrom: null,
             proposeCorrectionTo: null,
+            // bloom filter build from type ids
+            typeFingerprint: new Uint32Array(4),
         };
     }
 
@@ -1070,7 +1074,7 @@ function initSearch(rawSearchIndex) {
 
         if (elem &&
             elem.value !== "all crates" &&
-            hasOwnPropertyRustdoc(rawSearchIndex, elem.value)
+            rawSearchIndex.has(elem.value)
         ) {
             return elem.value;
         }
@@ -1135,7 +1139,6 @@ function initSearch(rawSearchIndex) {
             query.error = err;
             return query;
         }
-
         if (!query.literalSearch) {
             // If there is more than one element in the query, we switch to literalSearch in any
             // case.
@@ -1169,13 +1172,12 @@ function initSearch(rawSearchIndex) {
      * Executes the parsed query and builds a {ResultsTable}.
      *
      * @param  {ParsedQuery} parsedQuery - The parsed user query
-     * @param  {Object} searchWords      - The list of search words to query against
      * @param  {Object} [filterCrates]   - Crate to search in if defined
      * @param  {Object} [currentCrate]   - Current crate, to rank results from this crate higher
      *
      * @return {ResultsTable}
      */
-    function execQuery(parsedQuery, searchWords, filterCrates, currentCrate) {
+    function execQuery(parsedQuery, filterCrates, currentCrate) {
         const results_others = new Map(), results_in_args = new Map(),
             results_returned = new Map();
 
@@ -1233,8 +1235,8 @@ function initSearch(rawSearchIndex) {
             const userQuery = parsedQuery.userQuery;
             const result_list = [];
             for (const result of results.values()) {
-                result.word = searchWords[result.id];
-                result.item = searchIndex[result.id] || {};
+                result.item = searchIndex[result.id];
+                result.word = searchIndex[result.id].word;
                 result_list.push(result);
             }
 
@@ -1331,25 +1333,6 @@ function initSearch(rawSearchIndex) {
                 return 0;
             });
 
-            let nameSplit = null;
-            if (parsedQuery.elems.length === 1) {
-                const hasPath = typeof parsedQuery.elems[0].path === "undefined";
-                nameSplit = hasPath ? null : parsedQuery.elems[0].path;
-            }
-
-            for (const result of result_list) {
-                // this validation does not make sense when searching by types
-                if (result.dontValidate) {
-                    continue;
-                }
-                const name = result.item.name.toLowerCase(),
-                    path = result.item.path.toLowerCase(),
-                    parent = result.item.parent;
-
-                if (!isType && !validateResult(name, path, nameSplit, parent)) {
-                    result.id = -1;
-                }
-            }
             return transformResults(result_list);
         }
 
@@ -1430,7 +1413,7 @@ function initSearch(rawSearchIndex) {
                             return true;
                         }
                     } else if (unifyFunctionTypes(
-                        fnType.generics,
+                        [...fnType.generics, ...Array.from(fnType.bindings.values()).flat() ],
                         queryElems,
                         whereClause,
                         mgens ? new Map(mgens) : null,
@@ -1948,7 +1931,7 @@ function initSearch(rawSearchIndex) {
          * The `results` map contains information which will be used to sort the search results:
          *
          * * `fullId` is a `string`` used as the key of the object we use for the `results` map.
-         * * `id` is the index in both `searchWords` and `searchIndex` arrays for this element.
+         * * `id` is the index in the `searchIndex` array for this element.
          * * `index` is an `integer`` used to sort by the position of the word in the item's name.
          * * `dist` is the main metric used to sort the search results.
          * * `path_dist` is zero if a single-component search query is used, otherwise it's the
@@ -1962,8 +1945,7 @@ function initSearch(rawSearchIndex) {
          * @param {integer} path_dist
          */
         function addIntoResults(results, fullId, id, index, dist, path_dist, maxEditDistance) {
-            const inBounds = dist <= maxEditDistance || index !== -1;
-            if (dist === 0 || (!parsedQuery.literalSearch && inBounds)) {
+            if (dist <= maxEditDistance || index !== -1) {
                 if (results.has(fullId)) {
                     const result = results.get(fullId);
                     if (result.dontValidate || result.dist <= dist) {
@@ -2007,40 +1989,44 @@ function initSearch(rawSearchIndex) {
             if (!row || (filterCrates !== null && row.crate !== filterCrates)) {
                 return;
             }
-            let index = -1, path_dist = 0;
+            let path_dist = 0;
             const fullId = row.id;
-            const searchWord = searchWords[pos];
 
-            const in_args = row.type && row.type.inputs
-                && checkIfInList(row.type.inputs, elem, row.type.where_clause);
-            if (in_args) {
-                // path_dist is 0 because no parent path information is currently stored
-                // in the search index
-                addIntoResults(results_in_args, fullId, pos, -1, 0, 0, maxEditDistance);
-            }
-            const returned = row.type && row.type.output
-                && checkIfInList(row.type.output, elem, row.type.where_clause);
-            if (returned) {
-                addIntoResults(results_returned, fullId, pos, -1, 0, 0, maxEditDistance);
+            // fpDist is a minimum possible type distance, where "type distance" is the number of
+            // atoms in the function not present in the query
+            const tfpDist = compareTypeFingerprints(
+                fullId,
+                parsedQuery.typeFingerprint
+            );
+            if (tfpDist !== null) {
+                const in_args = row.type && row.type.inputs
+                    && checkIfInList(row.type.inputs, elem, row.type.where_clause);
+                const returned = row.type && row.type.output
+                    && checkIfInList(row.type.output, elem, row.type.where_clause);
+                if (in_args) {
+                    results_in_args.max_dist = Math.max(results_in_args.max_dist || 0, tfpDist);
+                    const maxDist = results_in_args.size < MAX_RESULTS ?
+                        (tfpDist + 1) :
+                        results_in_args.max_dist;
+                    addIntoResults(results_in_args, fullId, pos, -1, tfpDist, 0, maxDist);
+                }
+                if (returned) {
+                    results_returned.max_dist = Math.max(results_returned.max_dist || 0, tfpDist);
+                    const maxDist = results_returned.size < MAX_RESULTS ?
+                        (tfpDist + 1) :
+                        results_returned.max_dist;
+                    addIntoResults(results_returned, fullId, pos, -1, tfpDist, 0, maxDist);
+                }
             }
 
             if (!typePassesFilter(elem.typeFilter, row.ty)) {
                 return;
             }
 
-            const row_index = row.normalizedName.indexOf(elem.pathLast);
-            const word_index = searchWord.indexOf(elem.pathLast);
-
-            // lower indexes are "better" matches
-            // rank based on the "best" match
-            if (row_index === -1) {
-                index = word_index;
-            } else if (word_index === -1) {
-                index = row_index;
-            } else if (word_index < row_index) {
-                index = word_index;
-            } else {
-                index = row_index;
+            let index = row.word.indexOf(elem.pathLast);
+            const normalizedIndex = row.normalizedName.indexOf(elem.pathLast);
+            if (index === -1 || (index > normalizedIndex && normalizedIndex !== -1)) {
+                index = normalizedIndex;
             }
 
             if (elem.fullPath.length > 1) {
@@ -2051,13 +2037,13 @@ function initSearch(rawSearchIndex) {
             }
 
             if (parsedQuery.literalSearch) {
-                if (searchWord === elem.name) {
+                if (row.word === elem.pathLast) {
                     addIntoResults(results_others, fullId, pos, index, 0, path_dist);
                 }
                 return;
             }
 
-            const dist = editDistance(searchWord, elem.pathLast, maxEditDistance);
+            const dist = editDistance(row.normalizedName, elem.normalizedPathLast, maxEditDistance);
 
             if (index === -1 && dist + path_dist > maxEditDistance) {
                 return;
@@ -2080,6 +2066,17 @@ function initSearch(rawSearchIndex) {
                 return;
             }
 
+            const tfpDist = compareTypeFingerprints(
+                row.id,
+                parsedQuery.typeFingerprint
+            );
+            if (tfpDist === null) {
+                return;
+            }
+            if (results.size >= MAX_RESULTS && tfpDist > results.max_dist) {
+                return;
+            }
+
             // If the result is too "bad", we return false and it ends this search.
             if (!unifyFunctionTypes(
                 row.type.inputs,
@@ -2098,12 +2095,11 @@ function initSearch(rawSearchIndex) {
                 return;
             }
 
-            addIntoResults(results, row.id, pos, 0, 0, 0, Number.MAX_VALUE);
+            results.max_dist = Math.max(results.max_dist || 0, tfpDist);
+            addIntoResults(results, row.id, pos, 0, tfpDist, 0, Number.MAX_VALUE);
         }
 
         function innerRunQuery() {
-            let elem, i, nSearchWords, in_returned, row;
-
             let queryLen = 0;
             for (const elem of parsedQuery.elems) {
                 queryLen += elem.name.length;
@@ -2129,17 +2125,20 @@ function initSearch(rawSearchIndex) {
              * See `buildTypeMapIndex` for more information.
              *
              * @param {QueryElement} elem
+             * @param {boolean} isAssocType
              */
-            function convertNameToId(elem) {
-                if (typeNameIdMap.has(elem.pathLast)) {
-                    elem.id = typeNameIdMap.get(elem.pathLast);
+            function convertNameToId(elem, isAssocType) {
+                if (typeNameIdMap.has(elem.normalizedPathLast) &&
+                    (isAssocType || !typeNameIdMap.get(elem.normalizedPathLast).assocOnly)) {
+                    elem.id = typeNameIdMap.get(elem.normalizedPathLast).id;
                 } else if (!parsedQuery.literalSearch) {
                     let match = null;
                     let matchDist = maxEditDistance + 1;
                     let matchName = "";
-                    for (const [name, id] of typeNameIdMap) {
-                        const dist = editDistance(name, elem.pathLast, maxEditDistance);
-                        if (dist <= matchDist && dist <= maxEditDistance) {
+                    for (const [name, {id, assocOnly}] of typeNameIdMap) {
+                        const dist = editDistance(name, elem.normalizedPathLast, maxEditDistance);
+                        if (dist <= matchDist && dist <= maxEditDistance &&
+                            (isAssocType || !assocOnly)) {
                             if (dist === matchDist && matchName > name) {
                                 continue;
                             }
@@ -2206,27 +2205,31 @@ function initSearch(rawSearchIndex) {
                                 name,
                                 " does not exist",
                             ];
+                            return [null, []];
                         }
                         for (const elem2 of constraints) {
                             convertNameToId(elem2);
                         }
 
-                        return [typeNameIdMap.get(name), constraints];
+                        return [typeNameIdMap.get(name).id, constraints];
                     })
                 );
             }
 
+            const fps = new Set();
             for (const elem of parsedQuery.elems) {
                 convertNameToId(elem);
+                buildFunctionTypeFingerprint(elem, parsedQuery.typeFingerprint, fps);
             }
             for (const elem of parsedQuery.returned) {
                 convertNameToId(elem);
+                buildFunctionTypeFingerprint(elem, parsedQuery.typeFingerprint, fps);
             }
 
-            if (parsedQuery.foundElems === 1) {
+            if (parsedQuery.foundElems === 1 && parsedQuery.returned.length === 0) {
                 if (parsedQuery.elems.length === 1) {
-                    elem = parsedQuery.elems[0];
-                    for (i = 0, nSearchWords = searchWords.length; i < nSearchWords; ++i) {
+                    const elem = parsedQuery.elems[0];
+                    for (let i = 0, nSearchIndex = searchIndex.length; i < nSearchIndex; ++i) {
                         // It means we want to check for this element everywhere (in names, args and
                         // returned).
                         handleSingleArg(
@@ -2239,30 +2242,25 @@ function initSearch(rawSearchIndex) {
                             maxEditDistance
                         );
                     }
-                } else if (parsedQuery.returned.length === 1) {
-                    // We received one returned argument to check, so looking into returned values.
-                    elem = parsedQuery.returned[0];
-                    for (i = 0, nSearchWords = searchWords.length; i < nSearchWords; ++i) {
-                        row = searchIndex[i];
-                        in_returned = row.type && unifyFunctionTypes(
-                            row.type.output,
-                            parsedQuery.returned,
-                            row.type.where_clause
-                        );
-                        if (in_returned) {
-                            addIntoResults(
-                                results_others,
-                                row.id,
-                                i,
-                                -1,
-                                0,
-                                Number.MAX_VALUE
-                            );
-                        }
-                    }
                 }
             } else if (parsedQuery.foundElems > 0) {
-                for (i = 0, nSearchWords = searchWords.length; i < nSearchWords; ++i) {
+                // Sort input and output so that generic type variables go first and
+                // types with generic parameters go last.
+                // That's because of the way unification is structured: it eats off
+                // the end, and hits a fast path if the last item is a simple atom.
+                const sortQ = (a, b) => {
+                    const ag = a.generics.length === 0 && a.bindings.size === 0;
+                    const bg = b.generics.length === 0 && b.bindings.size === 0;
+                    if (ag !== bg) {
+                        return ag - bg;
+                    }
+                    const ai = a.id > 0;
+                    const bi = b.id > 0;
+                    return ai - bi;
+                };
+                parsedQuery.elems.sort(sortQ);
+                parsedQuery.returned.sort(sortQ);
+                for (let i = 0, nSearchIndex = searchIndex.length; i < nSearchIndex; ++i) {
                     handleArgs(searchIndex[i], i, results_others);
                 }
             }
@@ -2283,44 +2281,6 @@ function initSearch(rawSearchIndex) {
             ret.query.error = null;
         }
         return ret;
-    }
-
-    /**
-     * Validate performs the following boolean logic. For example:
-     * "File::open" will give IF A PARENT EXISTS => ("file" && "open")
-     * exists in (name || path || parent) OR => ("file" && "open") exists in
-     * (name || path )
-     *
-     * This could be written functionally, but I wanted to minimise
-     * functions on stack.
-     *
-     * @param  {string} name   - The name of the result
-     * @param  {string} path   - The path of the result
-     * @param  {string} keys   - The keys to be used (["file", "open"])
-     * @param  {Object} parent - The parent of the result
-     *
-     * @return {boolean}       - Whether the result is valid or not
-     */
-    function validateResult(name, path, keys, parent, maxEditDistance) {
-        if (!keys || !keys.length) {
-            return true;
-        }
-        for (const key of keys) {
-            // each check is for validation so we negate the conditions and invalidate
-            if (!(
-                // check for an exact name match
-                name.indexOf(key) > -1 ||
-                // then an exact path match
-                path.indexOf(key) > -1 ||
-                // next if there is a parent, check for exact parent match
-                (parent !== undefined && parent.name !== undefined &&
-                    parent.name.toLowerCase().indexOf(key) > -1) ||
-                // lastly check to see if the name was an editDistance match
-                editDistance(name, key, maxEditDistance) <= maxEditDistance)) {
-                return false;
-            }
-        }
-        return true;
     }
 
     function nextTab(direction) {
@@ -2418,7 +2378,6 @@ function initSearch(rawSearchIndex) {
         const extraClass = display ? " active" : "";
 
         const output = document.createElement("div");
-        let length = 0;
         if (array.length > 0) {
             output.className = "search-results " + extraClass;
 
@@ -2427,8 +2386,6 @@ function initSearch(rawSearchIndex) {
                 const type = itemTypes[item.ty];
                 const longType = longItemTypes[item.ty];
                 const typeName = longType.length !== 0 ? `${longType}` : "?";
-
-                length += 1;
 
                 const link = document.createElement("a");
                 link.className = "result-" + type;
@@ -2477,7 +2434,7 @@ ${item.displayPath}<span class="${type}">${name}</span>\
                 "href=\"https://docs.rs\">Docs.rs</a> for documentation of crates released on" +
                 " <a href=\"https://crates.io/\">crates.io</a>.</li></ul>";
         }
-        return [output, length];
+        return [output, array.length];
     }
 
     function makeTabHeader(tabNb, text, nbElems) {
@@ -2556,11 +2513,10 @@ ${item.displayPath}<span class="${type}">${name}</span>\
         }
 
         let crates = "";
-        const crates_list = Object.keys(rawSearchIndex);
-        if (crates_list.length > 1) {
+        if (rawSearchIndex.size > 1) {
             crates = " in&nbsp;<div id=\"crate-search-div\"><select id=\"crate-search\">" +
                 "<option value=\"all crates\">all crates</option>";
-            for (const c of crates_list) {
+            for (const c of rawSearchIndex.keys()) {
                 crates += `<option value="${c}" ${c === filterCrates && "selected"}>${c}</option>`;
             }
             crates += "</select></div>";
@@ -2688,7 +2644,7 @@ ${item.displayPath}<span class="${type}">${name}</span>\
         updateSearchHistory(buildUrl(query.original, filterCrates));
 
         showResults(
-            execQuery(query, searchWords, filterCrates, window.currentCrate),
+            execQuery(query, filterCrates, window.currentCrate),
             params.go_to_first,
             filterCrates);
     }
@@ -2720,7 +2676,7 @@ ${item.displayPath}<span class="${type}">${name}</span>\
      *
      * @param {RawFunctionType} type
      */
-    function buildItemSearchType(type, lowercasePaths) {
+    function buildItemSearchType(type, lowercasePaths, isAssocType) {
         const PATH_INDEX_DATA = 0;
         const GENERICS_DATA = 1;
         const BINDINGS_DATA = 2;
@@ -2749,7 +2705,7 @@ ${item.displayPath}<span class="${type}">${name}</span>\
                     //
                     // As a result, the key should never have generics on it.
                     return [
-                        buildItemSearchType(assocType, lowercasePaths).id,
+                        buildItemSearchType(assocType, lowercasePaths, true).id,
                         buildItemSearchTypeAll(constraints, lowercasePaths),
                     ];
                 }));
@@ -2780,7 +2736,7 @@ ${item.displayPath}<span class="${type}">${name}</span>\
         }
         const item = lowercasePaths[pathIndex - 1];
         return {
-            id: buildTypeMapIndex(item.name),
+            id: buildTypeMapIndex(item.name, isAssocType),
             ty: item.ty,
             path: item.path,
             generics,
@@ -2844,14 +2800,119 @@ ${item.displayPath}<span class="${type}">${name}</span>\
         };
     }
 
+    /**
+     * Type fingerprints allow fast, approximate matching of types.
+     *
+     * This algo creates a compact representation of the type set using a Bloom filter.
+     * This fingerprint is used three ways:
+     *
+     * - It accelerates the matching algorithm by checking the function fingerprint against the
+     *   query fingerprint. If any bits are set in the query but not in the function, it can't
+     *   match.
+     *
+     * - The fourth section has the number of distinct items in the set.
+     *   This is the distance function, used for filtering and for sorting.
+     *
+     * [^1]: Distance is the relatively naive metric of counting the number of distinct items in
+     * the function that are not present in the query.
+     *
+     * @param {FunctionType|QueryElement} type - a single type
+     * @param {Uint32Array} output - write the fingerprint to this data structure: uses 128 bits
+     * @param {Set<number>} fps - Set of distinct items
+     */
+    function buildFunctionTypeFingerprint(type, output, fps) {
+        let input = type.id;
+        // All forms of `[]` get collapsed down to one thing in the bloom filter.
+        // Differentiating between arrays and slices, if the user asks for it, is
+        // still done in the matching algorithm.
+        if (input === typeNameIdOfArray || input === typeNameIdOfSlice) {
+            input = typeNameIdOfArrayOrSlice;
+        }
+        // http://burtleburtle.net/bob/hash/integer.html
+        // ~~ is toInt32. It's used before adding, so
+        // the number stays in safe integer range.
+        const hashint1 = k => {
+            k = (~~k + 0x7ed55d16) + (k << 12);
+            k = (k ^ 0xc761c23c) ^ (k >>> 19);
+            k = (~~k + 0x165667b1) + (k << 5);
+            k = (~~k + 0xd3a2646c) ^ (k << 9);
+            k = (~~k + 0xfd7046c5) + (k << 3);
+            return (k ^ 0xb55a4f09) ^ (k >>> 16);
+        };
+        const hashint2 = k => {
+            k = ~k + (k << 15);
+            k ^= k >>> 12;
+            k += k << 2;
+            k ^= k >>> 4;
+            k = Math.imul(k, 2057);
+            return k ^ (k >> 16);
+        };
+        if (input !== null) {
+            const h0a = hashint1(input);
+            const h0b = hashint2(input);
+            // Less Hashing, Same Performance: Building a Better Bloom Filter
+            // doi=10.1.1.72.2442
+            const h1a = ~~(h0a + Math.imul(h0b, 2));
+            const h1b = ~~(h0a + Math.imul(h0b, 3));
+            const h2a = ~~(h0a + Math.imul(h0b, 4));
+            const h2b = ~~(h0a + Math.imul(h0b, 5));
+            output[0] |= (1 << (h0a % 32)) | (1 << (h1b % 32));
+            output[1] |= (1 << (h1a % 32)) | (1 << (h2b % 32));
+            output[2] |= (1 << (h2a % 32)) | (1 << (h0b % 32));
+            fps.add(input);
+        }
+        for (const g of type.generics) {
+            buildFunctionTypeFingerprint(g, output, fps);
+        }
+        const fb = {
+            id: null,
+            ty: 0,
+            generics: [],
+            bindings: new Map(),
+        };
+        for (const [k, v] of type.bindings.entries()) {
+            fb.id = k;
+            fb.generics = v;
+            buildFunctionTypeFingerprint(fb, output, fps);
+        }
+        output[3] = fps.size;
+    }
+
+    /**
+     * Compare the query fingerprint with the function fingerprint.
+     *
+     * @param {{number}} fullId - The function
+     * @param {{Uint32Array}} queryFingerprint - The query
+     * @returns {number|null} - Null if non-match, number if distance
+     *                          This function might return 0!
+     */
+    function compareTypeFingerprints(fullId, queryFingerprint) {
+        const fh0 = functionTypeFingerprint[fullId * 4];
+        const fh1 = functionTypeFingerprint[(fullId * 4) + 1];
+        const fh2 = functionTypeFingerprint[(fullId * 4) + 2];
+        const [qh0, qh1, qh2] = queryFingerprint;
+        // Approximate set intersection with bloom filters.
+        // This can be larger than reality, not smaller, because hashes have
+        // the property that if they've got the same value, they hash to the
+        // same thing. False positives exist, but not false negatives.
+        const [in0, in1, in2] = [fh0 & qh0, fh1 & qh1, fh2 & qh2];
+        // Approximate the set of items in the query but not the function.
+        // This might be smaller than reality, but cannot be bigger.
+        //
+        // | in_ | qh_ | XOR | Meaning                                          |
+        // | --- | --- | --- | ------------------------------------------------ |
+        // |  0  |  0  |  0  | Not present                                      |
+        // |  1  |  0  |  1  | IMPOSSIBLE because `in_` is `fh_ & qh_`          |
+        // |  1  |  1  |  0  | If one or both is false positive, false negative |
+        // |  0  |  1  |  1  | Since in_ has no false negatives, must be real   |
+        if ((in0 ^ qh0) || (in1 ^ qh1) || (in2 ^ qh2)) {
+            return null;
+        }
+        return functionTypeFingerprint[(fullId * 4) + 3];
+    }
+
     function buildIndex(rawSearchIndex) {
         searchIndex = [];
-        /**
-         * List of normalized search words (ASCII lowercased, and undescores removed).
-         *
-         * @type {Array<string>}
-         */
-        const searchWords = [];
         typeNameIdMap = new Map();
         const charA = "A".charCodeAt(0);
         let currentIndex = 0;
@@ -2863,69 +2924,73 @@ ${item.displayPath}<span class="${type}">${name}</span>\
         typeNameIdOfSlice = buildTypeMapIndex("slice");
         typeNameIdOfArrayOrSlice = buildTypeMapIndex("[]");
 
-        for (const crate in rawSearchIndex) {
-            if (!hasOwnPropertyRustdoc(rawSearchIndex, crate)) {
-                continue;
-            }
+        // Function type fingerprints are 128-bit bloom filters that are used to
+        // estimate the distance between function and query.
+        // This loop counts the number of items to allocate a fingerprint for.
+        for (const crate of rawSearchIndex.values()) {
+            // Each item gets an entry in the fingerprint array, and the crate
+            // does, too
+            id += crate.t.length + 1;
+        }
+        functionTypeFingerprint = new Uint32Array((id + 1) * 4);
 
-            let crateSize = 0;
-
-            /**
-             * The raw search data for a given crate. `n`, `t`, `d`, `i`, and `f`
-             * are arrays with the same length. `q`, `a`, and `c` use a sparse
-             * representation for compactness.
-             *
-             * `n[i]` contains the name of an item.
-             *
-             * `t[i]` contains the type of that item
-             * (as a string of characters that represent an offset in `itemTypes`).
-             *
-             * `d[i]` contains the description of that item.
-             *
-             * `q` contains the full paths of the items. For compactness, it is a set of
-             * (index, path) pairs used to create a map. If a given index `i` is
-             * not present, this indicates "same as the last index present".
-             *
-             * `i[i]` contains an item's parent, usually a module. For compactness,
-             * it is a set of indexes into the `p` array.
-             *
-             * `f[i]` contains function signatures, or `0` if the item isn't a function.
-             * Functions are themselves encoded as arrays. The first item is a list of
-             * types representing the function's inputs, and the second list item is a list
-             * of types representing the function's output. Tuples are flattened.
-             * Types are also represented as arrays; the first item is an index into the `p`
-             * array, while the second is a list of types representing any generic parameters.
-             *
-             * b[i] contains an item's impl disambiguator. This is only present if an item
-             * is defined in an impl block and, the impl block's type has more than one associated
-             * item with the same name.
-             *
-             * `a` defines aliases with an Array of pairs: [name, offset], where `offset`
-             * points into the n/t/d/q/i/f arrays.
-             *
-             * `doc` contains the description of the crate.
-             *
-             * `p` is a list of path/type pairs. It is used for parents and function parameters.
-             *
-             * `c` is an array of item indices that are deprecated.
-             *
-             * @type {{
-             *   doc: string,
-             *   a: Object,
-             *   n: Array<string>,
-             *   t: String,
-             *   d: Array<string>,
-             *   q: Array<[Number, string]>,
-             *   i: Array<Number>,
-             *   f: Array<RawFunctionSearchType>,
-             *   p: Array<Object>,
-             *   b: Array<[Number, String]>,
-             *   c: Array<Number>
-             * }}
-             */
-            const crateCorpus = rawSearchIndex[crate];
-
-            searchWords.push(crate);
+        // This loop actually generates the search item indexes, including
+        // normalized names, type signature objects and fingerprints, and aliases.
+        id = 0;
+        /**
+         * The raw search data for a given crate. `n`, `t`, `d`, `i`, and `f`
+         * are arrays with the same length. `q`, `a`, and `c` use a sparse
+         * representation for compactness.
+         *
+         * `n[i]` contains the name of an item.
+         *
+         * `t[i]` contains the type of that item
+         * (as a string of characters that represent an offset in `itemTypes`).
+         *
+         * `d[i]` contains the description of that item.
+         *
+         * `q` contains the full paths of the items. For compactness, it is a set of
+         * (index, path) pairs used to create a map. If a given index `i` is
+         * not present, this indicates "same as the last index present".
+         *
+         * `i[i]` contains an item's parent, usually a module. For compactness,
+         * it is a set of indexes into the `p` array.
+         *
+         * `f[i]` contains function signatures, or `0` if the item isn't a function.
+         * Functions are themselves encoded as arrays. The first item is a list of
+         * types representing the function's inputs, and the second list item is a list
+         * of types representing the function's output. Tuples are flattened.
+         * Types are also represented as arrays; the first item is an index into the `p`
+         * array, while the second is a list of types representing any generic parameters.
+         *
+         * b[i] contains an item's impl disambiguator. This is only present if an item
+         * is defined in an impl block and, the impl block's type has more than one associated
+         * item with the same name.
+         *
+         * `a` defines aliases with an Array of pairs: [name, offset], where `offset`
+         * points into the n/t/d/q/i/f arrays.
+         *
+         * `doc` contains the description of the crate.
+         *
+         * `p` is a list of path/type pairs. It is used for parents and function parameters.
+         *
+         * `c` is an array of item indices that are deprecated.
+         *
+         * @type {{
+         *   doc: string,
+         *   a: Object,
+         *   n: Array<string>,
+         *   t: String,
+         *   d: Array<string>,
+         *   q: Array<[Number, string]>,
+         *   i: Array<Number>,
+         *   f: Array<RawFunctionSearchType>,
+         *   p: Array<Object>,
+         *   b: Array<[Number, String]>,
+         *   c: Array<Number>
+         * }}
+         */
+        for (const [crate, crateCorpus] of rawSearchIndex) {
             // This object should have exactly the same set of fields as the "row"
             // object defined below. Your JavaScript runtime will thank you.
             // https://mathiasbynens.be/notes/shapes-ics
@@ -2938,6 +3003,7 @@ ${item.displayPath}<span class="${type}">${name}</span>\
                 parent: undefined,
                 type: null,
                 id: id,
+                word: crate,
                 normalizedName: crate.indexOf("_") === -1 ? crate : crate.replace(/_/g, ""),
                 deprecated: null,
                 implDisambiguator: null,
@@ -3005,13 +3071,34 @@ ${item.displayPath}<span class="${type}">${name}</span>\
             len = itemTypes.length;
             for (let i = 0; i < len; ++i) {
                 let word = "";
-                // This object should have exactly the same set of fields as the "crateRow"
-                // object defined above.
                 if (typeof itemNames[i] === "string") {
                     word = itemNames[i].toLowerCase();
                 }
-                searchWords.push(word);
                 const path = itemPaths.has(i) ? itemPaths.get(i) : lastPath;
+                let type = null;
+                if (itemFunctionSearchTypes[i] !== 0) {
+                    type = buildFunctionSearchType(
+                        itemFunctionSearchTypes[i],
+                        lowercasePaths
+                    );
+                    if (type) {
+                        const fp = functionTypeFingerprint.subarray(id * 4, (id + 1) * 4);
+                        const fps = new Set();
+                        for (const t of type.inputs) {
+                            buildFunctionTypeFingerprint(t, fp, fps);
+                        }
+                        for (const t of type.output) {
+                            buildFunctionTypeFingerprint(t, fp, fps);
+                        }
+                        for (const w of type.where_clause) {
+                            for (const t of w) {
+                                buildFunctionTypeFingerprint(t, fp, fps);
+                            }
+                        }
+                    }
+                }
+                // This object should have exactly the same set of fields as the "crateRow"
+                // object defined above.
                 const row = {
                     crate: crate,
                     ty: itemTypes.charCodeAt(i) - charA,
@@ -3019,11 +3106,9 @@ ${item.displayPath}<span class="${type}">${name}</span>\
                     path: path,
                     desc: itemDescs[i],
                     parent: itemParentIdxs[i] > 0 ? paths[itemParentIdxs[i] - 1] : undefined,
-                    type: buildFunctionSearchType(
-                        itemFunctionSearchTypes[i],
-                        lowercasePaths
-                    ),
+                    type,
                     id: id,
+                    word,
                     normalizedName: word.indexOf("_") === -1 ? word : word.replace(/_/g, ""),
                     deprecated: deprecatedItems.has(i),
                     implDisambiguator: implDisambiguator.has(i) ? implDisambiguator.get(i) : null,
@@ -3031,14 +3116,13 @@ ${item.displayPath}<span class="${type}">${name}</span>\
                 id += 1;
                 searchIndex.push(row);
                 lastPath = row.path;
-                crateSize += 1;
             }
 
             if (aliases) {
                 const currentCrateAliases = new Map();
                 ALIASES.set(crate, currentCrateAliases);
                 for (const alias_name in aliases) {
-                    if (!hasOwnPropertyRustdoc(aliases, alias_name)) {
+                    if (!Object.prototype.hasOwnProperty.call(aliases, alias_name)) {
                         continue;
                     }
 
@@ -3054,9 +3138,8 @@ ${item.displayPath}<span class="${type}">${name}</span>\
                     }
                 }
             }
-            currentIndex += crateSize;
+            currentIndex += itemTypes.length;
         }
-        return searchWords;
     }
 
     /**
@@ -3235,10 +3318,7 @@ ${item.displayPath}<span class="${type}">${name}</span>\
         search(true);
     }
 
-    /**
-     *  @type {Array<string>}
-     */
-    const searchWords = buildIndex(rawSearchIndex);
+    buildIndex(rawSearchIndex);
     if (typeof window !== "undefined") {
         registerSearchEvents();
         // If there's a search term in the URL, execute the search now.
@@ -3252,7 +3332,6 @@ ${item.displayPath}<span class="${type}">${name}</span>\
         exports.execQuery = execQuery;
         exports.parseQuery = parseQuery;
     }
-    return searchWords;
 }
 
 if (typeof window !== "undefined") {
@@ -3263,7 +3342,7 @@ if (typeof window !== "undefined") {
 } else {
     // Running in Node, not a browser. Run initSearch just to produce the
     // exports.
-    initSearch({});
+    initSearch(new Map());
 }
 
 

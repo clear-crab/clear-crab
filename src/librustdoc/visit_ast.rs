@@ -163,15 +163,16 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
                     .iter()
                     .filter_map(|attr| {
                         Cfg::parse(attr.meta_item()?)
-                            .map_err(|e| self.cx.sess().diagnostic().span_err(e.span, e.msg))
+                            .map_err(|e| self.cx.sess().dcx().span_err(e.span, e.msg))
                             .ok()
                     })
                     .collect::<Vec<_>>()
             })
-            .chain(
-                [Cfg::Cfg(sym::test, None), Cfg::Cfg(sym::doc, None), Cfg::Cfg(sym::doctest, None)]
-                    .into_iter(),
-            )
+            .chain([
+                Cfg::Cfg(sym::test, None),
+                Cfg::Cfg(sym::doc, None),
+                Cfg::Cfg(sym::doctest, None),
+            ])
             .collect();
 
         self.cx.cache.exact_paths = self.exact_paths;
@@ -275,7 +276,7 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
         };
 
         let is_private = !self.cx.cache.effective_visibilities.is_directly_public(tcx, ori_res_did);
-        let item = tcx.hir().get_by_def_id(res_did);
+        let item = tcx.hir_node_by_def_id(res_did);
 
         if !please_inline {
             let inherits_hidden = !document_hidden && inherits_doc_hidden(tcx, res_did, None);

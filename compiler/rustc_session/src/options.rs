@@ -2,7 +2,8 @@ use crate::config::*;
 
 use crate::search_paths::SearchPath;
 use crate::utils::NativeLib;
-use crate::{lint, EarlyErrorHandler};
+use crate::{lint, EarlyDiagCtxt};
+use rustc_data_structures::fx::FxIndexMap;
 use rustc_data_structures::profiling::TimePassesFormat;
 use rustc_data_structures::stable_hasher::Hash64;
 use rustc_errors::ColorConfig;
@@ -150,6 +151,9 @@ top_level_options!(
 
         target_triple: TargetTriple [TRACKED],
 
+        /// Effective logical environment used by `env!`/`option_env!` macros
+        logical_env: FxIndexMap<String, String> [TRACKED],
+
         test: bool [TRACKED],
         error_format: ErrorOutputType [UNTRACKED],
         diagnostic_width: Option<usize> [UNTRACKED],
@@ -251,10 +255,10 @@ macro_rules! options {
 
     impl $struct_name {
         pub fn build(
-            handler: &EarlyErrorHandler,
+            early_dcx: &EarlyDiagCtxt,
             matches: &getopts::Matches,
         ) -> $struct_name {
-            build_options(handler, matches, $stat, $prefix, $outputname)
+            build_options(early_dcx, matches, $stat, $prefix, $outputname)
         }
 
         fn dep_tracking_hash(&self, for_crate_hash: bool, error_format: ErrorOutputType) -> u64 {
@@ -315,7 +319,7 @@ type OptionSetter<O> = fn(&mut O, v: Option<&str>) -> bool;
 type OptionDescrs<O> = &'static [(&'static str, OptionSetter<O>, &'static str, &'static str)];
 
 fn build_options<O: Default>(
-    handler: &EarlyErrorHandler,
+    early_dcx: &EarlyDiagCtxt,
     matches: &getopts::Matches,
     descrs: OptionDescrs<O>,
     prefix: &str,
@@ -333,12 +337,12 @@ fn build_options<O: Default>(
             Some((_, setter, type_desc, _)) => {
                 if !setter(&mut op, value) {
                     match value {
-                        None => handler.early_error(
+                        None => early_dcx.early_error(
                             format!(
                                 "{outputname} option `{key}` requires {type_desc} ({prefix} {key}=<value>)"
                             ),
                         ),
-                        Some(value) => handler.early_error(
+                        Some(value) => early_dcx.early_error(
                             format!(
                                 "incorrect value `{value}` for {outputname} option `{key}` - {type_desc} was expected"
                             ),
@@ -346,7 +350,7 @@ fn build_options<O: Default>(
                     }
                 }
             }
-            None => handler.early_error(format!("unknown {outputname} option: `{key}`")),
+            None => early_dcx.early_error(format!("unknown {outputname} option: `{key}`")),
         }
     }
     return op;
@@ -392,8 +396,7 @@ mod desc {
     pub const parse_instrument_xray: &str = "either a boolean (`yes`, `no`, `on`, `off`, etc), or a comma separated list of settings: `always` or `never` (mutually exclusive), `ignore-loops`, `instruction-threshold=N`, `skip-entry`, `skip-exit`";
     pub const parse_unpretty: &str = "`string` or `string=string`";
     pub const parse_treat_err_as_bug: &str = "either no value or a non-negative number";
-    pub const parse_trait_solver: &str =
-        "one of the supported solver modes (`classic`, `next`, or `next-coherence`)";
+    pub const parse_next_solver_config: &str = "a comma separated list of solver configurations: `globally` (default), `coherence`, `dump-tree`, `dump-tree-on-error";
     pub const parse_lto: &str =
         "either a boolean (`yes`, `no`, `on`, `off`, etc), `thin`, `fat`, or omitted";
     pub const parse_linker_plugin_lto: &str =
@@ -425,7 +428,6 @@ mod desc {
         "a `,` separated combination of `bti`, `b-key`, `pac-ret`, or `leaf`";
     pub const parse_proc_macro_execution_strategy: &str =
         "one of supported execution strategies (`same-thread`, or `cross-thread`)";
-    pub const parse_dump_solver_proof_tree: &str = "one of: `always`, `on-request`, `on-error`";
     pub const parse_remap_path_scope: &str = "comma separated list of scopes: `macro`, `diagnostics`, `unsplit-debuginfo`, `split-debuginfo`, `split-debuginfo-path`, `object`, `all`";
     pub const parse_inlining_threshold: &str =
         "either a boolean (`yes`, `no`, `on`, `off`, etc), or a non-negative number";
@@ -1028,15 +1030,48 @@ mod parse {
         }
     }
 
-    pub(crate) fn parse_trait_solver(slot: &mut TraitSolver, v: Option<&str>) -> bool {
-        match v {
-            Some("classic") => *slot = TraitSolver::Classic,
-            Some("next") => *slot = TraitSolver::Next,
-            Some("next-coherence") => *slot = TraitSolver::NextCoherence,
-            // default trait solver is subject to change..
-            Some("default") => *slot = TraitSolver::Classic,
-            _ => return false,
+    pub(crate) fn parse_next_solver_config(
+        slot: &mut Option<NextSolverConfig>,
+        v: Option<&str>,
+    ) -> bool {
+        if let Some(config) = v {
+            let mut coherence = false;
+            let mut globally = true;
+            let mut dump_tree = None;
+            for c in config.split(',') {
+                match c {
+                    "globally" => globally = true,
+                    "coherence" => {
+                        globally = false;
+                        coherence = true;
+                    }
+                    "dump-tree" => {
+                        if dump_tree.replace(DumpSolverProofTree::Always).is_some() {
+                            return false;
+                        }
+                    }
+                    "dump-tree-on-error" => {
+                        if dump_tree.replace(DumpSolverProofTree::OnError).is_some() {
+                            return false;
+                        }
+                    }
+                    _ => return false,
+                }
+            }
+
+            *slot = Some(NextSolverConfig {
+                coherence: coherence || globally,
+                globally,
+                dump_tree: dump_tree.unwrap_or_default(),
+            });
+        } else {
+            *slot = Some(NextSolverConfig {
+                coherence: true,
+                globally: true,
+                dump_tree: Default::default(),
+            });
         }
+
         true
     }
 
@@ -1301,19 +1336,6 @@ mod parse {
         true
     }
 
-    pub(crate) fn parse_dump_solver_proof_tree(
-        slot: &mut DumpSolverProofTree,
-        v: Option<&str>,
-    ) -> bool {
-        match v {
-            None | Some("always") => *slot = DumpSolverProofTree::Always,
-            Some("never") => *slot = DumpSolverProofTree::Never,
-            Some("on-error") => *slot = DumpSolverProofTree::OnError,
-            _ => return false,
-        };
-        true
-    }
-
     pub(crate) fn parse_inlining_threshold(slot: &mut InliningThreshold, v: Option<&str>) -> bool {
         match v {
             Some("always" | "yes") => {
@@ -1548,6 +1570,8 @@ options! {
         "compress debug info sections (none, zlib, zstd, default: none)"),
     deduplicate_diagnostics: bool = (true, parse_bool, [UNTRACKED],
         "deduplicate identical diagnostics (default: yes)"),
+    default_hidden_visibility: Option<bool> = (None, parse_opt_bool, [TRACKED],
+        "overrides the `default_hidden_visibility` setting of the target"),
     dep_info_omit_d_target: bool = (false, parse_bool, [TRACKED],
         "in dep-info output, omit targets for tracking dependencies of the dep-info files \
         themselves (default: no)"),
@@ -1585,9 +1609,6 @@ options! {
         "output statistics about monomorphization collection"),
     dump_mono_stats_format: DumpMonoStatsFormat = (DumpMonoStatsFormat::Markdown, parse_dump_mono_stats, [UNTRACKED],
         "the format to use for -Z dump-mono-stats (`markdown` (default) or `json`)"),
-    dump_solver_proof_tree: DumpSolverProofTree = (DumpSolverProofTree::Never, parse_dump_solver_proof_tree, [UNTRACKED],
-        "dump a proof tree for every goal evaluated by the new trait solver. If the flag is specified without any options after it
-        then it defaults to `always`. If the flag is not specified at all it defaults to `on-request`."),
     dwarf_version: Option<u32> = (None, parse_opt_number, [TRACKED],
         "version of DWARF debug information to emit (default: 2 or 4, depending on platform)"),
     dylib_lto: bool = (false, parse_bool, [UNTRACKED],
@@ -1716,6 +1737,8 @@ options! {
         "the size at which the `large_assignments` lint starts to be emitted"),
     mutable_noalias: bool = (true, parse_bool, [TRACKED],
         "emit noalias metadata for mutable references (default: yes)"),
+    next_solver: Option<NextSolverConfig> = (None, parse_next_solver_config, [TRACKED],
+        "enable and configure the next generation trait solver used by rustc"),
     nll_facts: bool = (false, parse_bool, [UNTRACKED],
         "dump facts from NLL analysis into side files (default: no)"),
     nll_facts_dir: String = ("nll-facts".to_string(), parse_string, [UNTRACKED],
@@ -1916,8 +1939,6 @@ written to standard error output)"),
         "for every macro invocation, print its name and arguments (default: no)"),
     track_diagnostics: bool = (false, parse_bool, [UNTRACKED],
         "tracks where in rustc a diagnostic was emitted"),
-    trait_solver: TraitSolver = (TraitSolver::Classic, parse_trait_solver, [TRACKED],
-        "specify the trait solver mode used by rustc (default: classic)"),
     // Diagnostics are considered side-effects of a query (see `QuerySideEffects`) and are saved
     // alongside query results and changes to translation options can affect diagnostics - so
     // translation options should be tracked.

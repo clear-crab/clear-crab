@@ -22,7 +22,7 @@ use rustc_middle::ty::{self, GlobalCtxt, RegisteredTools, TyCtxt};
 use rustc_middle::util::Providers;
 use rustc_mir_build as mir_build;
 use rustc_parse::{parse_crate_from_file, parse_crate_from_source_str, validate_attr};
-use rustc_passes::{self, abi_test, hir_stats, layout_test};
+use rustc_passes::{abi_test, hir_stats, layout_test};
 use rustc_resolve::Resolver;
 use rustc_session::code_stats::VTableSizeInfo;
 use rustc_session::config::{CrateType, Input, OutFileName, OutputFilenames, OutputType};
@@ -56,7 +56,7 @@ pub fn parse<'a>(sess: &'a Session) -> PResult<'a, ast::Crate> {
     }
 
     if let Some(ref s) = sess.opts.unstable_opts.show_span {
-        rustc_ast_passes::show_span::run(sess.diagnostic(), s, &krate);
+        rustc_ast_passes::show_span::run(sess.dcx(), s, &krate);
     }
 
     if sess.opts.unstable_opts.hir_stats {
@@ -267,7 +267,7 @@ fn configure_and_expand(
             is_proc_macro_crate,
             has_proc_macro_decls,
             is_test_crate,
-            sess.diagnostic(),
+            sess.dcx(),
         )
     });
 
@@ -526,7 +526,7 @@ fn write_out_deps(tcx: TyCtxt<'_>, outputs: &OutputFilenames, out_filenames: &[P
     match result {
         Ok(_) => {
             if sess.opts.json_artifact_notifications {
-                sess.diagnostic().emit_artifact_notification(deps_filename, "dep-info");
+                sess.dcx().emit_artifact_notification(deps_filename, "dep-info");
             }
         }
         Err(error) => {

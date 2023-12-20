@@ -676,6 +676,19 @@ impl Pat {
         });
         could_be_never_pattern
     }
+
+    /// Whether this contains a `!` pattern. This in particular means that a feature gate error will
+    /// be raised if the feature is off. Used to avoid gating the feature twice.
+    pub fn contains_never_pattern(&self) -> bool {
+        let mut contains_never_pattern = false;
+        self.walk(&mut |pat| {
+            if matches!(pat.kind, PatKind::Never) {
+                contains_never_pattern = true;
+            }
+            true
+        });
+        contains_never_pattern
+    }
 }
 
 /// A single field in a struct pattern.
@@ -2831,6 +2844,28 @@ impl Item {
     /// Return the span that encompasses the attributes.
     pub fn span_with_attributes(&self) -> Span {
         self.attrs.iter().fold(self.span, |acc, attr| acc.to(attr.span))
+    }
+
+    pub fn opt_generics(&self) -> Option<&Generics> {
+        match &self.kind {
+            ItemKind::ExternCrate(_)
+            | ItemKind::Use(_)
+            | ItemKind::Mod(_, _)
+            | ItemKind::ForeignMod(_)
+            | ItemKind::GlobalAsm(_)
+            | ItemKind::MacCall(_)
+            | ItemKind::MacroDef(_) => None,
+            ItemKind::Static(_) => None,
+            ItemKind::Const(i) => Some(&i.generics),
+            ItemKind::Fn(i) => Some(&i.generics),
+            ItemKind::TyAlias(i) => Some(&i.generics),
+            ItemKind::TraitAlias(generics, _)
+            | ItemKind::Enum(_, generics)
+            | ItemKind::Struct(_, generics)
+            | ItemKind::Union(_, generics) => Some(&generics),
+            ItemKind::Trait(i) => Some(&i.generics),
+            ItemKind::Impl(i) => Some(&i.generics),
+        }
     }
 }
 

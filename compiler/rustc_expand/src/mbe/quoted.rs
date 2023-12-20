@@ -84,7 +84,7 @@ pub(super) fn parse(
                                                     "invalid fragment specifier `{}`",
                                                     frag.name
                                                 );
-                                                sess.span_diagnostic
+                                                sess.dcx
                                                     .struct_span_err(span, msg)
                                                     .help(VALID_FRAGMENT_NAMES_MSG)
                                                     .emit();
@@ -151,7 +151,7 @@ fn parse_tree<'a>(
             // during parsing.
             let mut next = outer_trees.next();
             let mut trees: Box<dyn Iterator<Item = &tokenstream::TokenTree>>;
-            if let Some(tokenstream::TokenTree::Delimited(_, Delimiter::Invisible, tts)) = next {
+            if let Some(tokenstream::TokenTree::Delimited(.., Delimiter::Invisible, tts)) = next {
                 trees = Box::new(tts.trees());
                 next = trees.next();
             } else {
@@ -160,7 +160,7 @@ fn parse_tree<'a>(
 
             match next {
                 // `tree` is followed by a delimited set of token trees.
-                Some(&tokenstream::TokenTree::Delimited(delim_span, delim, ref tts)) => {
+                Some(&tokenstream::TokenTree::Delimited(delim_span, _, delim, ref tts)) => {
                     if parsing_patterns {
                         if delim != Delimiter::Parenthesis {
                             span_dollar_dollar_or_metavar_in_the_lhs_err(
@@ -195,7 +195,7 @@ fn parse_tree<'a>(
                             _ => {
                                 let tok = pprust::token_kind_to_string(&token::OpenDelim(delim));
                                 let msg = format!("expected `(` or `{{`, found `{tok}`");
-                                sess.span_diagnostic.span_err(delim_span.entire(), msg);
+                                sess.dcx.span_err(delim_span.entire(), msg);
                             }
                         }
                     }
@@ -244,7 +244,7 @@ fn parse_tree<'a>(
                 Some(tokenstream::TokenTree::Token(token, _)) => {
                     let msg =
                         format!("expected identifier, found `{}`", pprust::token_to_string(token),);
-                    sess.span_diagnostic.span_err(token.span, msg);
+                    sess.dcx.span_err(token.span, msg);
                     TokenTree::MetaVar(token.span, Ident::empty())
                 }
 
@@ -258,8 +258,9 @@ fn parse_tree<'a>(
 
         // `tree` is the beginning of a delimited set of tokens (e.g., `(` or `{`). We need to
         // descend into the delimited set and further parse it.
-        &tokenstream::TokenTree::Delimited(span, delim, ref tts) => TokenTree::Delimited(
+        &tokenstream::TokenTree::Delimited(span, spacing, delim, ref tts) => TokenTree::Delimited(
             span,
+            spacing,
             Delimited {
                 delim,
                 tts: parse(tts, parsing_patterns, sess, node_id, features, edition),
@@ -324,7 +325,7 @@ fn parse_sep_and_kleene_op<'a>(
             // #2 is the `?` Kleene op, which does not take a separator (error)
             Ok(Ok((KleeneOp::ZeroOrOne, span))) => {
                 // Error!
-                sess.span_diagnostic.span_err(
+                sess.dcx.span_err(
                     token.span,
                     "the `?` macro repetition operator does not take a separator",
                 );
@@ -345,7 +346,7 @@ fn parse_sep_and_kleene_op<'a>(
     };
 
     // If we ever get to this point, we have experienced an "unexpected token" error
-    sess.span_diagnostic.span_err(span, "expected one of: `*`, `+`, or `?`");
+    sess.dcx.span_err(span, "expected one of: `*`, `+`, or `?`");
 
     // Return a dummy
     (None, KleeneToken::new(KleeneOp::ZeroOrMore, span))
@@ -355,9 +356,8 @@ fn parse_sep_and_kleene_op<'a>(
 //
 // For example, `macro_rules! foo { ( ${length()} ) => {} }`
 fn span_dollar_dollar_or_metavar_in_the_lhs_err(sess: &ParseSess, token: &Token) {
-    sess.span_diagnostic
-        .span_err(token.span, format!("unexpected token: {}", pprust::token_to_string(token)));
-    sess.span_diagnostic.span_note(
+    sess.dcx.span_err(token.span, format!("unexpected token: {}", pprust::token_to_string(token)));
+    sess.dcx.span_note(
         token.span,
         "`$$` and meta-variable expressions are not allowed inside macro parameter definitions",
     );

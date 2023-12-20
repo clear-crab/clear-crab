@@ -5,6 +5,7 @@
 
 use std::cell::Cell;
 
+use crate::abi::{FnAbi, Layout, LayoutShape};
 use crate::mir::alloc::{AllocId, GlobalAlloc};
 use crate::mir::mono::{Instance, InstanceDef, StaticDef};
 use crate::mir::Body;
@@ -69,8 +70,17 @@ pub trait Context {
     /// Returns if the ADT is a box.
     fn adt_is_box(&self, def: AdtDef) -> bool;
 
+    /// Returns whether this ADT is simd.
+    fn adt_is_simd(&self, def: AdtDef) -> bool;
+
+    /// Returns whether this definition is a C string.
+    fn adt_is_cstr(&self, def: AdtDef) -> bool;
+
     /// Retrieve the function signature for the given generic arguments.
     fn fn_sig(&self, def: FnDef, args: &GenericArgs) -> PolyFnSig;
+
+    /// Retrieve the closure signature for the given generic arguments.
+    fn closure_sig(&self, args: &GenericArgs) -> PolyFnSig;
 
     /// The number of variants in this ADT.
     fn adt_variants_len(&self, def: AdtDef) -> usize;
@@ -164,6 +174,15 @@ pub trait Context {
 
     /// Return information about the target machine.
     fn target_info(&self) -> MachineInfo;
+
+    /// Get an instance ABI.
+    fn instance_abi(&self, def: InstanceDef) -> Result<FnAbi, Error>;
+
+    /// Get the layout of a type.
+    fn ty_layout(&self, ty: Ty) -> Result<Layout, Error>;
+
+    /// Get the layout shape.
+    fn layout_shape(&self, id: Layout) -> LayoutShape;
 }
 
 // A thread local variable that stores a pointer to the tables mapping between TyCtxt

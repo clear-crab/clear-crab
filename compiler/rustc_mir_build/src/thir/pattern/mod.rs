@@ -2,11 +2,8 @@
 
 mod check_match;
 mod const_to_pat;
-pub(crate) mod deconstruct_pat;
-mod usefulness;
 
 pub(crate) use self::check_match::check_match;
-pub(crate) use self::usefulness::MatchCheckCtxt;
 
 use crate::errors::*;
 use crate::thir::util::UserAnnotatedTyHelpers;
@@ -177,7 +174,7 @@ impl<'a, 'tcx> PatCtxt<'a, 'tcx> {
         span: Span,
     ) -> Result<PatKind<'tcx>, ErrorGuaranteed> {
         if lo_expr.is_none() && hi_expr.is_none() {
-            let msg = format!("found twice-open range pattern (`..`) outside of error recovery");
+            let msg = "found twice-open range pattern (`..`) outside of error recovery";
             return Err(self.tcx.sess.span_delayed_bug(span, msg));
         }
 

@@ -32,7 +32,7 @@ use rustc_middle::ty::{self, Instance, ParamEnv, Ty, TypeVisitableExt};
 use rustc_session::config::{self, DebugInfo};
 use rustc_session::Session;
 use rustc_span::symbol::Symbol;
-use rustc_span::{self, BytePos, Pos, SourceFile, SourceFileAndLine, SourceFileHash, Span};
+use rustc_span::{BytePos, Pos, SourceFile, SourceFileAndLine, SourceFileHash, Span};
 use rustc_target::abi::Size;
 
 use libc::c_uint;
@@ -112,7 +112,7 @@ impl<'ll, 'tcx> CodegenUnitDebugContext<'ll, 'tcx> {
                 llvm::LLVMRustAddModuleFlag(
                     self.llmod,
                     llvm::LLVMModFlagBehavior::Warning,
-                    "Dwarf Version\0".as_ptr().cast(),
+                    c"Dwarf Version".as_ptr().cast(),
                     dwarf_version,
                 );
             } else {
@@ -120,17 +120,16 @@ impl<'ll, 'tcx> CodegenUnitDebugContext<'ll, 'tcx> {
                 llvm::LLVMRustAddModuleFlag(
                     self.llmod,
                     llvm::LLVMModFlagBehavior::Warning,
-                    "CodeView\0".as_ptr().cast(),
+                    c"CodeView".as_ptr().cast(),
                     1,
                 )
             }
 
             // Prevent bitcode readers from deleting the debug info.
-            let ptr = "Debug Info Version\0".as_ptr();
             llvm::LLVMRustAddModuleFlag(
                 self.llmod,
                 llvm::LLVMModFlagBehavior::Warning,
-                ptr.cast(),
+                c"Debug Info Version".as_ptr().cast(),
                 llvm::LLVMRustDebugMetadataVersion(),
             );
         }

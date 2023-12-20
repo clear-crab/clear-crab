@@ -548,7 +548,7 @@ dependencies = [
  "futures",
  "if_chain",
  "itertools",
- "parking_lot 0.12.1",
+ "parking_lot",
  "quote",
  "regex",
  "rustc_tools_util",
@@ -598,7 +598,7 @@ dependencies = [
  "itertools",
  "quine-mc_cluskey",
  "regex",
- "regex-syntax 0.7.2",
+ "regex-syntax 0.8.2",
  "rustc-semver",
  "semver",
  "serde",
@@ -864,16 +864,6 @@ checksum = "1bfb12502f3fc46cca1bb51ac28df9d618d813cdc3d2f25b9fe775a34af26bb3"
 dependencies = [
  "generic-array",
  "typenum",
-]
-
-[[package]]
-name = "cstr"
-version = "0.2.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c11a39d776a3b35896711da8a04dc1835169dcd36f710878187637314e47941b"
-dependencies = [
- "proc-macro2",
- "quote",
 ]
 
 [[package]]
@@ -2366,13 +2356,13 @@ dependencies = [
 
 [[package]]
 name = "measureme"
-version = "10.1.1"
+version = "10.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1930d162935fecd56fc4e0f6729eb3483bac1264542eb4ea31570b86a434b6bc"
+checksum = "45e381dcdad44c3c435f8052b08c5c4a1449c48ab56f312345eae12d7a693dbe"
 dependencies = [
  "log",
  "memmap2",
- "parking_lot 0.11.2",
+ "parking_lot",
  "perf-event-open-sys",
  "rustc-hash",
  "smallvec",
@@ -2792,37 +2782,12 @@ dependencies = [
 
 [[package]]
 name = "parking_lot"
-version = "0.11.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d17b78036a60663b797adeaee46f5c9dfebb86948d1255007a1d6be0271ff99"
-dependencies = [
- "instant",
- "lock_api",
- "parking_lot_core 0.8.6",
-]
-
-[[package]]
-name = "parking_lot"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3742b2c103b9f06bc9fff0a37ff4912935851bee6d36f3c02bcc755bcfec228f"
 dependencies = [
  "lock_api",
- "parking_lot_core 0.9.8",
-]
-
-[[package]]
-name = "parking_lot_core"
-version = "0.8.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60a2cfe6f0ad2bfc16aefa463b497d5c7a5ecd44a23efa72aa342d90177356dc"
-dependencies = [
- "cfg-if",
- "instant",
- "libc",
- "redox_syscall 0.2.16",
- "smallvec",
- "winapi",
+ "parking_lot_core",
 ]
 
 [[package]]
@@ -3231,6 +3196,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "436b050e76ed2903236f032a59761c1eb99e1b0aead2c257922771dab1fc8c78"
 
 [[package]]
+name = "regex-syntax"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c08c74e62047bb2de4ff487b251e4a92e24f48745648451635cec7d591162d9f"
+
+[[package]]
 name = "remote-test-client"
 version = "0.1.0"
 
@@ -3582,7 +3553,6 @@ name = "rustc_codegen_llvm"
 version = "0.0.0"
 dependencies = [
  "bitflags 1.3.2",
- "cstr",
  "itertools",
  "libc",
  "measureme",
@@ -3693,7 +3663,7 @@ dependencies = [
  "libc",
  "measureme",
  "memmap2",
- "parking_lot 0.12.1",
+ "parking_lot",
  "portable-atomic",
  "rustc-hash",
  "rustc-rayon",
@@ -3756,6 +3726,7 @@ dependencies = [
  "rustc_monomorphize",
  "rustc_parse",
  "rustc_passes",
+ "rustc_pattern_analysis",
  "rustc_privacy",
  "rustc_query_system",
  "rustc_resolve",
@@ -4229,6 +4200,7 @@ dependencies = [
  "rustc_infer",
  "rustc_macros",
  "rustc_middle",
+ "rustc_pattern_analysis",
  "rustc_session",
  "rustc_span",
  "rustc_target",
@@ -4365,6 +4337,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustc_pattern_analysis"
+version = "0.0.0"
+dependencies = [
+ "rustc_apfloat",
+ "rustc_arena",
+ "rustc_data_structures",
+ "rustc_errors",
+ "rustc_fluent_macro",
+ "rustc_hir",
+ "rustc_index",
+ "rustc_macros",
+ "rustc_middle",
+ "rustc_session",
+ "rustc_span",
+ "rustc_target",
+ "smallvec",
+ "tracing",
+ "typed-arena",
+]
+
+[[package]]
 name = "rustc_privacy"
 version = "0.0.0"
 dependencies = [
@@ -4406,7 +4399,7 @@ dependencies = [
 name = "rustc_query_system"
 version = "0.0.0"
 dependencies = [
- "parking_lot 0.12.1",
+ "parking_lot",
  "rustc-rayon-core",
  "rustc_ast",
  "rustc_data_structures",
@@ -5123,7 +5116,7 @@ checksum = "f91138e76242f575eb1d3b38b4f1362f10d3a43f47d182a5b359af488a02293b"
 dependencies = [
  "new_debug_unreachable",
  "once_cell",
- "parking_lot 0.12.1",
+ "parking_lot",
  "phf_shared",
  "precomputed-hash",
  "serde",
@@ -5648,7 +5641,7 @@ dependencies = [
  "matchers",
  "nu-ansi-term",
  "once_cell",
- "parking_lot 0.12.1",
+ "parking_lot",
  "regex",
  "sharded-slab",
  "smallvec",
@@ -5696,6 +5689,12 @@ checksum = "b6d3364c5e96cb2ad1603037ab253ddd34d7fb72a58bdddf4b7350760fc69a46"
 dependencies = [
  "rustc-hash",
 ]
+
+[[package]]
+name = "typed-arena"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6af6ae20167a9ece4bcb41af5b80f8a1f1df981f6391189ce00fd257af04126a"
 
 [[package]]
 name = "typenum"

@@ -10,7 +10,7 @@ use std::{
     iter,
 };
 
-use base_db::CrateId;
+use base_db::{salsa::Cycle, CrateId};
 use chalk_ir::{
     cast::Cast, fold::Shift, fold::TypeFoldable, interner::HasInterner, Mutability, Safety,
 };
@@ -113,7 +113,9 @@ pub struct TyLoweringContext<'a> {
     pub db: &'a dyn HirDatabase,
     resolver: &'a Resolver,
     in_binders: DebruijnIndex,
-    owner: TypeOwnerId,
+    // FIXME: Should not be an `Option` but `Resolver` currently does not return owners in all cases
+    // where expected
+    owner: Option<TypeOwnerId>,
     /// Note: Conceptually, it's thinkable that we could be in a location where
     /// some type params should be represented as placeholders, and others
     /// should be converted to variables. I think in practice, this isn't
@@ -127,6 +129,14 @@ pub struct TyLoweringContext<'a> {
 
 impl<'a> TyLoweringContext<'a> {
     pub fn new(db: &'a dyn HirDatabase, resolver: &'a Resolver, owner: TypeOwnerId) -> Self {
+        Self::new_maybe_unowned(db, resolver, Some(owner))
+    }
+
+    pub fn new_maybe_unowned(
+        db: &'a dyn HirDatabase,
+        resolver: &'a Resolver,
+        owner: Option<TypeOwnerId>,
+    ) -> Self {
         let impl_trait_mode = ImplTraitLoweringState::Disallowed;
         let type_param_mode = ParamLoweringMode::Placeholder;
         let in_binders = DebruijnIndex::INNERMOST;
@@ -213,10 +223,11 @@ impl<'a> TyLoweringContext<'a> {
     }
 
     pub fn lower_const(&self, const_ref: &ConstRef, const_type: Ty) -> Const {
+        let Some(owner) = self.owner else { return unknown_const(const_type) };
         const_or_path_to_chalk(
             self.db,
             self.resolver,
-            self.owner,
+            owner,
             const_type,
             const_ref,
             self.type_param_mode,
@@ -407,11 +418,7 @@ impl<'a> TyLoweringContext<'a> {
                             drop(expander);
                             let ty = self.lower_ty(&type_ref);
 
-                            self.expander
-                                .borrow_mut()
-                                .as_mut()
-                                .unwrap()
-                                .exit(self.db.upcast(), mark);
+                            self.expander.borrow_mut().as_mut().unwrap().exit(mark);
                             Some(ty)
                         }
                         _ => {
@@ -1458,13 +1465,12 @@ pub(crate) fn generic_predicates_for_param_query(
 
 pub(crate) fn generic_predicates_for_param_recover(
     _db: &dyn HirDatabase,
-    _cycle: &[String],
+    _cycle: &Cycle,
     _def: &GenericDefId,
     _param_id: &TypeOrConstParamId,
     _assoc_name: &Option<Name>,
 ) -> Arc<[Binders<QuantifiedWhereClause>]> {
-    // FIXME: use `Arc::from_iter` when it becomes available
-    Arc::from(vec![])
+    Arc::from_iter(None)
 }
 
 pub(crate) fn trait_environment_for_body_query(
@@ -1473,7 +1479,7 @@ pub(crate) fn trait_environment_for_body_query(
 ) -> Arc<TraitEnvironment> {
     let Some(def) = def.as_generic_def_id() else {
         let krate = def.module(db.upcast()).krate();
-        return Arc::new(TraitEnvironment::empty(krate));
+        return TraitEnvironment::empty(krate);
     };
     db.trait_environment(def)
 }
@@ -1533,12 +1539,7 @@ pub(crate) fn trait_environment_query(
 
     let env = chalk_ir::Environment::new(Interner).add_clauses(Interner, clauses);
 
-    Arc::new(TraitEnvironment {
-        krate,
-        block: None,
-        traits_from_clauses: traits_in_scope.into_boxed_slice(),
-        env,
-    })
+    TraitEnvironment::new(krate, None, traits_in_scope.into_boxed_slice(), env)
 }
 
 /// Resolve the where clause(s) of an item with generics.
@@ -1607,69 +1608,54 @@ pub(crate) fn generic_defaults_query(
     let generic_params = generics(db.upcast(), def);
     let parent_start_idx = generic_params.len_self();
 
-    let defaults = Arc::from(
-        generic_params
-            .iter()
-            .enumerate()
-            .map(|(idx, (id, p))| {
-                match p {
-                    TypeOrConstParamData::TypeParamData(p) => {
-                        let mut ty = p
-                            .default
-                            .as_ref()
-                            .map_or(TyKind::Error.intern(Interner), |t| ctx.lower_ty(t));
-                        // Each default can only refer to previous parameters.
-                        // Type variable default referring to parameter coming
-                        // after it is forbidden (FIXME: report diagnostic)
-                        ty = fallback_bound_vars(ty, idx, parent_start_idx);
-                        crate::make_binders(db, &generic_params, ty.cast(Interner))
-                    }
-                    TypeOrConstParamData::ConstParamData(p) => {
-                        let mut val = p.default.as_ref().map_or_else(
-                            || {
-                                unknown_const_as_generic(
-                                    db.const_param_ty(ConstParamId::from_unchecked(id)),
-                                )
-                            },
-                            |c| {
-                                let c = ctx.lower_const(c, ctx.lower_ty(&p.ty));
-                                c.cast(Interner)
-                            },
-                        );
-                        // Each default can only refer to previous parameters, see above.
-                        val = fallback_bound_vars(val, idx, parent_start_idx);
-                        make_binders(db, &generic_params, val)
-                    }
-                }
-            })
-            // FIXME: use `Arc::from_iter` when it becomes available
-            .collect::<Vec<_>>(),
-    );
+    let defaults = Arc::from_iter(generic_params.iter().enumerate().map(|(idx, (id, p))| {
+        match p {
+            TypeOrConstParamData::TypeParamData(p) => {
+                let mut ty =
+                    p.default.as_ref().map_or(TyKind::Error.intern(Interner), |t| ctx.lower_ty(t));
+                // Each default can only refer to previous parameters.
+                // Type variable default referring to parameter coming
+                // after it is forbidden (FIXME: report diagnostic)
+                ty = fallback_bound_vars(ty, idx, parent_start_idx);
+                crate::make_binders(db, &generic_params, ty.cast(Interner))
+            }
+            TypeOrConstParamData::ConstParamData(p) => {
+                let mut val = p.default.as_ref().map_or_else(
+                    || {
+                        unknown_const_as_generic(
+                            db.const_param_ty(ConstParamId::from_unchecked(id)),
+                        )
+                    },
+                    |c| {
+                        let c = ctx.lower_const(c, ctx.lower_ty(&p.ty));
+                        c.cast(Interner)
+                    },
+                );
+                // Each default can only refer to previous parameters, see above.
+                val = fallback_bound_vars(val, idx, parent_start_idx);
+                make_binders(db, &generic_params, val)
+            }
+        }
+    }));
 
     defaults
 }
 
 pub(crate) fn generic_defaults_recover(
     db: &dyn HirDatabase,
-    _cycle: &[String],
+    _cycle: &Cycle,
     def: &GenericDefId,
 ) -> Arc<[Binders<crate::GenericArg>]> {
     let generic_params = generics(db.upcast(), *def);
     // FIXME: this code is not covered in tests.
     // we still need one default per parameter
-    let defaults = Arc::from(
-        generic_params
-            .iter_id()
-            .map(|id| {
-                let val = match id {
-                    Either::Left(_) => TyKind::Error.intern(Interner).cast(Interner),
-                    Either::Right(id) => unknown_const_as_generic(db.const_param_ty(id)),
-                };
-                crate::make_binders(db, &generic_params, val)
-            })
-            // FIXME: use `Arc::from_iter` when it becomes available
-            .collect::<Vec<_>>(),
-    );
+    let defaults = Arc::from_iter(generic_params.iter_id().map(|id| {
+        let val = match id {
+            Either::Left(_) => TyKind::Error.intern(Interner).cast(Interner),
+            Either::Right(id) => unknown_const_as_generic(db.const_param_ty(id)),
+        };
+        crate::make_binders(db, &generic_params, val)
+    }));
 
     defaults
 }
@@ -1793,10 +1779,11 @@ fn type_for_type_alias(db: &dyn HirDatabase, t: TypeAliasId) -> Binders<Ty> {
     let resolver = t.resolver(db.upcast());
     let ctx = TyLoweringContext::new(db, &resolver, t.into())
         .with_type_param_mode(ParamLoweringMode::Variable);
-    if db.type_alias_data(t).is_extern {
+    let type_alias_data = db.type_alias_data(t);
+    if type_alias_data.is_extern {
         Binders::empty(Interner, TyKind::Foreign(crate::to_foreign_def_id(t)).intern(Interner))
     } else {
-        let type_ref = &db.type_alias_data(t).type_ref;
+        let type_ref = &type_alias_data.type_ref;
         let inner = ctx.lower_ty(type_ref.as_deref().unwrap_or(&TypeRef::Error));
         make_binders(db, &generics, inner)
     }
@@ -1885,7 +1872,7 @@ pub(crate) fn ty_query(db: &dyn HirDatabase, def: TyDefId) -> Binders<Ty> {
     }
 }
 
-pub(crate) fn ty_recover(db: &dyn HirDatabase, _cycle: &[String], def: &TyDefId) -> Binders<Ty> {
+pub(crate) fn ty_recover(db: &dyn HirDatabase, _cycle: &Cycle, def: &TyDefId) -> Binders<Ty> {
     let generics = match *def {
         TyDefId::BuiltinType(_) => return Binders::empty(Interner, TyKind::Error.intern(Interner)),
         TyDefId::AdtId(it) => generics(db.upcast(), it.into()),
@@ -1935,7 +1922,7 @@ pub(crate) fn const_param_ty_query(db: &dyn HirDatabase, def: ConstParamId) -> T
 
 pub(crate) fn impl_self_ty_recover(
     db: &dyn HirDatabase,
-    _cycle: &[String],
+    _cycle: &Cycle,
     impl_id: &ImplId,
 ) -> Binders<Ty> {
     let generics = generics(db.upcast(), (*impl_id).into());
@@ -2067,7 +2054,7 @@ pub(crate) fn const_or_path_to_chalk(
                 .intern_in_type_const(InTypeConstLoc {
                     id: it,
                     owner,
-                    thing: Box::new(InTypeConstIdMetadata(expected_ty.clone())),
+                    expected_ty: Box::new(InTypeConstIdMetadata(expected_ty.clone())),
                 })
                 .into();
             intern_const_scalar(

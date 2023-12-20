@@ -272,7 +272,7 @@ impl<'tcx> ConstToPat<'tcx> {
             ty::TraitRef::new(
                 tcx,
                 partial_eq_trait_id,
-                tcx.with_opt_const_effect_param(
+                tcx.with_opt_host_effect_param(
                     tcx.hir().enclosing_body_owner(self.id),
                     partial_eq_trait_id,
                     [ty, ty],
@@ -492,8 +492,9 @@ impl<'tcx> ConstToPat<'tcx> {
                 PatKind::Constant { value: mir::Const::Ty(ty::Const::new_value(tcx, cv, ty)) }
             }
             ty::FnPtr(..) => {
-                // Valtree construction would never succeed for these, so this is unreachable.
-                unreachable!()
+                unreachable!(
+                    "Valtree construction would never succeed for FnPtr, so this is unreachable."
+                )
             }
             _ => {
                 let err = InvalidPattern { span, non_sm_ty: ty };
