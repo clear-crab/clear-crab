@@ -37,7 +37,7 @@ use rustc_data_structures::fx::{FxHashMap, FxHashSet, FxIndexMap, FxIndexSet};
 use rustc_data_structures::intern::Interned;
 use rustc_data_structures::steal::Steal;
 use rustc_data_structures::sync::{FreezeReadGuard, Lrc};
-use rustc_errors::{Applicability, DiagnosticBuilder, ErrorGuaranteed};
+use rustc_errors::{Applicability, DiagnosticBuilder};
 use rustc_expand::base::{DeriveResolutions, SyntaxExtension, SyntaxExtensionKind};
 use rustc_feature::BUILTIN_ATTRIBUTES;
 use rustc_hir::def::Namespace::{self, *};
@@ -704,7 +704,7 @@ struct PrivacyError<'a> {
 
 #[derive(Debug)]
 struct UseError<'a> {
-    err: DiagnosticBuilder<'a, ErrorGuaranteed>,
+    err: DiagnosticBuilder<'a>,
     /// Candidates which user could `use` to access the missing type.
     candidates: Vec<ImportSuggestion>,
     /// The `DefId` of the module to place the use-statements in.
@@ -1225,10 +1225,7 @@ impl<'tcx> Resolver<'_, 'tcx> {
         );
 
         // FIXME: remove `def_span` body, pass in the right spans here and call `tcx.at().create_def()`
-        let def_id = self.tcx.untracked().definitions.write().create_def(parent, data);
-
-        let feed = self.tcx.feed_local_def_id(def_id);
-        feed.def_kind(def_kind);
+        let def_id = self.tcx.create_def(parent, name, def_kind);
 
         // Create the definition.
         if expn_id != ExpnId::root() {

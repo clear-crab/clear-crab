@@ -60,7 +60,7 @@ use rustc_hir::def_id::{LocalDefId, LocalDefIdMap, CRATE_DEF_ID, LOCAL_CRATE};
 use rustc_hir::{ConstArg, GenericArg, ItemLocalMap, ParamName, TraitCandidate};
 use rustc_index::{Idx, IndexSlice, IndexVec};
 use rustc_middle::span_bug;
-use rustc_middle::ty::{ResolverAstLowering, TyCtxt, Visibility};
+use rustc_middle::ty::{ResolverAstLowering, TyCtxt};
 use rustc_session::parse::{add_feature_diagnostics, feature_err};
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
 use rustc_span::{DesugaringKind, Span, DUMMY_SP};
@@ -130,6 +130,7 @@ struct LoweringContext<'a, 'hir> {
     allow_try_trait: Lrc<[Symbol]>,
     allow_gen_future: Lrc<[Symbol]>,
     allow_async_iterator: Lrc<[Symbol]>,
+    allow_for_await: Lrc<[Symbol]>,
 
     /// Mapping from generics `def_id`s to TAIT generics `def_id`s.
     /// For each captured lifetime (e.g., 'a), we create a new lifetime parameter that is a generic
@@ -174,6 +175,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             } else {
                 [sym::gen_future].into()
             },
+            allow_for_await: [sym::async_iterator].into(),
             // FIXME(gen_blocks): how does `closure_track_caller`/`async_fn_track_caller`
             // interact with `gen`/`async gen` blocks
             allow_async_iterator: [sym::gen_future, sym::async_iterator].into(),
@@ -1425,19 +1427,16 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                         this.arena.alloc_from_iter(bounds.iter().filter_map(|bound| match bound {
                             GenericBound::Trait(
                                 ty,
-                                modifier @ (TraitBoundModifier::None
-                                | TraitBoundModifier::MaybeConst(_)
-                                | TraitBoundModifier::Negative),
-                            ) => {
-                                Some(this.lower_poly_trait_ref(ty, itctx, modifier.to_constness()))
-                            }
-                            // `~const ?Bound` will cause an error during AST validation
-                            // anyways, so treat it like `?Bound` as compilation proceeds.
+                                TraitBoundModifiers {
+                                    polarity: BoundPolarity::Positive | BoundPolarity::Negative(_),
+                                    constness,
+                                },
+                            ) => Some(this.lower_poly_trait_ref(ty, itctx, (*constness).into())),
+                            // We can safely ignore constness here, since AST validation
+                            // will take care of invalid modifier combinations.
                             GenericBound::Trait(
                                 _,
-                                TraitBoundModifier::Maybe
-                                | TraitBoundModifier::MaybeConstMaybe
-                                | TraitBoundModifier::MaybeConstNegative,
+                                TraitBoundModifiers { polarity: BoundPolarity::Maybe(_), .. },
                             ) => None,
                             GenericBound::Outlives(lifetime) => {
                                 if lifetime_bound.is_none() {
@@ -1650,10 +1649,6 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             opaque_ty_span,
         );
         debug!(?opaque_ty_def_id);
-
-        // Meaningless, but provided so that all items have visibilities.
-        let parent_mod = self.tcx.parent_module_from_def_id(opaque_ty_def_id).to_def_id();
-        self.tcx.feed_local_def_id(opaque_ty_def_id).visibility(Visibility::Restricted(parent_mod));
 
         // Map from captured (old) lifetime to synthetic (new) lifetime.
         // Used to resolve lifetimes in the bounds of the opaque.
@@ -2032,9 +2027,9 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         itctx: &ImplTraitContext,
     ) -> hir::GenericBound<'hir> {
         match tpb {
-            GenericBound::Trait(p, modifier) => hir::GenericBound::Trait(
-                self.lower_poly_trait_ref(p, itctx, modifier.to_constness()),
-                self.lower_trait_bound_modifier(*modifier),
+            GenericBound::Trait(p, modifiers) => hir::GenericBound::Trait(
+                self.lower_poly_trait_ref(p, itctx, modifiers.constness.into()),
+                self.lower_trait_bound_modifiers(*modifiers),
             ),
             GenericBound::Outlives(lifetime) => {
                 hir::GenericBound::Outlives(self.lower_lifetime(lifetime))
@@ -2320,25 +2315,29 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         }
     }
 
-    fn lower_trait_bound_modifier(&mut self, f: TraitBoundModifier) -> hir::TraitBoundModifier {
-        match f {
-            TraitBoundModifier::None => hir::TraitBoundModifier::None,
-            TraitBoundModifier::MaybeConst(_) => hir::TraitBoundModifier::MaybeConst,
-
-            TraitBoundModifier::Negative => {
+    fn lower_trait_bound_modifiers(
+        &mut self,
+        modifiers: TraitBoundModifiers,
+    ) -> hir::TraitBoundModifier {
+        match (modifiers.constness, modifiers.polarity) {
+            (BoundConstness::Never, BoundPolarity::Positive) => hir::TraitBoundModifier::None,
+            (BoundConstness::Never, BoundPolarity::Maybe(_)) => hir::TraitBoundModifier::Maybe,
+            (BoundConstness::Never, BoundPolarity::Negative(_)) => {
                 if self.tcx.features().negative_bounds {
                     hir::TraitBoundModifier::Negative
                 } else {
                     hir::TraitBoundModifier::None
                 }
             }
-
-            // `MaybeConstMaybe` will cause an error during AST validation, but we need to pick a
-            // placeholder for compilation to proceed.
-            TraitBoundModifier::MaybeConstMaybe | TraitBoundModifier::Maybe => {
-                hir::TraitBoundModifier::Maybe
+            (BoundConstness::Maybe(_), BoundPolarity::Positive) => {
+                hir::TraitBoundModifier::MaybeConst
             }
-            TraitBoundModifier::MaybeConstNegative => hir::TraitBoundModifier::MaybeConst,
+            // Invalid modifier combinations will cause an error during AST validation.
+            // Arbitrarily pick a placeholder for compilation to proceed.
+            (BoundConstness::Maybe(_), BoundPolarity::Maybe(_)) => hir::TraitBoundModifier::Maybe,
+            (BoundConstness::Maybe(_), BoundPolarity::Negative(_)) => {
+                hir::TraitBoundModifier::MaybeConst
+            }
         }
     }
 

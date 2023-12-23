@@ -661,11 +661,12 @@ impl<'hir> LoweringContext<'_, 'hir> {
         vdata: &VariantData,
     ) -> hir::VariantData<'hir> {
         match vdata {
-            VariantData::Struct(fields, recovered) => hir::VariantData::Struct(
-                self.arena
+            VariantData::Struct { fields, recovered } => hir::VariantData::Struct {
+                fields: self
+                    .arena
                     .alloc_from_iter(fields.iter().enumerate().map(|f| self.lower_field_def(f))),
-                *recovered,
-            ),
+                recovered: *recovered,
+            },
             VariantData::Tuple(fields, id) => {
                 let ctor_id = self.lower_node_id(*id);
                 self.alias_attrs(ctor_id, parent_id);
@@ -1371,7 +1372,13 @@ impl<'hir> LoweringContext<'_, 'hir> {
             // need to compute this at all unless there is a Maybe bound.
             let mut is_param: Option<bool> = None;
             for bound in &bound_pred.bounds {
-                if !matches!(*bound, GenericBound::Trait(_, TraitBoundModifier::Maybe)) {
+                if !matches!(
+                    *bound,
+                    GenericBound::Trait(
+                        _,
+                        TraitBoundModifiers { polarity: BoundPolarity::Maybe(_), .. }
+                    )
+                ) {
                     continue;
                 }
                 let is_param = *is_param.get_or_insert_with(compute_is_param);

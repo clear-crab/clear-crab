@@ -205,6 +205,21 @@ fixed_size_enum! {
 }
 
 fixed_size_enum! {
+    hir::CoroutineKind {
+        ( Coroutine                                                                    )
+        ( Desugared(hir::CoroutineDesugaring::Gen, hir::CoroutineSource::Block)        )
+        ( Desugared(hir::CoroutineDesugaring::Gen, hir::CoroutineSource::Fn)           )
+        ( Desugared(hir::CoroutineDesugaring::Gen, hir::CoroutineSource::Closure)      )
+        ( Desugared(hir::CoroutineDesugaring::Async, hir::CoroutineSource::Block)      )
+        ( Desugared(hir::CoroutineDesugaring::Async, hir::CoroutineSource::Fn)         )
+        ( Desugared(hir::CoroutineDesugaring::Async, hir::CoroutineSource::Closure)    )
+        ( Desugared(hir::CoroutineDesugaring::AsyncGen, hir::CoroutineSource::Block)   )
+        ( Desugared(hir::CoroutineDesugaring::AsyncGen, hir::CoroutineSource::Fn)      )
+        ( Desugared(hir::CoroutineDesugaring::AsyncGen, hir::CoroutineSource::Closure) )
+    }
+}
+
+fixed_size_enum! {
     ty::AssocItemContainer {
         ( TraitContainer )
         ( ImplContainer  )
