@@ -1198,7 +1198,7 @@ impl<'a> Builder<'a> {
         let mut dylib_path = helpers::dylib_path();
         dylib_path.insert(0, self.sysroot(run_compiler).join("lib"));
 
-        let mut cmd = Command::new(cargo_clippy.unwrap());
+        let mut cmd = Command::new(cargo_clippy);
         cmd.env(helpers::dylib_path_var(), env::join_paths(&dylib_path).unwrap());
         cmd.env("PATH", path);
         cmd
@@ -1221,11 +1221,6 @@ impl<'a> Builder<'a> {
             cmd.arg("-Dwarnings");
         }
         cmd.arg("-Znormalize-docs");
-
-        // Remove make-related flags that can cause jobserver problems.
-        cmd.env_remove("MAKEFLAGS");
-        cmd.env_remove("MFLAGS");
-
         cmd.args(linker_args(self, compiler.host, LldThreads::Yes));
         cmd
     }

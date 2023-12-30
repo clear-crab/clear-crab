@@ -5,7 +5,7 @@ use rustc_ast::Attribute;
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::fx::FxIndexSet;
 use rustc_data_structures::memmap::{Mmap, MmapMut};
-use rustc_data_structures::stable_hasher::{Hash128, HashStable, StableHasher};
+use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_data_structures::sync::{join, par_for_each_in, Lrc};
 use rustc_data_structures::temp_dir::MaybeTempDir;
 use rustc_hir as hir;
@@ -26,11 +26,12 @@ use rustc_serialize::{opaque, Decodable, Decoder, Encodable, Encoder};
 use rustc_session::config::{CrateType, OptLevel};
 use rustc_span::hygiene::HygieneEncodeContext;
 use rustc_span::symbol::sym;
-use rustc_span::{ExternalSource, FileName, SourceFile, SpanData, SyntaxContext};
+use rustc_span::{
+    ExternalSource, FileName, SourceFile, SpanData, StableSourceFileId, SyntaxContext,
+};
 use std::borrow::Borrow;
 use std::collections::hash_map::Entry;
 use std::fs::File;
-use std::hash::Hash;
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 
@@ -168,11 +169,25 @@ impl<'a, 'tcx> Encodable<EncodeContext<'a, 'tcx>> for ExpnId {
 impl<'a, 'tcx> Encodable<EncodeContext<'a, 'tcx>> for Span {
     fn encode(&self, s: &mut EncodeContext<'a, 'tcx>) {
         match s.span_shorthands.entry(*self) {
-            Entry::Occupied(o) => SpanEncodingMode::Shorthand(*o.get()).encode(s),
+            Entry::Occupied(o) => {
+                // If an offset is smaller than the absolute position, we encode with the offset.
+                // This saves space since smaller numbers encode in less bits.
+                let last_location = *o.get();
+                // This cannot underflow. Metadata is written with increasing position(), so any
+                // previously saved offset must be smaller than the current position.
+                let offset = s.opaque.position() - last_location;
+                if offset < last_location {
+                    SpanTag::indirect(true).encode(s);
+                    offset.encode(s);
+                } else {
+                    SpanTag::indirect(false).encode(s);
+                    last_location.encode(s);
+                }
+            }
             Entry::Vacant(v) => {
                 let position = s.opaque.position();
                 v.insert(position);
-                SpanEncodingMode::Direct.encode(s);
+                // Data is encoded with a SpanTag prefix (see below).
                 self.data().encode(s);
             }
         }
@@ -212,14 +227,15 @@ impl<'a, 'tcx> Encodable<EncodeContext<'a, 'tcx>> for SpanData {
         // IMPORTANT: If this is ever changed, be sure to update
         // `rustc_span::hygiene::raw_encode_expn_id` to handle
         // encoding `ExpnData` for proc-macro crates.
-        if s.is_proc_macro {
-            SyntaxContext::root().encode(s);
-        } else {
-            self.ctxt.encode(s);
-        }
+        let ctxt = if s.is_proc_macro { SyntaxContext::root() } else { self.ctxt };
 
         if self.is_dummy() {
-            return TAG_PARTIAL_SPAN.encode(s);
+            let tag = SpanTag::new(SpanKind::Partial, ctxt, 0);
+            tag.encode(s);
+            if tag.context().is_none() {
+                ctxt.encode(s);
+            }
+            return;
         }
 
         // The Span infrastructure should make sure that this invariant holds:
@@ -237,7 +253,12 @@ impl<'a, 'tcx> Encodable<EncodeContext<'a, 'tcx>> for SpanData {
         if !source_file.contains(self.hi) {
             // Unfortunately, macro expansion still sometimes generates Spans
             // that malformed in this way.
-            return TAG_PARTIAL_SPAN.encode(s);
+            let tag = SpanTag::new(SpanKind::Partial, ctxt, 0);
+            tag.encode(s);
+            if tag.context().is_none() {
+                ctxt.encode(s);
+            }
+            return;
         }
 
         // There are two possible cases here:
@@ -256,7 +277,7 @@ impl<'a, 'tcx> Encodable<EncodeContext<'a, 'tcx>> for SpanData {
         // if we're a proc-macro crate.
         // This allows us to avoid loading the dependencies of proc-macro crates: all of
         // the information we need to decode `Span`s is stored in the proc-macro crate.
-        let (tag, metadata_index) = if source_file.is_imported() && !s.is_proc_macro {
+        let (kind, metadata_index) = if source_file.is_imported() && !s.is_proc_macro {
             // To simplify deserialization, we 'rebase' this span onto the crate it originally came
             // from (the crate that 'owns' the file it references. These rebased 'lo' and 'hi'
             // values are relative to the source map information for the 'foreign' crate whose
@@ -274,7 +295,7 @@ impl<'a, 'tcx> Encodable<EncodeContext<'a, 'tcx>> for SpanData {
                 }
             };
 
-            (TAG_VALID_SPAN_FOREIGN, metadata_index)
+            (SpanKind::Foreign, metadata_index)
         } else {
             // Record the fact that we need to encode the data for this `SourceFile`
             let source_files =
@@ -283,7 +304,7 @@ impl<'a, 'tcx> Encodable<EncodeContext<'a, 'tcx>> for SpanData {
             let metadata_index: u32 =
                 metadata_index.try_into().expect("cannot export more than U32_MAX files");
 
-            (TAG_VALID_SPAN_LOCAL, metadata_index)
+            (SpanKind::Local, metadata_index)
         };
 
         // Encode the start position relative to the file start, so we profit more from the
@@ -294,14 +315,20 @@ impl<'a, 'tcx> Encodable<EncodeContext<'a, 'tcx>> for SpanData {
         // from the variable-length integer encoding that we use.
         let len = self.hi - self.lo;
 
+        let tag = SpanTag::new(kind, ctxt, len.0 as usize);
         tag.encode(s);
+        if tag.context().is_none() {
+            ctxt.encode(s);
+        }
         lo.encode(s);
-        len.encode(s);
+        if tag.length().is_none() {
+            len.encode(s);
+        }
 
         // Encode the index of the `SourceFile` for the span, in order to make decoding faster.
         metadata_index.encode(s);
 
-        if tag == TAG_VALID_SPAN_FOREIGN {
+        if kind == SpanKind::Foreign {
             // This needs to be two lines to avoid holding the `s.source_file_cache`
             // while calling `cnum.encode(s)`
             let cnum = s.source_file_cache.0.cnum;
@@ -467,13 +494,13 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                 let def_key = self.lazy(table.def_key(def_index));
                 let def_path_hash = table.def_path_hash(def_index);
                 self.tables.def_keys.set_some(def_index, def_key);
-                self.tables.def_path_hashes.set(def_index, def_path_hash);
+                self.tables.def_path_hashes.set(def_index, def_path_hash.local_hash().as_u64());
             }
         } else {
             for (def_index, def_key, def_path_hash) in table.enumerated_keys_and_path_hashes() {
                 let def_key = self.lazy(def_key);
                 self.tables.def_keys.set_some(def_index, def_key);
-                self.tables.def_path_hashes.set(def_index, *def_path_hash);
+                self.tables.def_path_hashes.set(def_index, def_path_hash.local_hash().as_u64());
             }
         }
     }
@@ -495,6 +522,8 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
 
         let mut adapted = TableBuilder::default();
 
+        let local_crate_stable_id = self.tcx.stable_crate_id(LOCAL_CRATE);
+
         // Only serialize `SourceFile`s that were used during the encoding of a `Span`.
         //
         // The order in which we encode source files is important here: the on-disk format for
@@ -511,7 +540,9 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
             //
             // At this point we also erase the actual on-disk path and only keep
             // the remapped version -- as is necessary for reproducible builds.
-            let mut source_file = match source_file.name {
+            let mut adapted_source_file = (**source_file).clone();
+
+            match source_file.name {
                 FileName::Real(ref original_file_name) => {
                     let adapted_file_name = if self.tcx.sess.should_prefer_remapped_for_codegen() {
                         source_map.path_mapping().to_embeddable_absolute_path(
@@ -525,22 +556,11 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                         )
                     };
 
-                    if adapted_file_name != *original_file_name {
-                        let mut adapted: SourceFile = (**source_file).clone();
-                        adapted.name = FileName::Real(adapted_file_name);
-                        adapted.name_hash = {
-                            let mut hasher: StableHasher = StableHasher::new();
-                            adapted.name.hash(&mut hasher);
-                            hasher.finish::<Hash128>()
-                        };
-                        Lrc::new(adapted)
-                    } else {
-                        // Nothing to adapt
-                        source_file.clone()
-                    }
+                    adapted_source_file.name = FileName::Real(adapted_file_name);
                 }
-                // expanded code, not from a file
-                _ => source_file.clone(),
+                _ => {
+                    // expanded code, not from a file
+                }
             };
 
             // We're serializing this `SourceFile` into our crate metadata,
@@ -550,12 +570,20 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
             // dependencies aren't loaded when we deserialize a proc-macro,
             // trying to remap the `CrateNum` would fail.
             if self.is_proc_macro {
-                Lrc::make_mut(&mut source_file).cnum = LOCAL_CRATE;
+                adapted_source_file.cnum = LOCAL_CRATE;
             }
+
+            // Update the `StableSourceFileId` to make sure it incorporates the
+            // id of the current crate. This way it will be unique within the
+            // crate graph during downstream compilation sessions.
+            adapted_source_file.stable_id = StableSourceFileId::from_filename_for_export(
+                &adapted_source_file.name,
+                local_crate_stable_id,
+            );
 
             let on_disk_index: u32 =
                 on_disk_index.try_into().expect("cannot export more than U32_MAX files");
-            adapted.set_some(on_disk_index, self.lazy(source_file));
+            adapted.set_some(on_disk_index, self.lazy(adapted_source_file));
         }
 
         adapted.encode(&mut self.opaque)
@@ -1430,7 +1458,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
             if def_kind == DefKind::Closure
                 && let Some(coroutine_kind) = self.tcx.coroutine_kind(def_id)
             {
-                self.tables.coroutine_kind.set(def_id.index, Some(coroutine_kind));
+                self.tables.coroutine_kind.set(def_id.index, Some(coroutine_kind))
             }
             if let DefKind::Enum | DefKind::Struct | DefKind::Union = def_kind {
                 self.encode_info_for_adt(local_id);
@@ -1607,7 +1635,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                 record!(self.tables.optimized_mir[def_id.to_def_id()] <- tcx.optimized_mir(def_id));
                 self.tables
                     .cross_crate_inlinable
-                    .set(def_id.to_def_id().index, Some(self.tcx.cross_crate_inlinable(def_id)));
+                    .set(def_id.to_def_id().index, self.tcx.cross_crate_inlinable(def_id));
                 record!(self.tables.closure_saved_names_of_captured_variables[def_id.to_def_id()]
                     <- tcx.closure_saved_names_of_captured_variables(def_id));
 
@@ -2186,7 +2214,7 @@ pub fn encode_metadata(tcx: TyCtxt<'_>, path: &Path) {
     }
 
     let mut encoder = opaque::FileEncoder::new(path)
-        .unwrap_or_else(|err| tcx.sess.emit_fatal(FailCreateFileEncoder { err }));
+        .unwrap_or_else(|err| tcx.dcx().emit_fatal(FailCreateFileEncoder { err }));
     encoder.emit_raw_bytes(METADATA_HEADER);
 
     // Will be filled with the root position after encoding everything.
@@ -2227,12 +2255,12 @@ pub fn encode_metadata(tcx: TyCtxt<'_>, path: &Path) {
     // If we forget this, compilation can succeed with an incomplete rmeta file,
     // causing an ICE when the rmeta file is read by another compilation.
     if let Err((path, err)) = ecx.opaque.finish() {
-        tcx.sess.emit_err(FailWriteFile { path: &path, err });
+        tcx.dcx().emit_err(FailWriteFile { path: &path, err });
     }
 
     let file = ecx.opaque.file();
     if let Err(err) = encode_root_position(file, root.position.get()) {
-        tcx.sess.emit_err(FailWriteFile { path: ecx.opaque.path(), err });
+        tcx.dcx().emit_err(FailWriteFile { path: ecx.opaque.path(), err });
     }
 
     // Record metadata size for self-profiling

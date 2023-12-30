@@ -534,7 +534,7 @@ fn hex_encode(data: &[u8]) -> String {
 }
 
 pub fn file_metadata<'ll>(cx: &CodegenCx<'ll, '_>, source_file: &SourceFile) -> &'ll DIFile {
-    let cache_key = Some((source_file.name_hash, source_file.src_hash));
+    let cache_key = Some((source_file.stable_id, source_file.src_hash));
     return debug_context(cx)
         .created_files
         .borrow_mut()
@@ -1066,7 +1066,7 @@ fn build_upvar_field_di_nodes<'ll, 'tcx>(
     closure_or_coroutine_di_node: &'ll DIType,
 ) -> SmallVec<&'ll DIType> {
     let (&def_id, up_var_tys) = match closure_or_coroutine_ty.kind() {
-        ty::Coroutine(def_id, args, _) => (def_id, args.as_coroutine().prefix_tys()),
+        ty::Coroutine(def_id, args) => (def_id, args.as_coroutine().prefix_tys()),
         ty::Closure(def_id, args) => (def_id, args.as_closure().upvar_tys()),
         _ => {
             bug!(

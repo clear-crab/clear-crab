@@ -149,7 +149,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
             MethodError::Ambiguity(mut sources) => {
                 let mut err = struct_span_err!(
-                    self.sess(),
+                    self.dcx(),
                     item_name.span,
                     E0034,
                     "multiple applicable items in scope"
@@ -172,7 +172,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             MethodError::PrivateMatch(kind, def_id, out_of_scope_traits) => {
                 let kind = self.tcx.def_kind_descr(kind, def_id);
                 let mut err = struct_span_err!(
-                    self.tcx.sess,
+                    self.dcx(),
                     item_name.span,
                     E0624,
                     "{} `{}` is private",
@@ -198,7 +198,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 } else {
                     format!("the `{item_name}` method cannot be invoked on a trait object")
                 };
-                let mut err = self.sess().struct_span_err(span, msg);
+                let mut err = self.dcx().struct_span_err(span, msg);
                 if !needs_mut {
                     err.span_label(bound_span, "this has a `Sized` requirement");
                 }
@@ -263,13 +263,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     ) -> DiagnosticBuilder<'_> {
         let mut file = None;
         let ty_str = self.tcx.short_ty_string(rcvr_ty, &mut file);
-        let mut err = struct_span_err!(
-            self.tcx.sess,
-            rcvr_expr.span,
-            E0599,
-            "cannot write into `{}`",
-            ty_str
-        );
+        let mut err =
+            struct_span_err!(self.dcx(), rcvr_expr.span, E0599, "cannot write into `{}`", ty_str);
         err.span_note(
             rcvr_expr.span,
             "must implement `io::Write`, `fmt::Write`, or have a `write_fmt` method",
@@ -381,7 +376,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let mut err = if is_write && let SelfSource::MethodCall(rcvr_expr) = source {
             self.suggest_missing_writer(rcvr_ty, rcvr_expr)
         } else {
-            tcx.sess.create_err(NoAssociatedItem {
+            tcx.dcx().create_err(NoAssociatedItem {
                 span,
                 item_kind,
                 item_name,
@@ -820,7 +815,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         span: item_span,
                         ..
                     })) => {
-                        tcx.sess.span_delayed_bug(
+                        tcx.dcx().span_delayed_bug(
                             *item_span,
                             "auto trait is invoked with no method error, but no error reported?",
                         );
@@ -1783,7 +1778,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     );
                     if pick.is_ok() {
                         let range_span = parent_expr.span.with_hi(expr.span.hi());
-                        tcx.sess.emit_err(errors::MissingParenthesesInRange {
+                        tcx.dcx().emit_err(errors::MissingParenthesesInRange {
                             span,
                             ty_str: ty_str.to_string(),
                             method_name: item_name.as_str().to_string(),
@@ -1842,7 +1837,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             && let SelfSource::MethodCall(expr) = source
         {
             let mut err = struct_span_err!(
-                tcx.sess,
+                tcx.dcx(),
                 span,
                 E0689,
                 "can't call {} `{}` on ambiguous numeric type `{}`",
@@ -1928,7 +1923,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             return;
         };
         let Some(mut diag) =
-            self.tcx.sess.dcx().steal_diagnostic(seg1.ident.span, StashKey::CallAssocMethod)
+            self.dcx().steal_diagnostic(seg1.ident.span, StashKey::CallAssocMethod)
         else {
             return;
         };
@@ -3311,6 +3306,7 @@ fn print_disambiguation_help<'tcx>(
     span: Span,
     item: ty::AssocItem,
 ) -> Option<String> {
+    let trait_impl_type = trait_ref.self_ty().peel_refs();
     let trait_ref = if item.fn_has_self_parameter {
         trait_ref.print_only_trait_name().to_string()
     } else {
@@ -3323,27 +3319,34 @@ fn print_disambiguation_help<'tcx>(
         {
             let def_kind_descr = tcx.def_kind_descr(item.kind.as_def_kind(), item.def_id);
             let item_name = item.ident(tcx);
-            let rcvr_ref = tcx
-                .fn_sig(item.def_id)
-                .skip_binder()
-                .skip_binder()
-                .inputs()
-                .get(0)
-                .and_then(|ty| ty.ref_mutability())
-                .map_or("", |mutbl| mutbl.ref_prefix_str());
-            let args = format!(
-                "({}{})",
-                rcvr_ref,
-                std::iter::once(receiver)
-                    .chain(args.iter())
-                    .map(|arg| tcx
-                        .sess
-                        .source_map()
-                        .span_to_snippet(arg.span)
-                        .unwrap_or_else(|_| { "_".to_owned() }))
-                    .collect::<Vec<_>>()
-                    .join(", "),
+            let first_input =
+                tcx.fn_sig(item.def_id).instantiate_identity().skip_binder().inputs().get(0);
+            let (first_arg_type, rcvr_ref) = (
+                first_input.map(|first| first.peel_refs()),
+                first_input
+                    .and_then(|ty| ty.ref_mutability())
+                    .map_or("", |mutbl| mutbl.ref_prefix_str()),
             );
+
+            // If the type of first arg of this assoc function is `Self` or current trait impl type or `arbitrary_self_types`, we need to take the receiver as args. Otherwise, we don't.
+            let args = if let Some(first_arg_type) = first_arg_type
+                && (first_arg_type == tcx.types.self_param
+                    || first_arg_type == trait_impl_type
+                    || item.fn_has_self_parameter)
+            {
+                Some(receiver)
+            } else {
+                None
+            }
+            .into_iter()
+            .chain(args)
+            .map(|arg| {
+                tcx.sess.source_map().span_to_snippet(arg.span).unwrap_or_else(|_| "_".to_owned())
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+
+            let args = format!("({}{})", rcvr_ref, args);
             err.span_suggestion_verbose(
                 span,
                 format!(

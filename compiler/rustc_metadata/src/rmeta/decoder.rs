@@ -6,6 +6,7 @@ use crate::rmeta::*;
 
 use rustc_ast as ast;
 use rustc_data_structures::captures::Captures;
+use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::owned_slice::OwnedSlice;
 use rustc_data_structures::sync::{AppendOnlyVec, AtomicBool, Lock, Lrc, OnceLock};
 use rustc_data_structures::unhash::UnhashMap;
@@ -87,8 +88,6 @@ pub(crate) struct CrateMetadata {
     alloc_decoding_state: AllocDecodingState,
     /// Caches decoded `DefKey`s.
     def_key_cache: Lock<FxHashMap<DefIndex, DefKey>>,
-    /// Caches decoded `DefPathHash`es.
-    def_path_hash_cache: Lock<FxHashMap<DefIndex, DefPathHash>>,
 
     // --- Other significant crate properties ---
     /// ID of this crate, from the current compilation session's point of view.
@@ -508,14 +507,20 @@ impl<'a, 'tcx> Decodable<DecodeContext<'a, 'tcx>> for ExpnId {
 
 impl<'a, 'tcx> Decodable<DecodeContext<'a, 'tcx>> for Span {
     fn decode(decoder: &mut DecodeContext<'a, 'tcx>) -> Span {
-        let mode = SpanEncodingMode::decode(decoder);
-        let data = match mode {
-            SpanEncodingMode::Direct => SpanData::decode(decoder),
-            SpanEncodingMode::Shorthand(position) => decoder.with_position(position, |decoder| {
-                let mode = SpanEncodingMode::decode(decoder);
-                debug_assert!(matches!(mode, SpanEncodingMode::Direct));
-                SpanData::decode(decoder)
-            }),
+        let start = decoder.position();
+        let tag = SpanTag(decoder.peek_byte());
+        let data = if tag.kind() == SpanKind::Indirect {
+            // Skip past the tag we just peek'd.
+            decoder.read_u8();
+            let offset_or_position = decoder.read_usize();
+            let position = if tag.is_relative_offset() {
+                start - offset_or_position
+            } else {
+                offset_or_position
+            };
+            decoder.with_position(position, SpanData::decode)
+        } else {
+            SpanData::decode(decoder)
         };
         Span::new(data.lo, data.hi, data.ctxt, data.parent)
     }
@@ -523,17 +528,17 @@ impl<'a, 'tcx> Decodable<DecodeContext<'a, 'tcx>> for Span {
 
 impl<'a, 'tcx> Decodable<DecodeContext<'a, 'tcx>> for SpanData {
     fn decode(decoder: &mut DecodeContext<'a, 'tcx>) -> SpanData {
-        let ctxt = SyntaxContext::decode(decoder);
-        let tag = u8::decode(decoder);
+        let tag = SpanTag::decode(decoder);
+        let ctxt = tag.context().unwrap_or_else(|| SyntaxContext::decode(decoder));
 
-        if tag == TAG_PARTIAL_SPAN {
+        if tag.kind() == SpanKind::Partial {
             return DUMMY_SP.with_ctxt(ctxt).data();
         }
 
-        debug_assert!(tag == TAG_VALID_SPAN_LOCAL || tag == TAG_VALID_SPAN_FOREIGN);
+        debug_assert!(tag.kind() == SpanKind::Local || tag.kind() == SpanKind::Foreign);
 
         let lo = BytePos::decode(decoder);
-        let len = BytePos::decode(decoder);
+        let len = tag.length().unwrap_or_else(|| BytePos::decode(decoder));
         let hi = lo + len;
 
         let Some(sess) = decoder.sess else {
@@ -574,7 +579,7 @@ impl<'a, 'tcx> Decodable<DecodeContext<'a, 'tcx>> for SpanData {
         // treat the 'local' and 'foreign' cases almost identically during deserialization:
         // we can call `imported_source_file` for the proper crate, and binary search
         // through the returned slice using our span.
-        let source_file = if tag == TAG_VALID_SPAN_LOCAL {
+        let source_file = if tag.kind() == SpanKind::Local {
             decoder.cdata().imported_source_file(metadata_index, sess)
         } else {
             // When we encode a proc-macro crate, all `Span`s should be encoded
@@ -1266,7 +1271,7 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
     }
 
     fn cross_crate_inlinable(self, id: DefIndex) -> bool {
-        self.root.tables.cross_crate_inlinable.get(self, id).unwrap_or(false)
+        self.root.tables.cross_crate_inlinable.get(self, id)
     }
 
     fn get_fn_has_self_parameter(self, id: DefIndex, sess: &'a Session) -> bool {
@@ -1484,20 +1489,16 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
         DefPath::make(self.cnum, id, |parent| self.def_key(parent))
     }
 
-    fn def_path_hash_unlocked(
-        self,
-        index: DefIndex,
-        def_path_hashes: &mut FxHashMap<DefIndex, DefPathHash>,
-    ) -> DefPathHash {
-        *def_path_hashes
-            .entry(index)
-            .or_insert_with(|| self.root.tables.def_path_hashes.get(self, index))
-    }
-
     #[inline]
     fn def_path_hash(self, index: DefIndex) -> DefPathHash {
-        let mut def_path_hashes = self.def_path_hash_cache.lock();
-        self.def_path_hash_unlocked(index, &mut def_path_hashes)
+        // This is a hack to workaround the fact that we can't easily encode/decode a Hash64
+        // into the FixedSizeEncoding, as Hash64 lacks a Default impl. A future refactor to
+        // relax the Default restriction will likely fix this.
+        let fingerprint = Fingerprint::new(
+            self.root.stable_crate_id.as_u64(),
+            self.root.tables.def_path_hashes.get(self, index),
+        );
+        DefPathHash::new(self.root.stable_crate_id, fingerprint.split().1)
     }
 
     #[inline]
@@ -1676,7 +1677,7 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
                     multibyte_chars,
                     non_narrow_chars,
                     normalized_pos,
-                    name_hash,
+                    stable_id,
                     ..
                 } = source_file_to_import;
 
@@ -1721,7 +1722,7 @@ impl<'a, 'tcx> CrateMetadataRef<'a> {
                 let local_version = sess.source_map().new_imported_source_file(
                     name,
                     src_hash,
-                    name_hash,
+                    stable_id,
                     source_len.to_u32(),
                     self.cnum,
                     lines,
@@ -1824,7 +1825,6 @@ impl CrateMetadata {
             extern_crate: Lock::new(None),
             hygiene_context: Default::default(),
             def_key_cache: Default::default(),
-            def_path_hash_cache: Default::default(),
         };
 
         // Need `CrateMetadataRef` to decode `DefId`s in simplified types.

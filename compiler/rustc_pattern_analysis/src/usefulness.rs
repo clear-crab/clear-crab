@@ -300,6 +300,166 @@
 //!
 //!
 //!
+//! # `Missing` and relevancy
+//!
+//! ## Relevant values
+//!
+//! Take the following example:
+//!
+//! ```compile_fail,E0004
+//! # let foo = (true, true);
+//! match foo {
+//!     (true, _) => 1,
+//!     (_, true) => 2,
+//! };
+//! ```
+//!
+//! Consider the value `(true, true)`:
+//! - Row 2 does not distinguish `(true, true)` and `(false, true)`;
+//! - `false` does not show up in the first column of the match, so without knowing anything else we
+//!     can deduce that `(false, true)` matches the same or fewer rows than `(true, true)`.
+//!
+//! Using those two facts together, we deduce that `(true, true)` will not give us more usefulness
+//! information about row 2 than `(false, true)` would. We say that "`(true, true)` is made
+//! irrelevant for row 2 by `(false, true)`". We will use this idea to prune the search tree.
+//!
+//!
+//! ## Computing relevancy
+//!
+//! We now generalize from the above example to approximate relevancy in a simple way. Note that we
+//! will only compute an approximation: we can sometimes determine when a case is irrelevant, but
+//! computing this precisely is at least as hard as computing usefulness.
+//!
+//! Our computation of relevancy relies on the `Missing` constructor. As explained in
+//! [`crate::constructor`], `Missing` represents the constructors not present in a given column. For
+//! example in the following:
+//!
+//! ```compile_fail,E0004
+//! enum Direction { North, South, East, West }
+//! # let wind = (Direction::North, 0u8);
+//! match wind {
+//!     (Direction::North, _) => 1,
+//!     (_, 50..) => 2,
+//! };
+//! ```
+//!
+//! Here `South`, `East` and `West` are missing in the first column, and `0..50`  is missing in the
+//! second. Both of these sets are represented by `Constructor::Missing` in their corresponding
+//! column.
+//!
+//! We then compute relevancy as follows: during the course of the algorithm, for a row `r`:
+//! - if `r` has a wildcard in the first column;
+//! - and some constructors are missing in that column;
+//! - then any `c != Missing` is considered irrelevant for row `r`.
+//!
+//! By this we mean that continuing the algorithm by specializing with `c` is guaranteed not to
+//! contribute more information about the usefulness of row `r` than what we would get by
+//! specializing with `Missing`. The argument is the same as in the previous subsection.
+//!
+//! Once we've specialized by a constructor `c` that is irrelevant for row `r`, we're guaranteed to
+//! only explore values irrelevant for `r`. If we then ever reach a point where we're only exploring
+//! values that are irrelevant to all of the rows (including the virtual wildcard row used for
+//! exhaustiveness), we skip that case entirely.
+//!
+//!
+//! ## Example
+//!
+//! Let's go through a variation on the first example:
+//!
+//! ```compile_fail,E0004
+//! # let foo = (true, true, true);
+//! match foo {
+//!     (true, _, true) => 1,
+//!     (_, true, _) => 2,
+//! };
+//! ```
+//!
+//! ```text
+//!  ┐ Patterns:
+//!  │   1. `[(true, _, true)]`
+//!  │   2. `[(_, true, _)]`
+//!  │   3. `[_]` // virtual extra wildcard row
+//!  │
+//!  │ Specialize with `(,,)`:
+//!  ├─┐ Patterns:
+//!  │ │   1. `[true, _, true]`
+//!  │ │   2. `[_, true, _]`
+//!  │ │   3. `[_, _, _]`
+//!  │ │
+//!  │ │ There are missing constructors in the first column (namely `false`), hence
+//!  │ │ `true` is irrelevant for rows 2 and 3.
+//!  │ │
+//!  │ │ Specialize with `true`:
+//!  │ ├─┐ Patterns:
+//!  │ │ │   1. `[_, true]`
+//!  │ │ │   2. `[true, _]` // now exploring irrelevant cases
+//!  │ │ │   3. `[_, _]`    // now exploring irrelevant cases
+//!  │ │ │
+//!  │ │ │ There are missing constructors in the first column (namely `false`), hence
+//!  │ │ │ `true` is irrelevant for rows 1 and 3.
+//!  │ │ │
+//!  │ │ │ Specialize with `true`:
+//!  │ │ ├─┐ Patterns:
+//!  │ │ │ │   1. `[true]` // now exploring irrelevant cases
+//!  │ │ │ │   2. `[_]`    // now exploring irrelevant cases
+//!  │ │ │ │   3. `[_]`    // now exploring irrelevant cases
+//!  │ │ │ │
+//!  │ │ │ │ The current case is irrelevant for all rows: we backtrack immediately.
+//!  │ │ ├─┘
+//!  │ │ │
+//!  │ │ │ Specialize with `false`:
+//!  │ │ ├─┐ Patterns:
+//!  │ │ │ │   1. `[true]`
+//!  │ │ │ │   3. `[_]`    // now exploring irrelevant cases
+//!  │ │ │ │
+//!  │ │ │ │ Specialize with `true`:
+//!  │ │ │ ├─┐ Patterns:
+//!  │ │ │ │ │   1. `[]`
+//!  │ │ │ │ │   3. `[]`    // now exploring irrelevant cases
+//!  │ │ │ │ │
+//!  │ │ │ │ │ Row 1 is therefore useful.
+//!  │ │ │ ├─┘
+//! <etc...>
+//! ```
+//!
+//! Relevancy allowed us to skip the case `(true, true, _)` entirely. In some cases this pruning can
+//! give drastic speedups. The case this was built for is the following (#118437):
+//!
+//! ```ignore(illustrative)
+//! match foo {
+//!     (true, _, _, _, ..) => 1,
+//!     (_, true, _, _, ..) => 2,
+//!     (_, _, true, _, ..) => 3,
+//!     (_, _, _, true, ..) => 4,
+//!     ...
+//! }
+//! ```
+//!
+//! Without considering relevancy, we would explore all 2^n combinations of the `true` and `Missing`
+//! constructors. Relevancy tells us that e.g. `(true, true, false, false, false, ...)` is
+//! irrelevant for all the rows. This allows us to skip all cases with more than one `true`
+//! constructor, changing the runtime from exponential to linear.
+//!
+//!
+//! ## Relevancy and exhaustiveness
+//!
+//! For exhaustiveness, we do something slightly different w.r.t relevancy: we do not report
+//! witnesses of non-exhaustiveness that are irrelevant for the virtual wildcard row. For example,
+//! in:
+//!
+//! ```ignore(illustrative)
+//! match foo {
+//!     (true, true) => {}
+//! }
+//! ```
+//!
+//! we only report `(false, _)` as missing. This was a deliberate choice made early in the
+//! development of rust, for diagnostic and performance purposes. As showed in the previous section,
+//! ignoring irrelevant cases preserves usefulness, so this choice still correctly computes whether
+//! a match is exhaustive.
+//!
+//!
+//!
 //! # Or-patterns
 //!
 //! What we have described so far works well if there are no or-patterns. To handle them, if the
@@ -661,19 +821,22 @@ impl fmt::Display for ValidityConstraint {
 
 /// Represents a pattern-tuple under investigation.
 // The three lifetimes are:
-// - 'a allocated by us
 // - 'p coming from the input
 // - Cx global compilation context
 #[derive(derivative::Derivative)]
 #[derivative(Clone(bound = ""))]
-struct PatStack<'a, 'p, Cx: TypeCx> {
+struct PatStack<'p, Cx: TypeCx> {
     // Rows of len 1 are very common, which is why `SmallVec[_; 2]` works well.
-    pats: SmallVec<[&'a DeconstructedPat<'p, Cx>; 2]>,
+    pats: SmallVec<[&'p DeconstructedPat<'p, Cx>; 2]>,
+    /// Sometimes we know that as far as this row is concerned, the current case is already handled
+    /// by a different, more general, case. When the case is irrelevant for all rows this allows us
+    /// to skip a case entirely. This is purely an optimization. See at the top for details.
+    relevant: bool,
 }
 
-impl<'a, 'p, Cx: TypeCx> PatStack<'a, 'p, Cx> {
-    fn from_pattern(pat: &'a DeconstructedPat<'p, Cx>) -> Self {
-        PatStack { pats: smallvec![pat] }
+impl<'p, Cx: TypeCx> PatStack<'p, Cx> {
+    fn from_pattern(pat: &'p DeconstructedPat<'p, Cx>) -> Self {
+        PatStack { pats: smallvec![pat], relevant: true }
     }
 
     fn is_empty(&self) -> bool {
@@ -684,17 +847,17 @@ impl<'a, 'p, Cx: TypeCx> PatStack<'a, 'p, Cx> {
         self.pats.len()
     }
 
-    fn head(&self) -> &'a DeconstructedPat<'p, Cx> {
+    fn head(&self) -> &'p DeconstructedPat<'p, Cx> {
         self.pats[0]
     }
 
-    fn iter<'b>(&'b self) -> impl Iterator<Item = &'a DeconstructedPat<'p, Cx>> + Captures<'b> {
+    fn iter(&self) -> impl Iterator<Item = &'p DeconstructedPat<'p, Cx>> + Captures<'_> {
         self.pats.iter().copied()
     }
 
     // Recursively expand the first or-pattern into its subpatterns. Only useful if the pattern is
     // an or-pattern. Panics if `self` is empty.
-    fn expand_or_pat<'b>(&'b self) -> impl Iterator<Item = PatStack<'a, 'p, Cx>> + Captures<'b> {
+    fn expand_or_pat(&self) -> impl Iterator<Item = PatStack<'p, Cx>> + Captures<'_> {
         self.head().flatten_or_pat().into_iter().map(move |pat| {
             let mut new = self.clone();
             new.pats[0] = pat;
@@ -706,18 +869,23 @@ impl<'a, 'p, Cx: TypeCx> PatStack<'a, 'p, Cx> {
     /// Only call if `ctor.is_covered_by(self.head().ctor())` is true.
     fn pop_head_constructor(
         &self,
-        pcx: &PlaceCtxt<'a, 'p, Cx>,
+        pcx: &PlaceCtxt<'_, 'p, Cx>,
         ctor: &Constructor<Cx>,
-    ) -> PatStack<'a, 'p, Cx> {
+        ctor_is_relevant: bool,
+    ) -> PatStack<'p, Cx> {
         // We pop the head pattern and push the new fields extracted from the arguments of
         // `self.head()`.
         let mut new_pats = self.head().specialize(pcx, ctor);
         new_pats.extend_from_slice(&self.pats[1..]);
-        PatStack { pats: new_pats }
+        // `ctor` is relevant for this row if it is the actual constructor of this row, or if the
+        // row has a wildcard and `ctor` is relevant for wildcards.
+        let ctor_is_relevant =
+            !matches!(self.head().ctor(), Constructor::Wildcard) || ctor_is_relevant;
+        PatStack { pats: new_pats, relevant: self.relevant && ctor_is_relevant }
     }
 }
 
-impl<'a, 'p, Cx: TypeCx> fmt::Debug for PatStack<'a, 'p, Cx> {
+impl<'p, Cx: TypeCx> fmt::Debug for PatStack<'p, Cx> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // We pretty-print similarly to the `Debug` impl of `Matrix`.
         write!(f, "+")?;
@@ -730,9 +898,9 @@ impl<'a, 'p, Cx: TypeCx> fmt::Debug for PatStack<'a, 'p, Cx> {
 
 /// A row of the matrix.
 #[derive(Clone)]
-struct MatrixRow<'a, 'p, Cx: TypeCx> {
+struct MatrixRow<'p, Cx: TypeCx> {
     // The patterns in the row.
-    pats: PatStack<'a, 'p, Cx>,
+    pats: PatStack<'p, Cx>,
     /// Whether the original arm had a guard. This is inherited when specializing.
     is_under_guard: bool,
     /// When we specialize, we remember which row of the original matrix produced a given row of the
@@ -745,7 +913,7 @@ struct MatrixRow<'a, 'p, Cx: TypeCx> {
     useful: bool,
 }
 
-impl<'a, 'p, Cx: TypeCx> MatrixRow<'a, 'p, Cx> {
+impl<'p, Cx: TypeCx> MatrixRow<'p, Cx> {
     fn is_empty(&self) -> bool {
         self.pats.is_empty()
     }
@@ -754,17 +922,17 @@ impl<'a, 'p, Cx: TypeCx> MatrixRow<'a, 'p, Cx> {
         self.pats.len()
     }
 
-    fn head(&self) -> &'a DeconstructedPat<'p, Cx> {
+    fn head(&self) -> &'p DeconstructedPat<'p, Cx> {
         self.pats.head()
     }
 
-    fn iter<'b>(&'b self) -> impl Iterator<Item = &'a DeconstructedPat<'p, Cx>> + Captures<'b> {
+    fn iter(&self) -> impl Iterator<Item = &'p DeconstructedPat<'p, Cx>> + Captures<'_> {
         self.pats.iter()
     }
 
     // Recursively expand the first or-pattern into its subpatterns. Only useful if the pattern is
     // an or-pattern. Panics if `self` is empty.
-    fn expand_or_pat<'b>(&'b self) -> impl Iterator<Item = MatrixRow<'a, 'p, Cx>> + Captures<'b> {
+    fn expand_or_pat(&self) -> impl Iterator<Item = MatrixRow<'p, Cx>> + Captures<'_> {
         self.pats.expand_or_pat().map(|patstack| MatrixRow {
             pats: patstack,
             parent_row: self.parent_row,
@@ -777,12 +945,13 @@ impl<'a, 'p, Cx: TypeCx> MatrixRow<'a, 'p, Cx> {
     /// Only call if `ctor.is_covered_by(self.head().ctor())` is true.
     fn pop_head_constructor(
         &self,
-        pcx: &PlaceCtxt<'a, 'p, Cx>,
+        pcx: &PlaceCtxt<'_, 'p, Cx>,
         ctor: &Constructor<Cx>,
+        ctor_is_relevant: bool,
         parent_row: usize,
-    ) -> MatrixRow<'a, 'p, Cx> {
+    ) -> MatrixRow<'p, Cx> {
         MatrixRow {
-            pats: self.pats.pop_head_constructor(pcx, ctor),
+            pats: self.pats.pop_head_constructor(pcx, ctor, ctor_is_relevant),
             parent_row,
             is_under_guard: self.is_under_guard,
             useful: false,
@@ -790,7 +959,7 @@ impl<'a, 'p, Cx: TypeCx> MatrixRow<'a, 'p, Cx> {
     }
 }
 
-impl<'a, 'p, Cx: TypeCx> fmt::Debug for MatrixRow<'a, 'p, Cx> {
+impl<'p, Cx: TypeCx> fmt::Debug for MatrixRow<'p, Cx> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.pats.fmt(f)
     }
@@ -807,22 +976,22 @@ impl<'a, 'p, Cx: TypeCx> fmt::Debug for MatrixRow<'a, 'p, Cx> {
 /// specializing `(,)` and `Some` on a pattern of type `(Option<u32>, bool)`, the first column of
 /// the matrix will correspond to `scrutinee.0.Some.0` and the second column to `scrutinee.1`.
 #[derive(Clone)]
-struct Matrix<'a, 'p, Cx: TypeCx> {
+struct Matrix<'p, Cx: TypeCx> {
     /// Vector of rows. The rows must form a rectangular 2D array. Moreover, all the patterns of
     /// each column must have the same type. Each column corresponds to a place within the
     /// scrutinee.
-    rows: Vec<MatrixRow<'a, 'p, Cx>>,
+    rows: Vec<MatrixRow<'p, Cx>>,
     /// Stores an extra fictitious row full of wildcards. Mostly used to keep track of the type of
     /// each column. This must obey the same invariants as the real rows.
-    wildcard_row: PatStack<'a, 'p, Cx>,
+    wildcard_row: PatStack<'p, Cx>,
     /// Track for each column/place whether it contains a known valid value.
     place_validity: SmallVec<[ValidityConstraint; 2]>,
 }
 
-impl<'a, 'p, Cx: TypeCx> Matrix<'a, 'p, Cx> {
+impl<'p, Cx: TypeCx> Matrix<'p, Cx> {
     /// Pushes a new row to the matrix. If the row starts with an or-pattern, this recursively
     /// expands it. Internal method, prefer [`Matrix::new`].
-    fn expand_and_push(&mut self, row: MatrixRow<'a, 'p, Cx>) {
+    fn expand_and_push(&mut self, row: MatrixRow<'p, Cx>) {
         if !row.is_empty() && row.head().is_or_pat() {
             // Expand nested or-patterns.
             for new_row in row.expand_or_pat() {
@@ -835,8 +1004,8 @@ impl<'a, 'p, Cx: TypeCx> Matrix<'a, 'p, Cx> {
 
     /// Build a new matrix from an iterator of `MatchArm`s.
     fn new(
-        wildcard_arena: &'a TypedArena<DeconstructedPat<'p, Cx>>,
-        arms: &'a [MatchArm<'p, Cx>],
+        wildcard_arena: &'p TypedArena<DeconstructedPat<'p, Cx>>,
+        arms: &[MatchArm<'p, Cx>],
         scrut_ty: Cx::Ty,
         scrut_validity: ValidityConstraint,
     ) -> Self {
@@ -859,7 +1028,7 @@ impl<'a, 'p, Cx: TypeCx> Matrix<'a, 'p, Cx> {
         matrix
     }
 
-    fn head_ty(&self, mcx: MatchCtxt<'a, 'p, Cx>) -> Option<Cx::Ty> {
+    fn head_ty(&self, mcx: MatchCtxt<'_, 'p, Cx>) -> Option<Cx::Ty> {
         if self.column_count() == 0 {
             return None;
         }
@@ -872,33 +1041,32 @@ impl<'a, 'p, Cx: TypeCx> Matrix<'a, 'p, Cx> {
         self.wildcard_row.len()
     }
 
-    fn rows<'b>(
-        &'b self,
-    ) -> impl Iterator<Item = &'b MatrixRow<'a, 'p, Cx>> + Clone + DoubleEndedIterator + ExactSizeIterator
+    fn rows(
+        &self,
+    ) -> impl Iterator<Item = &MatrixRow<'p, Cx>> + Clone + DoubleEndedIterator + ExactSizeIterator
     {
         self.rows.iter()
     }
-    fn rows_mut<'b>(
-        &'b mut self,
-    ) -> impl Iterator<Item = &'b mut MatrixRow<'a, 'p, Cx>> + DoubleEndedIterator + ExactSizeIterator
+    fn rows_mut(
+        &mut self,
+    ) -> impl Iterator<Item = &mut MatrixRow<'p, Cx>> + DoubleEndedIterator + ExactSizeIterator
     {
         self.rows.iter_mut()
     }
 
     /// Iterate over the first pattern of each row.
-    fn heads<'b>(
-        &'b self,
-    ) -> impl Iterator<Item = &'b DeconstructedPat<'p, Cx>> + Clone + Captures<'a> {
+    fn heads(&self) -> impl Iterator<Item = &'p DeconstructedPat<'p, Cx>> + Clone + Captures<'_> {
         self.rows().map(|r| r.head())
     }
 
     /// This computes `specialize(ctor, self)`. See top of the file for explanations.
     fn specialize_constructor(
         &self,
-        pcx: &PlaceCtxt<'a, 'p, Cx>,
+        pcx: &PlaceCtxt<'_, 'p, Cx>,
         ctor: &Constructor<Cx>,
-    ) -> Matrix<'a, 'p, Cx> {
-        let wildcard_row = self.wildcard_row.pop_head_constructor(pcx, ctor);
+        ctor_is_relevant: bool,
+    ) -> Matrix<'p, Cx> {
+        let wildcard_row = self.wildcard_row.pop_head_constructor(pcx, ctor, ctor_is_relevant);
         let new_validity = self.place_validity[0].specialize(ctor);
         let new_place_validity = std::iter::repeat(new_validity)
             .take(ctor.arity(pcx))
@@ -908,7 +1076,7 @@ impl<'a, 'p, Cx: TypeCx> Matrix<'a, 'p, Cx> {
             Matrix { rows: Vec::new(), wildcard_row, place_validity: new_place_validity };
         for (i, row) in self.rows().enumerate() {
             if ctor.is_covered_by(pcx, row.head().ctor()) {
-                let new_row = row.pop_head_constructor(pcx, ctor, i);
+                let new_row = row.pop_head_constructor(pcx, ctor, ctor_is_relevant, i);
                 matrix.expand_and_push(new_row);
             }
         }
@@ -926,7 +1094,7 @@ impl<'a, 'p, Cx: TypeCx> Matrix<'a, 'p, Cx> {
 /// + _     + [_, _, tail @ ..] +
 /// | ✓     | ?                 | // column validity
 /// ```
-impl<'a, 'p, Cx: TypeCx> fmt::Debug for Matrix<'a, 'p, Cx> {
+impl<'p, Cx: TypeCx> fmt::Debug for Matrix<'p, Cx> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "\n")?;
 
@@ -1108,7 +1276,10 @@ impl<Cx: TypeCx> WitnessMatrix<Cx> {
         if matches!(ctor, Constructor::Missing) {
             // We got the special `Missing` constructor that stands for the constructors not present
             // in the match.
-            if !report_individual_missing_ctors {
+            if missing_ctors.is_empty() {
+                // Nothing to report.
+                *self = Self::empty();
+            } else if !report_individual_missing_ctors {
                 // Report `_` as missing.
                 let pat = WitnessPat::wild_from_ctor(pcx, Constructor::Wildcard);
                 self.push_pattern(pat);
@@ -1162,10 +1333,17 @@ impl<Cx: TypeCx> WitnessMatrix<Cx> {
 #[instrument(level = "debug", skip(mcx, is_top_level), ret)]
 fn compute_exhaustiveness_and_usefulness<'a, 'p, Cx: TypeCx>(
     mcx: MatchCtxt<'a, 'p, Cx>,
-    matrix: &mut Matrix<'a, 'p, Cx>,
+    matrix: &mut Matrix<'p, Cx>,
     is_top_level: bool,
 ) -> WitnessMatrix<Cx> {
     debug_assert!(matrix.rows().all(|r| r.len() == matrix.column_count()));
+
+    if !matrix.wildcard_row.relevant && matrix.rows().all(|r| !r.pats.relevant) {
+        // Here we know that nothing will contribute further to exhaustiveness or usefulness. This
+        // is purely an optimization: skipping this check doesn't affect correctness. See the top of
+        // the file for details.
+        return WitnessMatrix::empty();
+    }
 
     let Some(ty) = matrix.head_ty(mcx) else {
         // The base case: there are no columns in the matrix. We are morally pattern-matching on ().
@@ -1179,8 +1357,14 @@ fn compute_exhaustiveness_and_usefulness<'a, 'p, Cx: TypeCx>(
                 return WitnessMatrix::empty();
             }
         }
-        // No (unguarded) rows, so the match is not exhaustive. We return a new witness.
-        return WitnessMatrix::unit_witness();
+        // No (unguarded) rows, so the match is not exhaustive. We return a new witness unless
+        // irrelevant.
+        return if matrix.wildcard_row.relevant {
+            WitnessMatrix::unit_witness()
+        } else {
+            // We choose to not report anything here; see at the top for details.
+            WitnessMatrix::empty()
+        };
     };
 
     debug!("ty: {ty:?}");
@@ -1223,32 +1407,21 @@ fn compute_exhaustiveness_and_usefulness<'a, 'p, Cx: TypeCx>(
 
     let mut ret = WitnessMatrix::empty();
     for ctor in split_ctors {
-        debug!("specialize({:?})", ctor);
         // Dig into rows that match `ctor`.
-        let mut spec_matrix = matrix.specialize_constructor(pcx, &ctor);
+        debug!("specialize({:?})", ctor);
+        // `ctor` is *irrelevant* if there's another constructor in `split_ctors` that matches
+        // strictly fewer rows. In that case we can sometimes skip it. See the top of the file for
+        // details.
+        let ctor_is_relevant = matches!(ctor, Constructor::Missing) || missing_ctors.is_empty();
+        let mut spec_matrix = matrix.specialize_constructor(pcx, &ctor, ctor_is_relevant);
         let mut witnesses = ensure_sufficient_stack(|| {
             compute_exhaustiveness_and_usefulness(mcx, &mut spec_matrix, false)
         });
 
-        let counts_for_exhaustiveness = match ctor {
-            Constructor::Missing => !missing_ctors.is_empty(),
-            // If there are missing constructors we'll report those instead. Since `Missing` matches
-            // only the wildcard rows, it matches fewer rows than this constructor, and is therefore
-            // guaranteed to result in the same or more witnesses. So skipping this does not
-            // jeopardize correctness.
-            _ => missing_ctors.is_empty(),
-        };
-        if counts_for_exhaustiveness {
-            // Transform witnesses for `spec_matrix` into witnesses for `matrix`.
-            witnesses.apply_constructor(
-                pcx,
-                &missing_ctors,
-                &ctor,
-                report_individual_missing_ctors,
-            );
-            // Accumulate the found witnesses.
-            ret.extend(witnesses);
-        }
+        // Transform witnesses for `spec_matrix` into witnesses for `matrix`.
+        witnesses.apply_constructor(pcx, &missing_ctors, &ctor, report_individual_missing_ctors);
+        // Accumulate the found witnesses.
+        ret.extend(witnesses);
 
         // A parent row is useful if any of its children is.
         for child_row in spec_matrix.rows() {

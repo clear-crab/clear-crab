@@ -12,7 +12,7 @@ use rustc_middle::mir::interpret::Scalar;
 use rustc_middle::mir::{self, Const};
 use rustc_middle::thir::{FieldPat, Pat, PatKind, PatRange, PatRangeBoundary};
 use rustc_middle::ty::layout::IntegerExt;
-use rustc_middle::ty::{self, Ty, TyCtxt, VariantDef};
+use rustc_middle::ty::{self, OpaqueTypeKey, Ty, TyCtxt, VariantDef};
 use rustc_span::{Span, DUMMY_SP};
 use rustc_target::abi::{FieldIdx, Integer, VariantIdx, FIRST_VARIANT};
 use smallvec::SmallVec;
@@ -74,8 +74,16 @@ impl<'p, 'tcx> fmt::Debug for RustcMatchCheckCtxt<'p, 'tcx> {
 }
 
 impl<'p, 'tcx> RustcMatchCheckCtxt<'p, 'tcx> {
-    pub(crate) fn is_uninhabited(&self, ty: Ty<'tcx>) -> bool {
-        !ty.is_inhabited_from(self.tcx, self.module, self.param_env)
+    fn reveal_opaque(&self, key: OpaqueTypeKey<'tcx>) -> Option<Ty<'tcx>> {
+        self.typeck_results.concrete_opaque_types.get(&key).map(|x| x.ty)
+    }
+    pub fn is_uninhabited(&self, ty: Ty<'tcx>) -> bool {
+        !ty.inhabited_predicate(self.tcx).apply_revealing_opaque(
+            self.tcx,
+            self.param_env,
+            self.module,
+            &|key| self.reveal_opaque(key),
+        )
     }
 
     /// Returns whether the given type is an enum from another crate declared `#[non_exhaustive]`.
@@ -120,11 +128,11 @@ impl<'p, 'tcx> RustcMatchCheckCtxt<'p, 'tcx> {
     // In the cases of either a `#[non_exhaustive]` field list or a non-public field, we hide
     // uninhabited fields in order not to reveal the uninhabitedness of the whole variant.
     // This lists the fields we keep along with their types.
-    pub(crate) fn list_variant_nonhidden_fields<'a>(
-        &'a self,
+    pub(crate) fn list_variant_nonhidden_fields(
+        &self,
         ty: Ty<'tcx>,
-        variant: &'a VariantDef,
-    ) -> impl Iterator<Item = (FieldIdx, Ty<'tcx>)> + Captures<'p> + Captures<'a> {
+        variant: &'tcx VariantDef,
+    ) -> impl Iterator<Item = (FieldIdx, Ty<'tcx>)> + Captures<'p> + Captures<'_> {
         let cx = self;
         let ty::Adt(adt, args) = ty.kind() else { bug!() };
         // Whether we must not match the fields of this variant exhaustively.
@@ -319,7 +327,9 @@ impl<'p, 'tcx> RustcMatchCheckCtxt<'p, 'tcx> {
                         let is_inhabited = v
                             .inhabited_predicate(cx.tcx, *def)
                             .instantiate(cx.tcx, args)
-                            .apply(cx.tcx, cx.param_env, cx.module);
+                            .apply_revealing_opaque(cx.tcx, cx.param_env, cx.module, &|key| {
+                                cx.reveal_opaque(key)
+                            });
                         // Variants that depend on a disabled unstable feature.
                         let is_unstable = matches!(
                             cx.tcx.eval_stability(variant_def_id, None, DUMMY_SP, None),
@@ -356,7 +366,7 @@ impl<'p, 'tcx> RustcMatchCheckCtxt<'p, 'tcx> {
             | ty::FnPtr(_)
             | ty::Dynamic(_, _, _)
             | ty::Closure(_, _)
-            | ty::Coroutine(_, _, _)
+            | ty::Coroutine(_, _)
             | ty::Alias(_, _)
             | ty::Param(_)
             | ty::Error(_) => ConstructorSet::Unlistable,
@@ -389,7 +399,7 @@ impl<'p, 'tcx> RustcMatchCheckCtxt<'p, 'tcx> {
 
     /// Note: the input patterns must have been lowered through
     /// `rustc_mir_build::thir::pattern::check_match::MatchVisitor::lower_pattern`.
-    pub fn lower_pat(&self, pat: &Pat<'tcx>) -> DeconstructedPat<'p, 'tcx> {
+    pub fn lower_pat(&self, pat: &'p Pat<'tcx>) -> DeconstructedPat<'p, 'tcx> {
         let singleton = |pat| std::slice::from_ref(self.pattern_arena.alloc(pat));
         let cx = self;
         let ctor;
@@ -530,7 +540,7 @@ impl<'p, 'tcx> RustcMatchCheckCtxt<'p, 'tcx> {
                         // `Ref`), and has one field. That field has constructor `Str(value)` and no
                         // subfields.
                         // Note: `t` is `str`, not `&str`.
-                        let subpattern = DeconstructedPat::new(Str(*value), &[], *t, pat.span);
+                        let subpattern = DeconstructedPat::new(Str(*value), &[], *t, pat);
                         ctor = Ref;
                         fields = singleton(subpattern)
                     }
@@ -614,7 +624,7 @@ impl<'p, 'tcx> RustcMatchCheckCtxt<'p, 'tcx> {
                 fields = &[];
             }
         }
-        DeconstructedPat::new(ctor, fields, pat.ty, pat.span)
+        DeconstructedPat::new(ctor, fields, pat.ty, pat)
     }
 
     /// Convert back to a `thir::PatRangeBoundary` for diagnostic purposes.
@@ -884,7 +894,7 @@ impl<'p, 'tcx> TypeCx for RustcMatchCheckCtxt<'p, 'tcx> {
     type VariantIdx = VariantIdx;
     type StrLit = Const<'tcx>;
     type ArmData = HirId;
-    type PatData = Span;
+    type PatData = &'p Pat<'tcx>;
 
     fn is_exhaustive_patterns_feature_on(&self) -> bool {
         self.tcx.features().exhaustive_patterns

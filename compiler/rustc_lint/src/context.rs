@@ -804,8 +804,6 @@ pub trait LintContext {
                                 db.span_suggestion(value_span, "there is a expected value with a similar name", format!("\"{best_match}\""), Applicability::MaybeIncorrect);
 
                             }
-                        } else if name == sym::feature && is_from_cargo {
-                            db.help(format!("consider defining `{name}` as feature in `Cargo.toml`"));
                         } else if let &[first_possibility] = &possibilities[..] {
                             db.span_suggestion(name_span.shrink_to_hi(), "specify a config value", format!(" = \"{first_possibility}\""), Applicability::MaybeIncorrect);
                         }
@@ -1056,6 +1054,7 @@ pub trait LintContext {
         // a dummy diagnostic and emit is as usual, which will be suppressed and stored like a normal
         // expected lint diagnostic.
         self.sess()
+            .dcx()
             .struct_expect(
                 "this is a dummy diagnostic, to submit and store an expectation",
                 expectation,
@@ -1068,7 +1067,7 @@ impl<'a> EarlyContext<'a> {
     pub(crate) fn new(
         sess: &'a Session,
         features: &'a Features,
-        warn_about_weird_lints: bool,
+        lint_added_lints: bool,
         lint_store: &'a LintStore,
         registered_tools: &'a RegisteredTools,
         buffered: LintBuffer,
@@ -1077,7 +1076,7 @@ impl<'a> EarlyContext<'a> {
             builder: LintLevelsBuilder::new(
                 sess,
                 features,
-                warn_about_weird_lints,
+                lint_added_lints,
                 lint_store,
                 registered_tools,
             ),
