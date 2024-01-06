@@ -17,8 +17,8 @@ use rustc_data_structures::profiling::{SelfProfiler, SelfProfilerRef};
 use rustc_data_structures::sync::{
     AtomicU64, DynSend, DynSync, Lock, Lrc, OneThread, Ordering::SeqCst,
 };
-use rustc_errors::annotate_snippet_emitter_writer::AnnotateSnippetEmitterWriter;
-use rustc_errors::emitter::{DynEmitter, EmitterWriter, HumanReadableErrorType};
+use rustc_errors::annotate_snippet_emitter_writer::AnnotateSnippetEmitter;
+use rustc_errors::emitter::{DynEmitter, HumanEmitter, HumanReadableErrorType};
 use rustc_errors::json::JsonEmitter;
 use rustc_errors::registry::Registry;
 use rustc_errors::{
@@ -1000,7 +1000,7 @@ fn default_emitter(
             let (short, color_config) = kind.unzip();
 
             if let HumanReadableErrorType::AnnotateSnippet(_) = kind {
-                let emitter = AnnotateSnippetEmitterWriter::new(
+                let emitter = AnnotateSnippetEmitter::new(
                     Some(source_map),
                     bundle,
                     fallback_bundle,
@@ -1009,7 +1009,7 @@ fn default_emitter(
                 );
                 Box::new(emitter.ui_testing(sopts.unstable_opts.ui_testing))
             } else {
-                let emitter = EmitterWriter::stderr(color_config, fallback_bundle)
+                let emitter = HumanEmitter::stderr(color_config, fallback_bundle)
                     .fluent_bundle(bundle)
                     .sm(Some(source_map))
                     .short_message(short)
@@ -1274,7 +1274,10 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
     }
 
     // Cannot enable crt-static with sanitizers on Linux
-    if sess.crt_static(None) && !sess.opts.unstable_opts.sanitizer.is_empty() {
+    if sess.crt_static(None)
+        && !sess.opts.unstable_opts.sanitizer.is_empty()
+        && !sess.target.is_like_msvc
+    {
         sess.dcx().emit_err(errors::CannotEnableCrtStaticLinux);
     }
 
@@ -1501,7 +1504,7 @@ fn mk_emitter(output: ErrorOutputType) -> Box<DynEmitter> {
     let emitter: Box<DynEmitter> = match output {
         config::ErrorOutputType::HumanReadable(kind) => {
             let (short, color_config) = kind.unzip();
-            Box::new(EmitterWriter::stderr(color_config, fallback_bundle).short_message(short))
+            Box::new(HumanEmitter::stderr(color_config, fallback_bundle).short_message(short))
         }
         config::ErrorOutputType::Json { pretty, json_rendered } => Box::new(JsonEmitter::basic(
             pretty,

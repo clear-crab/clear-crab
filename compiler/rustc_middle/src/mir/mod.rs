@@ -55,7 +55,6 @@ pub mod mono;
 pub mod patch;
 pub mod pretty;
 mod query;
-pub mod spanview;
 mod statement;
 mod syntax;
 pub mod tcx;
@@ -250,6 +249,9 @@ pub struct CoroutineInfo<'tcx> {
     /// The yield type of the function, if it is a coroutine.
     pub yield_ty: Option<Ty<'tcx>>,
 
+    /// The resume type of the function, if it is a coroutine.
+    pub resume_ty: Option<Ty<'tcx>>,
+
     /// Coroutine drop glue.
     pub coroutine_drop: Option<Body<'tcx>>,
 
@@ -385,6 +387,7 @@ impl<'tcx> Body<'tcx> {
             coroutine: coroutine_kind.map(|coroutine_kind| {
                 Box::new(CoroutineInfo {
                     yield_ty: None,
+                    resume_ty: None,
                     coroutine_drop: None,
                     coroutine_layout: None,
                     coroutine_kind,
@@ -549,6 +552,11 @@ impl<'tcx> Body<'tcx> {
     #[inline]
     pub fn yield_ty(&self) -> Option<Ty<'tcx>> {
         self.coroutine.as_ref().and_then(|coroutine| coroutine.yield_ty)
+    }
+
+    #[inline]
+    pub fn resume_ty(&self) -> Option<Ty<'tcx>> {
+        self.coroutine.as_ref().and_then(|coroutine| coroutine.resume_ty)
     }
 
     #[inline]
@@ -720,7 +728,7 @@ pub struct SourceInfo {
     pub span: Span,
 
     /// The source scope, keeping track of which bindings can be
-    /// seen by debuginfo, active lint levels, `unsafe {...}`, etc.
+    /// seen by debuginfo, active lint levels, etc.
     pub scope: SourceScope,
 }
 
@@ -942,7 +950,7 @@ pub struct LocalDecl<'tcx> {
 
 /// Extra information about a some locals that's used for diagnostics and for
 /// classifying variables into local variables, statics, etc, which is needed e.g.
-/// for unsafety checking.
+/// for borrow checking.
 ///
 /// Not used for non-StaticRef temporaries, the return place, or anonymous
 /// function parameters.
@@ -1568,6 +1576,7 @@ impl Location {
     ///
     /// Note that if this location represents a terminator, then the
     /// resulting location would be out of bounds and invalid.
+    #[inline]
     pub fn successor_within_block(&self) -> Location {
         Location { block: self.block, statement_index: self.statement_index + 1 }
     }
@@ -1604,6 +1613,7 @@ impl Location {
         false
     }
 
+    #[inline]
     pub fn dominates(&self, other: Location, dominators: &Dominators<BasicBlock>) -> bool {
         if self.block == other.block {
             self.statement_index <= other.statement_index
@@ -1623,6 +1633,7 @@ pub enum DefLocation {
 }
 
 impl DefLocation {
+    #[inline]
     pub fn dominates(self, location: Location, dominators: &Dominators<BasicBlock>) -> bool {
         match self {
             DefLocation::Argument => true,

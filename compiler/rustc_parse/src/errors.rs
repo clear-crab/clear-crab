@@ -1065,8 +1065,8 @@ impl<'a> IntoDiagnostic<'a> for ExpectedIdentifier {
                 None => fluent::parse_expected_identifier_found_str,
             },
         );
-        diag.set_span(self.span);
-        diag.set_arg("token", self.token);
+        diag.span(self.span);
+        diag.arg("token", self.token);
 
         if let Some(sugg) = self.suggest_raw {
             sugg.add_to_diagnostic(&mut diag);
@@ -1123,8 +1123,8 @@ impl<'a> IntoDiagnostic<'a> for ExpectedSemi {
                 None => fluent::parse_expected_semi_found_str,
             },
         );
-        diag.set_span(self.span);
-        diag.set_arg("token", self.token);
+        diag.span(self.span);
+        diag.arg("token", self.token);
 
         if let Some(unexpected_token_label) = self.unexpected_token_label {
             diag.span_label(unexpected_token_label, fluent::parse_label_unexpected_token);
@@ -2379,6 +2379,27 @@ pub(crate) struct ExpectedCommaAfterPatternField {
 }
 
 #[derive(Diagnostic)]
+#[diag(parse_unexpected_paren_in_range_pat)]
+pub(crate) struct UnexpectedParenInRangePat {
+    #[primary_span]
+    pub span: Vec<Span>,
+    #[subdiagnostic]
+    pub sugg: UnexpectedParenInRangePatSugg,
+}
+
+#[derive(Subdiagnostic)]
+#[multipart_suggestion(
+    parse_unexpected_paren_in_range_pat_sugg,
+    applicability = "machine-applicable"
+)]
+pub(crate) struct UnexpectedParenInRangePatSugg {
+    #[suggestion_part(code = "")]
+    pub start_span: Span,
+    #[suggestion_part(code = "")]
+    pub end_span: Span,
+}
+
+#[derive(Diagnostic)]
 #[diag(parse_return_types_use_thin_arrow)]
 pub(crate) struct ReturnTypesUseThinArrow {
     #[primary_span]
@@ -2887,3 +2908,11 @@ pub(crate) struct TransposeDynOrImplSugg<'a> {
     pub insertion_span: Span,
     pub kw: &'a str,
 }
+
+#[derive(Diagnostic)]
+#[diag(parse_array_index_offset_of)]
+pub(crate) struct ArrayIndexInOffsetOf(#[primary_span] pub Span);
+
+#[derive(Diagnostic)]
+#[diag(parse_invalid_offset_of)]
+pub(crate) struct InvalidOffsetOf(#[primary_span] pub Span);

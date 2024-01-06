@@ -547,7 +547,7 @@ impl<'tcx> TyCtxt<'tcx> {
     /// closure appears (and, sadly, a corresponding `NodeId`, since
     /// those are not yet phased out). The parent of the closure's
     /// `DefId` will also be the context where it appears.
-    pub fn is_closure(self, def_id: DefId) -> bool {
+    pub fn is_closure_or_coroutine(self, def_id: DefId) -> bool {
         matches!(self.def_kind(def_id), DefKind::Closure)
     }
 
@@ -1483,7 +1483,7 @@ pub fn reveal_opaque_types_in_bounds<'tcx>(
     val.fold_with(&mut visitor)
 }
 
-/// Determines whether an item is annotated with `doc(hidden)`.
+/// Determines whether an item is directly annotated with `doc(hidden)`.
 fn is_doc_hidden(tcx: TyCtxt<'_>, def_id: LocalDefId) -> bool {
     tcx.get_attrs(def_id, sym::doc)
         .filter_map(|attr| attr.meta_item_list())

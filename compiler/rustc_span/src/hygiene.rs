@@ -27,7 +27,7 @@
 use crate::def_id::{CrateNum, DefId, StableCrateId, CRATE_DEF_ID, LOCAL_CRATE};
 use crate::edition::Edition;
 use crate::symbol::{kw, sym, Symbol};
-use crate::{with_session_globals, HashStableContext, Span, DUMMY_SP};
+use crate::{with_session_globals, HashStableContext, Span, SpanDecoder, SpanEncoder, DUMMY_SP};
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::stable_hasher::{Hash64, HashStable, HashingControls, StableHasher};
@@ -295,11 +295,13 @@ impl ExpnId {
     pub fn expansion_cause(mut self) -> Option<Span> {
         let mut last_macro = None;
         loop {
+            // Fast path to avoid locking.
+            if self == ExpnId::root() {
+                break;
+            }
             let expn_data = self.expn_data();
             // Stop going up the backtrace once include! is encountered
-            if expn_data.is_root()
-                || expn_data.kind == ExpnKind::Macro(MacroKind::Bang, sym::include)
-            {
+            if expn_data.kind == ExpnKind::Macro(MacroKind::Bang, sym::include) {
                 break;
             }
             self = expn_data.call_site.ctxt().outer_expn();
@@ -433,7 +435,7 @@ impl HygieneData {
 
     fn marks(&self, mut ctxt: SyntaxContext) -> Vec<(ExpnId, Transparency)> {
         let mut marks = Vec::new();
-        while ctxt != SyntaxContext::root() {
+        while !ctxt.is_root() {
             debug!("marks: getting parent of {:?}", ctxt);
             marks.push(self.outer_mark(ctxt));
             ctxt = self.parent_ctxt(ctxt);
@@ -850,21 +852,6 @@ impl fmt::Debug for SyntaxContext {
 }
 
 impl Span {
-    /// Creates a fresh expansion with given properties.
-    /// Expansions are normally created by macros, but in some cases expansions are created for
-    /// other compiler-generated code to set per-span properties like allowed unstable features.
-    /// The returned span belongs to the created expansion and has the new properties,
-    /// but its location is inherited from the current span.
-    pub fn fresh_expansion(self, expn_id: LocalExpnId) -> Span {
-        HygieneData::with(|data| {
-            self.with_ctxt(data.apply_mark(
-                self.ctxt(),
-                expn_id.to_expn_id(),
-                Transparency::Transparent,
-            ))
-        })
-    }
-
     /// Reuses the span but adds information like the kind of the desugaring and features that are
     /// allowed inside this span.
     pub fn mark_with_reason(
@@ -879,7 +866,7 @@ impl Span {
             ..ExpnData::default(ExpnKind::Desugaring(reason), self, edition, None, None)
         };
         let expn_id = LocalExpnId::fresh(expn_data, ctx);
-        self.fresh_expansion(expn_id)
+        self.apply_mark(expn_id.to_expn_id(), Transparency::Transparent)
     }
 }
 
@@ -1431,27 +1418,15 @@ fn for_all_expns_in(
     }
 }
 
-impl<E: Encoder> Encodable<E> for LocalExpnId {
+impl<E: SpanEncoder> Encodable<E> for LocalExpnId {
     fn encode(&self, e: &mut E) {
         self.to_expn_id().encode(e);
     }
 }
 
-impl<E: Encoder> Encodable<E> for ExpnId {
-    default fn encode(&self, _: &mut E) {
-        panic!("cannot encode `ExpnId` with `{}`", std::any::type_name::<E>());
-    }
-}
-
-impl<D: Decoder> Decodable<D> for LocalExpnId {
+impl<D: SpanDecoder> Decodable<D> for LocalExpnId {
     fn decode(d: &mut D) -> Self {
         ExpnId::expect_local(ExpnId::decode(d))
-    }
-}
-
-impl<D: Decoder> Decodable<D> for ExpnId {
-    default fn decode(_: &mut D) -> Self {
-        panic!("cannot decode `ExpnId` with `{}`", std::any::type_name::<D>());
     }
 }
 
@@ -1464,18 +1439,6 @@ pub fn raw_encode_syntax_context<E: Encoder>(
         context.latest_ctxts.lock().insert(ctxt);
     }
     ctxt.0.encode(e);
-}
-
-impl<E: Encoder> Encodable<E> for SyntaxContext {
-    default fn encode(&self, _: &mut E) {
-        panic!("cannot encode `SyntaxContext` with `{}`", std::any::type_name::<E>());
-    }
-}
-
-impl<D: Decoder> Decodable<D> for SyntaxContext {
-    default fn decode(_: &mut D) -> Self {
-        panic!("cannot decode `SyntaxContext` with `{}`", std::any::type_name::<D>());
-    }
 }
 
 /// Updates the `disambiguator` field of the corresponding `ExpnData`

@@ -1,7 +1,7 @@
 //! Errors emitted by ast_passes.
 
 use rustc_ast::ParamKindOrd;
-use rustc_errors::AddToDiagnostic;
+use rustc_errors::{AddToDiagnostic, Applicability};
 use rustc_macros::{Diagnostic, Subdiagnostic};
 use rustc_span::{symbol::Ident, Span, Symbol};
 
@@ -49,6 +49,24 @@ pub struct TraitFnConst {
     #[primary_span]
     #[label]
     pub span: Span,
+    pub in_impl: bool,
+    #[label(ast_passes_const_context_label)]
+    pub const_context_label: Option<Span>,
+    #[suggestion(ast_passes_remove_const_sugg, code = "")]
+    pub remove_const_sugg: (Span, Applicability),
+    pub requires_multiple_changes: bool,
+    #[suggestion(
+        ast_passes_make_impl_const_sugg,
+        code = "const ",
+        applicability = "maybe-incorrect"
+    )]
+    pub make_impl_const_sugg: Option<Span>,
+    #[suggestion(
+        ast_passes_make_trait_const_sugg,
+        code = "#[const_trait]\n",
+        applicability = "maybe-incorrect"
+    )]
+    pub make_trait_const_sugg: Option<Span>,
 }
 
 #[derive(Diagnostic)]
@@ -707,8 +725,8 @@ impl AddToDiagnostic for StableFeature {
             rustc_errors::SubdiagnosticMessage,
         ) -> rustc_errors::SubdiagnosticMessage,
     {
-        diag.set_arg("name", self.name);
-        diag.set_arg("since", self.since);
+        diag.arg("name", self.name);
+        diag.arg("since", self.since);
         diag.help(fluent::ast_passes_stable_since);
     }
 }
@@ -741,6 +759,13 @@ pub struct NegativeBoundUnsupported {
 #[derive(Diagnostic)]
 #[diag(ast_passes_constraint_on_negative_bound)]
 pub struct ConstraintOnNegativeBound {
+    #[primary_span]
+    pub span: Span,
+}
+
+#[derive(Diagnostic)]
+#[diag(ast_passes_negative_bound_with_parenthetical_notation)]
+pub struct NegativeBoundWithParentheticalNotation {
     #[primary_span]
     pub span: Span,
 }

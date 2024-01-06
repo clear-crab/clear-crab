@@ -1,6 +1,6 @@
 use std::cmp;
 
-use rustc_data_structures::fx::FxHashMap;
+use rustc_data_structures::fx::FxIndexMap;
 use rustc_data_structures::sorted_map::SortedMap;
 use rustc_errors::{Diagnostic, DiagnosticBuilder, DiagnosticId, DiagnosticMessage, MultiSpan};
 use rustc_hir::{HirId, ItemLocalId};
@@ -61,7 +61,7 @@ pub type LevelAndSource = (Level, LintLevelSource);
 /// by the attributes for *a single HirId*.
 #[derive(Default, Debug, HashStable)]
 pub struct ShallowLintLevelMap {
-    pub specs: SortedMap<ItemLocalId, FxHashMap<LintId, LevelAndSource>>,
+    pub specs: SortedMap<ItemLocalId, FxIndexMap<LintId, LevelAndSource>>,
 }
 
 /// From an initial level and source, verify the effect of special annotations:
@@ -314,14 +314,14 @@ pub fn struct_lint_level(
             }
             Level::ForceWarn(Some(expect_id)) => rustc_errors::Level::Warning(Some(expect_id)),
             Level::Warn | Level::ForceWarn(None) => rustc_errors::Level::Warning(None),
-            Level::Deny | Level::Forbid => rustc_errors::Level::Error { lint: true },
+            Level::Deny | Level::Forbid => rustc_errors::Level::Error,
         };
         let mut err = DiagnosticBuilder::new(sess.dcx(), err_level, "");
         if let Some(span) = span {
-            err.set_span(span);
+            err.span(span);
         }
 
-        err.set_is_lint();
+        err.is_lint();
 
         // If this code originates in a foreign macro, aka something that this crate
         // did not itself author, then it's likely that there's nothing this crate
@@ -348,7 +348,7 @@ pub fn struct_lint_level(
 
         // Delay evaluating and setting the primary message until after we've
         // suppressed the lint due to macros.
-        err.set_primary_message(msg);
+        err.primary_message(msg);
 
         // Lint diagnostics that are covered by the expect level will not be emitted outside
         // the compiler. It is therefore not necessary to add any information for the user.

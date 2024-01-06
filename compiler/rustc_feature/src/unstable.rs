@@ -210,7 +210,7 @@ declare_features! (
     /// Allows the `multiple_supertrait_upcastable` lint.
     (unstable, multiple_supertrait_upcastable, "1.69.0", None),
     /// Allow negative trait bounds. This is an internal-only feature for testing the trait solver!
-    (incomplete, negative_bounds, "1.71.0", None),
+    (internal, negative_bounds, "1.71.0", None),
     /// Allows using `#[omit_gdb_pretty_printer_section]`.
     (internal, omit_gdb_pretty_printer_section, "1.5.0", None),
     /// Allows using `#[prelude_import]` on glob `use` items.
@@ -525,7 +525,7 @@ declare_features! (
     /// Allows the `#[must_not_suspend]` attribute.
     (unstable, must_not_suspend, "1.57.0", Some(83310)),
     /// Allows using `#[naked]` on functions.
-    (unstable, naked_functions, "1.9.0", Some(32408)),
+    (unstable, naked_functions, "1.9.0", Some(90957)),
     /// Allows specifying the as-needed link modifier
     (unstable, native_link_modifiers_as_needed, "1.53.0", Some(81490)),
     /// Allow negative trait implementations.

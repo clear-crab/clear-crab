@@ -385,7 +385,7 @@ impl Step for RustAnalyzer {
             "test",
             crate_path,
             SourceType::InTree,
-            &["sysroot-abi".to_owned()],
+            &["in-rust-tree".to_owned()],
         );
         cargo.allow_features(tool::RustAnalyzer::ALLOW_FEATURES);
 
@@ -1937,6 +1937,29 @@ NOTE: if you're sure you want to do this, please open an issue as to why. In the
             }
         }
 
+        // Special setup to enable running with sanitizers on MSVC.
+        if !builder.config.dry_run()
+            && target.contains("msvc")
+            && builder.config.sanitizers_enabled(target)
+        {
+            // Ignore interception failures: not all dlls in the process will have been built with
+            // address sanitizer enabled (e.g., ntdll.dll).
+            cmd.env("ASAN_WIN_CONTINUE_ON_INTERCEPTION_FAILURE", "1");
+            // Add the address sanitizer runtime to the PATH - it is located next to cl.exe.
+            let asan_runtime_path =
+                builder.cc.borrow()[&target].path().parent().unwrap().to_path_buf();
+            let old_path = cmd
+                .get_envs()
+                .find_map(|(k, v)| (k == "PATH").then_some(v))
+                .flatten()
+                .map_or_else(|| env::var_os("PATH").unwrap_or_default(), |v| v.to_owned());
+            let new_path = env::join_paths(
+                env::split_paths(&old_path).chain(std::iter::once(asan_runtime_path)),
+            )
+            .expect("Could not add ASAN runtime path to PATH");
+            cmd.env("PATH", new_path);
+        }
+
         // Some UI tests trigger behavior in rustc where it reads $CARGO and changes behavior if it exists.
         // To make the tests work that rely on it not being set, make sure it is not set.
         cmd.env_remove("CARGO");
@@ -1953,7 +1976,7 @@ NOTE: if you're sure you want to do this, please open an issue as to why. In the
         }
 
         if builder.config.profiler_enabled(target) {
-            cmd.env("RUSTC_PROFILER_SUPPORT", "1");
+            cmd.arg("--profiler-support");
         }
 
         cmd.env("RUST_TEST_TMPDIR", builder.tempdir());

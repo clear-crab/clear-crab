@@ -12,6 +12,7 @@
 #![feature(lazy_cell)]
 #![feature(let_chains)]
 #![feature(panic_update_hook)]
+#![feature(result_flattening)]
 #![recursion_limit = "256"]
 #![deny(rustc::untranslatable_diagnostic)]
 #![deny(rustc::diagnostic_outside_of_impl)]
@@ -1249,8 +1250,7 @@ pub fn catch_fatal_errors<F: FnOnce() -> R, R>(f: F) -> Result<R, ErrorGuarantee
 /// Variant of `catch_fatal_errors` for the `interface::Result` return type
 /// that also computes the exit code.
 pub fn catch_with_exit_code(f: impl FnOnce() -> interface::Result<()>) -> i32 {
-    let result = catch_fatal_errors(f).and_then(|result| result);
-    match result {
+    match catch_fatal_errors(f).flatten() {
         Ok(()) => EXIT_SUCCESS,
         Err(_) => EXIT_FAILURE,
     }
@@ -1393,7 +1393,7 @@ fn report_ice(
 ) {
     let fallback_bundle =
         rustc_errors::fallback_fluent_bundle(crate::DEFAULT_LOCALE_RESOURCES.to_vec(), false);
-    let emitter = Box::new(rustc_errors::emitter::EmitterWriter::stderr(
+    let emitter = Box::new(rustc_errors::emitter::HumanEmitter::stderr(
         rustc_errors::ColorConfig::Auto,
         fallback_bundle,
     ));

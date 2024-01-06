@@ -46,6 +46,7 @@ use crate::errors::{
 };
 
 bitflags::bitflags! {
+    #[derive(Clone, Copy)]
     struct Restrictions: u8 {
         const STMT_EXPR         = 1 << 0;
         const NO_STRUCT_LITERAL = 1 << 1;
@@ -924,9 +925,8 @@ impl<'a> Parser<'a> {
                 });
         }
 
-        expect_err.set_primary_message(
-            "closure bodies that contain statements must be surrounded by braces",
-        );
+        expect_err
+            .primary_message("closure bodies that contain statements must be surrounded by braces");
 
         let preceding_pipe_span = closure_spans.closing_pipe;
         let following_token_span = self.token.span;
@@ -950,7 +950,7 @@ impl<'a> Parser<'a> {
         );
         expect_err.span_note(second_note, "the closure body may be incorrectly delimited");
 
-        expect_err.set_span(vec![preceding_pipe_span, following_token_span]);
+        expect_err.span(vec![preceding_pipe_span, following_token_span]);
 
         let opening_suggestion_str = " {".to_string();
         let closing_suggestion_str = "}".to_string();

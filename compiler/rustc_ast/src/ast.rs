@@ -20,6 +20,7 @@
 
 pub use crate::format::*;
 pub use crate::util::parser::ExprPrecedence;
+pub use rustc_span::AttrId;
 pub use GenericArgs::*;
 pub use UnsafeSource::*;
 
@@ -30,7 +31,6 @@ use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_data_structures::sync::Lrc;
 use rustc_macros::HashStable_Generic;
-use rustc_serialize::{Decodable, Decoder, Encodable, Encoder};
 use rustc_span::source_map::{respan, Spanned};
 use rustc_span::symbol::{kw, sym, Ident, Symbol};
 use rustc_span::{ErrorGuaranteed, Span, DUMMY_SP};
@@ -2171,9 +2171,10 @@ pub enum InlineAsmRegOrRegClass {
     RegClass(Symbol),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Encodable, Decodable, HashStable_Generic)]
+pub struct InlineAsmOptions(u16);
 bitflags::bitflags! {
-    #[derive(Encodable, Decodable, HashStable_Generic)]
-    pub struct InlineAsmOptions: u16 {
+    impl InlineAsmOptions: u16 {
         const PURE            = 1 << 0;
         const NOMEM           = 1 << 1;
         const READONLY        = 1 << 2;
@@ -2183,6 +2184,12 @@ bitflags::bitflags! {
         const ATT_SYNTAX      = 1 << 6;
         const RAW             = 1 << 7;
         const MAY_UNWIND      = 1 << 8;
+    }
+}
+
+impl std::fmt::Debug for InlineAsmOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        bitflags::parser::to_writer(self, f)
     }
 }
 
@@ -2673,22 +2680,6 @@ impl UseTree {
 pub enum AttrStyle {
     Outer,
     Inner,
-}
-
-rustc_index::newtype_index! {
-    #[orderable]
-    #[debug_format = "AttrId({})"]
-    pub struct AttrId {}
-}
-
-impl<S: Encoder> Encodable<S> for AttrId {
-    fn encode(&self, _s: &mut S) {}
-}
-
-impl<D: Decoder> Decodable<D> for AttrId {
-    default fn decode(_: &mut D) -> AttrId {
-        panic!("cannot decode `AttrId` with `{}`", std::any::type_name::<D>());
-    }
 }
 
 /// A list of attributes.

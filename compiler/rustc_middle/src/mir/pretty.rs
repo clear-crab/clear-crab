@@ -5,7 +5,6 @@ use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 
 use super::graphviz::write_mir_fn_graphviz;
-use super::spanview::write_mir_fn_spanview;
 use rustc_ast::InlineAsmTemplatePiece;
 use rustc_middle::mir::interpret::{
     alloc_range, read_target_uint, AllocBytes, AllocId, Allocation, GlobalAlloc, Pointer,
@@ -139,16 +138,6 @@ fn dump_matched_mir_node<'tcx, F>(
         let _: io::Result<()> = try {
             let mut file = create_dump_file(tcx, "dot", pass_num, pass_name, disambiguator, body)?;
             write_mir_fn_graphviz(tcx, body, false, &mut file)?;
-        };
-    }
-
-    if let Some(spanview) = tcx.sess.opts.unstable_opts.dump_mir_spanview {
-        let _: io::Result<()> = try {
-            let file_basename = dump_file_basename(tcx, pass_num, pass_name, disambiguator, body);
-            let mut file = create_dump_file_with_basename(tcx, &file_basename, "html")?;
-            if body.source.def_id().is_local() {
-                write_mir_fn_spanview(tcx, body, spanview, &file_basename, &mut file)?;
-            }
         };
     }
 }
@@ -520,7 +509,7 @@ fn write_mir_sig(tcx: TyCtxt<'_>, body: &Body<'_>, w: &mut dyn io::Write) -> io:
     let kind = tcx.def_kind(def_id);
     let is_function = match kind {
         DefKind::Fn | DefKind::AssocFn | DefKind::Ctor(..) => true,
-        _ => tcx.is_closure(def_id),
+        _ => tcx.is_closure_or_coroutine(def_id),
     };
     match (kind, body.source.promoted) {
         (_, Some(i)) => write!(w, "{i:?} in ")?,
