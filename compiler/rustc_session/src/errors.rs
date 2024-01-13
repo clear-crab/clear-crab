@@ -18,10 +18,9 @@ pub struct FeatureGateError {
 impl<'a> IntoDiagnostic<'a> for FeatureGateError {
     #[track_caller]
     fn into_diagnostic(self, dcx: &'a DiagCtxt, level: Level) -> DiagnosticBuilder<'a> {
-        let mut diag = DiagnosticBuilder::new(dcx, level, self.explain);
-        diag.span(self.span);
-        diag.code(error_code!(E0658));
-        diag
+        DiagnosticBuilder::new(dcx, level, self.explain)
+            .with_span(self.span)
+            .with_code(error_code!(E0658))
     }
 }
 

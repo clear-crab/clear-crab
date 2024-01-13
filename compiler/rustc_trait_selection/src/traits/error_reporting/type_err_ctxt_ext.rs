@@ -19,7 +19,7 @@ use crate::traits::{
 };
 use rustc_data_structures::fx::{FxHashMap, FxIndexMap};
 use rustc_errors::{
-    pluralize, struct_span_err, Applicability, Diagnostic, DiagnosticBuilder, ErrorGuaranteed,
+    pluralize, struct_span_code_err, Applicability, Diagnostic, DiagnosticBuilder, ErrorGuaranteed,
     MultiSpan, StashKey, Style,
 };
 use rustc_hir as hir;
@@ -228,7 +228,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             }
         }
 
-        self.dcx().span_delayed_bug(DUMMY_SP, "expected fulfillment errors")
+        self.dcx().delayed_bug("expected fulfillment errors")
     }
 
     /// Reports that an overflow has occurred and halts compilation. We
@@ -280,7 +280,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             predicate.print(&mut cx).unwrap();
             pred_str = cx.into_buffer();
         }
-        let mut err = struct_span_err!(
+        let mut err = struct_span_code_err!(
             self.dcx(),
             span,
             E0275,
@@ -525,7 +525,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                             (err_msg, None)
                         };
 
-                        let mut err = struct_span_err!(self.dcx(), span, E0277, "{}", err_msg);
+                        let mut err = struct_span_code_err!(self.dcx(), span, E0277, "{}", err_msg);
 
                         let mut suggested = false;
                         if is_try_conversion {
@@ -947,9 +947,6 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             Overflow(_) => {
                 bug!("overflow should be handled before the `report_selection_error` path");
             }
-            SelectionError::ErrorReporting => {
-                bug!("ErrorReporting Overflow should not reach `report_selection_err` call")
-            }
         };
 
         self.note_obligation_cause(&mut err, &obligation);
@@ -1236,7 +1233,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                 span_bug!(span, "const param tys cannot mention other generic parameters");
             }
             ty::Float(_) => {
-                struct_span_err!(
+                struct_span_code_err!(
                     self.dcx(),
                     span,
                     E0741,
@@ -1244,7 +1241,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                 )
             }
             ty::FnPtr(_) => {
-                struct_span_err!(
+                struct_span_code_err!(
                     self.dcx(),
                     span,
                     E0741,
@@ -1252,7 +1249,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                 )
             }
             ty::RawPtr(_) => {
-                struct_span_err!(
+                struct_span_code_err!(
                     self.dcx(),
                     span,
                     E0741,
@@ -1261,7 +1258,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             }
             ty::Adt(def, _) => {
                 // We should probably see if we're *allowed* to derive `ConstParamTy` on the type...
-                let mut diag = struct_span_err!(
+                let mut diag = struct_span_code_err!(
                     self.dcx(),
                     span,
                     E0741,
@@ -1293,7 +1290,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                 diag
             }
             _ => {
-                struct_span_err!(
+                struct_span_code_err!(
                     self.dcx(),
                     span,
                     E0741,
@@ -1731,7 +1728,7 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                         cx.into_buffer()
                     }))
                 });
-            let mut diag = struct_span_err!(self.dcx(), obligation.cause.span, E0271, "{msg}");
+            let mut diag = struct_span_code_err!(self.dcx(), obligation.cause.span, E0271, "{msg}");
 
             let secondary_span = (|| {
                 let ty::PredicateKind::Clause(ty::ClauseKind::Projection(proj)) =
@@ -2421,7 +2418,7 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                         true,
                     )
                 } else {
-                    struct_span_err!(
+                    struct_span_code_err!(
                         self.dcx(),
                         span,
                         E0283,
@@ -2525,14 +2522,14 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
 
                         // Replace the more general E0283 with a more specific error
                         err.cancel();
-                        err = self.dcx().struct_span_err_with_code(
+                        err = self.dcx().struct_span_err(
                             span,
                             format!(
                                 "cannot {verb} associated {noun} on trait without specifying the \
                                  corresponding `impl` type",
                             ),
-                            rustc_errors::error_code!(E0790),
                         );
+                        err.code(rustc_errors::error_code!(E0790));
 
                         if let Some(local_def_id) = data.trait_ref.def_id.as_local()
                             && let Some(hir::Node::Item(hir::Item {
@@ -2654,26 +2651,24 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                     .chain(Some(data.term.into_arg()))
                     .find(|g| g.has_non_region_infer());
                 if let Some(subst) = subst {
-                    let mut err = self.emit_inference_failure_err(
+                    self.emit_inference_failure_err(
                         obligation.cause.body_id,
                         span,
                         subst,
                         ErrorCode::E0284,
                         true,
-                    );
-                    err.note(format!("cannot satisfy `{predicate}`"));
-                    err
+                    )
+                    .with_note(format!("cannot satisfy `{predicate}`"))
                 } else {
                     // If we can't find a substitution, just print a generic error
-                    let mut err = struct_span_err!(
+                    struct_span_code_err!(
                         self.dcx(),
                         span,
                         E0284,
                         "type annotations needed: cannot satisfy `{}`",
                         predicate,
-                    );
-                    err.span_label(span, format!("cannot satisfy `{predicate}`"));
-                    err
+                    )
+                    .with_span_label(span, format!("cannot satisfy `{predicate}`"))
                 }
             }
 
@@ -2693,30 +2688,28 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                     err
                 } else {
                     // If we can't find a substitution, just print a generic error
-                    let mut err = struct_span_err!(
+                    struct_span_code_err!(
                         self.dcx(),
                         span,
                         E0284,
                         "type annotations needed: cannot satisfy `{}`",
                         predicate,
-                    );
-                    err.span_label(span, format!("cannot satisfy `{predicate}`"));
-                    err
+                    )
+                    .with_span_label(span, format!("cannot satisfy `{predicate}`"))
                 }
             }
             _ => {
                 if self.dcx().has_errors().is_some() || self.tainted_by_errors().is_some() {
                     return;
                 }
-                let mut err = struct_span_err!(
+                struct_span_code_err!(
                     self.dcx(),
                     span,
                     E0284,
                     "type annotations needed: cannot satisfy `{}`",
                     predicate,
-                );
-                err.span_label(span, format!("cannot satisfy `{predicate}`"));
-                err
+                )
+                .with_span_label(span, format!("cannot satisfy `{predicate}`"))
             }
         };
         self.note_obligation_cause(&mut err, obligation);
@@ -3463,13 +3456,11 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
         let found_node = found_did.and_then(|did| self.tcx.hir().get_if_local(did));
         let found_span = found_did.and_then(|did| self.tcx.hir().span_if_local(did));
 
-        if self.reported_closure_mismatch.borrow().contains(&(span, found_span)) {
+        if !self.reported_signature_mismatch.borrow_mut().insert((span, found_span)) {
             // We check closures twice, with obligations flowing in different directions,
             // but we want to complain about them only once.
             return None;
         }
-
-        self.reported_closure_mismatch.borrow_mut().insert((span, found_span));
 
         let mut not_tupled = false;
 
@@ -3548,17 +3539,16 @@ impl<'tcx> InferCtxtPrivExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
         span: Span,
     ) -> Option<DiagnosticBuilder<'tcx>> {
         if !self.tcx.features().generic_const_exprs {
-            let mut err = self
-                .dcx()
-                .struct_span_err(span, "constant expression depends on a generic parameter");
-            // FIXME(const_generics): we should suggest to the user how they can resolve this
-            // issue. However, this is currently not actually possible
-            // (see https://github.com/rust-lang/rust/issues/66962#issuecomment-575907083).
-            //
-            // Note that with `feature(generic_const_exprs)` this case should not
-            // be reachable.
-            err.note("this may fail depending on what value the parameter takes");
-            err.emit();
+            self.dcx()
+                .struct_span_err(span, "constant expression depends on a generic parameter")
+                // FIXME(const_generics): we should suggest to the user how they can resolve this
+                // issue. However, this is currently not actually possible
+                // (see https://github.com/rust-lang/rust/issues/66962#issuecomment-575907083).
+                //
+                // Note that with `feature(generic_const_exprs)` this case should not
+                // be reachable.
+                .with_note("this may fail depending on what value the parameter takes")
+                .emit();
             return None;
         }
 

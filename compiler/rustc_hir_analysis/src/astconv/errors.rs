@@ -7,7 +7,7 @@ use crate::fluent_generated as fluent;
 use crate::traits::error_reporting::report_object_safety_error;
 use rustc_data_structures::fx::{FxHashMap, FxIndexMap, FxIndexSet};
 use rustc_data_structures::unord::UnordMap;
-use rustc_errors::{pluralize, struct_span_err, Applicability, Diagnostic, ErrorGuaranteed};
+use rustc_errors::{pluralize, struct_span_code_err, Applicability, Diagnostic, ErrorGuaranteed};
 use rustc_hir as hir;
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_infer::traits::FulfillmentError;
@@ -58,13 +58,13 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         if !trait_def.paren_sugar {
             if trait_segment.args().parenthesized == hir::GenericArgsParentheses::ParenSugar {
                 // For now, require that parenthetical notation be used only with `Fn()` etc.
-                let mut err = feature_err(
+                feature_err(
                     &self.tcx().sess.parse_sess,
                     sym::unboxed_closures,
                     span,
                     "parenthetical notation is only stable when used with `Fn`-family traits",
-                );
-                err.emit();
+                )
+                .emit();
             }
 
             return;
@@ -346,7 +346,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         candidates: Vec<DefId>,
         span: Span,
     ) -> ErrorGuaranteed {
-        let mut err = struct_span_err!(
+        let mut err = struct_span_code_err!(
             self.tcx().dcx(),
             name.span,
             E0034,
@@ -354,7 +354,9 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         );
         err.span_label(name.span, format!("multiple `{name}` found"));
         self.note_ambiguous_inherent_assoc_type(&mut err, candidates, span);
-        err.emit()
+        let reported = err.emit();
+        self.set_tainted_by_errors(reported);
+        reported
     }
 
     // FIXME(fmease): Heavily adapted from `rustc_hir_typeck::method::suggest`. Deduplicate.
@@ -445,7 +447,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 String::new()
             };
 
-            let mut err = struct_span_err!(
+            let mut err = struct_span_code_err!(
                 tcx.dcx(),
                 name.span,
                 E0220,
@@ -697,7 +699,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         let names = names.join(", ");
 
         trait_bound_spans.sort();
-        let mut err = struct_span_err!(
+        let mut err = struct_span_code_err!(
             tcx.dcx(),
             trait_bound_spans,
             E0191,
@@ -843,7 +845,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
             }
         }
 
-        err.emit();
+        self.set_tainted_by_errors(err.emit());
     }
 }
 

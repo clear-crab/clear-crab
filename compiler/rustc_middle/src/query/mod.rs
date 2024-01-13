@@ -1294,8 +1294,7 @@ rustc_queries! {
         desc { |tcx| "finding trait impls of `{}`", tcx.def_path_str(trait_id) }
     }
 
-    query specialization_graph_of(trait_id: DefId) -> &'tcx specialization_graph::Graph {
-        arena_cache
+    query specialization_graph_of(trait_id: DefId) -> Result<&'tcx specialization_graph::Graph, ErrorGuaranteed> {
         desc { |tcx| "building specialization graph of trait `{}`", tcx.def_path_str(trait_id) }
         cache_on_disk_if { true }
     }
@@ -1387,6 +1386,8 @@ rustc_queries! {
     ) -> Result<ty::layout::TyAndLayout<'tcx>, &'tcx ty::layout::LayoutError<'tcx>> {
         depth_limit
         desc { "computing layout of `{}`", key.value }
+        // we emit our own error during query cycle handling
+        cycle_delay_bug
     }
 
     /// Compute a `FnAbi` suitable for indirect calls, i.e. to `fn` pointers.

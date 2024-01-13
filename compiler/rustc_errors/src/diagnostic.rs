@@ -1,7 +1,7 @@
 use crate::snippet::Style;
 use crate::{
-    CodeSuggestion, DiagnosticBuilder, DiagnosticMessage, EmissionGuarantee, Level, MultiSpan,
-    SubdiagnosticMessage, Substitution, SubstitutionPart, SuggestionStyle,
+    CodeSuggestion, DelayedBugKind, DiagnosticBuilder, DiagnosticMessage, EmissionGuarantee, Level,
+    MultiSpan, SubdiagnosticMessage, Substitution, SubstitutionPart, SuggestionStyle,
 };
 use rustc_data_structures::fx::{FxHashMap, FxIndexMap};
 use rustc_error_messages::fluent_value_from_str_list_sep_by_and;
@@ -152,7 +152,6 @@ pub enum DiagnosticId {
         name: String,
         /// Indicates whether this lint should show up in cargo's future breakage report.
         has_future_breakage: bool,
-        is_force_warn: bool,
     },
 }
 
@@ -244,11 +243,15 @@ impl Diagnostic {
 
     pub fn is_error(&self) -> bool {
         match self.level {
-            Level::Bug | Level::DelayedBug | Level::Fatal | Level::Error | Level::FailureNote => {
-                true
-            }
+            Level::Bug
+            | Level::DelayedBug(DelayedBugKind::Normal)
+            | Level::Fatal
+            | Level::Error
+            | Level::FailureNote => true,
 
-            Level::Warning(_)
+            Level::ForceWarning(_)
+            | Level::Warning
+            | Level::DelayedBug(DelayedBugKind::GoodPath)
             | Level::Note
             | Level::OnceNote
             | Level::Help
@@ -262,7 +265,7 @@ impl Diagnostic {
         &mut self,
         unstable_to_stable: &FxIndexMap<LintExpectationId, LintExpectationId>,
     ) {
-        if let Level::Expect(expectation_id) | Level::Warning(Some(expectation_id)) =
+        if let Level::Expect(expectation_id) | Level::ForceWarning(Some(expectation_id)) =
             &mut self.level
         {
             if expectation_id.is_stable() {
@@ -292,8 +295,11 @@ impl Diagnostic {
     }
 
     pub(crate) fn is_force_warn(&self) -> bool {
-        match self.code {
-            Some(DiagnosticId::Lint { is_force_warn, .. }) => is_force_warn,
+        match self.level {
+            Level::ForceWarning(_) => {
+                assert!(self.is_lint);
+                true
+            }
             _ => false,
         }
     }
@@ -315,7 +321,7 @@ impl Diagnostic {
             "downgrade_to_delayed_bug: cannot downgrade {:?} to DelayedBug: not an error",
             self.level
         );
-        self.level = Level::DelayedBug;
+        self.level = Level::DelayedBug(DelayedBugKind::Normal);
     }
 
     /// Appends a labeled span to the diagnostic.
@@ -472,7 +478,7 @@ impl Diagnostic {
     /// Add a warning attached to this diagnostic.
     #[rustc_lint_diagnostics]
     pub fn warn(&mut self, msg: impl Into<SubdiagnosticMessage>) -> &mut Self {
-        self.sub(Level::Warning(None), msg, MultiSpan::new());
+        self.sub(Level::Warning, msg, MultiSpan::new());
         self
     }
 
@@ -484,7 +490,7 @@ impl Diagnostic {
         sp: S,
         msg: impl Into<SubdiagnosticMessage>,
     ) -> &mut Self {
-        self.sub(Level::Warning(None), msg, sp.into());
+        self.sub(Level::Warning, msg, sp.into());
         self
     }
 

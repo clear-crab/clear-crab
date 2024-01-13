@@ -13,7 +13,7 @@ use hir::def::CtorOf;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_errors::{
-    error_code, pluralize, struct_span_err, Applicability, Diagnostic, DiagnosticBuilder,
+    error_code, pluralize, struct_span_code_err, Applicability, Diagnostic, DiagnosticBuilder,
     MultiSpan, Style, SuggestionStyle,
 };
 use rustc_hir as hir;
@@ -2088,7 +2088,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                     let ty = self.resolve_vars_if_possible(returned_ty);
                     if ty.references_error() {
                         // don't print out the [type error] here
-                        err.delay_as_bug();
+                        err.downgrade_to_delayed_bug();
                     } else {
                         err.span_label(expr.span, format!("this returned value is of type `{ty}`"));
                     }
@@ -2145,7 +2145,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             ty::Coroutine(..) => "coroutine",
             _ => "function",
         };
-        let mut err = struct_span_err!(
+        let mut err = struct_span_code_err!(
             self.dcx(),
             span,
             E0631,

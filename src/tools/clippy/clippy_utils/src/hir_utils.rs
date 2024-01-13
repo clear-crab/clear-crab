@@ -865,7 +865,7 @@ impl<'a, 'tcx> SpanlessHash<'a, 'tcx> {
 
                 for arm in arms {
                     self.hash_pat(arm.pat);
-                    if let Some(ref e) = arm.guard {
+                    if let Some(e) = arm.guard {
                         self.hash_expr(e);
                     }
                     self.hash_expr(arm.body);
@@ -1108,7 +1108,7 @@ impl<'a, 'tcx> SpanlessHash<'a, 'tcx> {
             TyKind::Typeof(anon_const) => {
                 self.hash_body(anon_const.body);
             },
-            TyKind::Err(_) | TyKind::Infer | TyKind::Never => {},
+            TyKind::Err(_) | TyKind::Infer | TyKind::Never | TyKind::InferDelegation(..) => {},
         }
     }
 

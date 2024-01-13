@@ -38,7 +38,7 @@ use rustc_middle::ty::{self, GenericParamDefKind, InferConst, InferTy, Ty, TyCtx
 use rustc_middle::ty::{ConstVid, EffectVid, FloatVid, IntVid, TyVid};
 use rustc_middle::ty::{GenericArg, GenericArgKind, GenericArgs, GenericArgsRef};
 use rustc_span::symbol::Symbol;
-use rustc_span::{Span, DUMMY_SP};
+use rustc_span::Span;
 
 use std::cell::{Cell, RefCell};
 use std::fmt;
@@ -278,7 +278,7 @@ pub struct InferCtxt<'tcx> {
     /// avoid reporting the same error twice.
     pub reported_trait_errors: RefCell<FxIndexMap<Span, Vec<ty::Predicate<'tcx>>>>,
 
-    pub reported_closure_mismatch: RefCell<FxHashSet<(Span, Option<Span>)>>,
+    pub reported_signature_mismatch: RefCell<FxHashSet<(Span, Option<Span>)>>,
 
     /// When an error occurs, we want to avoid reporting "derived"
     /// errors that are due to this original failure. Normally, we
@@ -702,7 +702,7 @@ impl<'tcx> InferCtxtBuilder<'tcx> {
             selection_cache: Default::default(),
             evaluation_cache: Default::default(),
             reported_trait_errors: Default::default(),
-            reported_closure_mismatch: Default::default(),
+            reported_signature_mismatch: Default::default(),
             tainted_by_errors: Cell::new(None),
             err_count_on_creation: tcx.dcx().err_count(),
             universe: Cell::new(ty::UniverseIndex::ROOT),
@@ -1434,10 +1434,8 @@ impl<'tcx> InferCtxt<'tcx> {
                     bug!("`{value:?}` is not fully resolved");
                 }
                 if value.has_infer_regions() {
-                    let guar = self
-                        .tcx
-                        .dcx()
-                        .span_delayed_bug(DUMMY_SP, format!("`{value:?}` is not fully resolved"));
+                    let guar =
+                        self.tcx.dcx().delayed_bug(format!("`{value:?}` is not fully resolved"));
                     Ok(self.tcx.fold_regions(value, |re, _| {
                         if re.is_var() { ty::Region::new_error(self.tcx, guar) } else { re }
                     }))

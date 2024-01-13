@@ -116,7 +116,8 @@ use rustc_hir::def::DefKind;
 rustc_fluent_macro::fluent_messages! { "../messages.ftl" }
 
 fn require_c_abi_if_c_variadic(tcx: TyCtxt<'_>, decl: &hir::FnDecl<'_>, abi: Abi, span: Span) {
-    const CONVENTIONS_UNSTABLE: &str = "`C`, `cdecl`, `aapcs`, `win64`, `sysv64` or `efiapi`";
+    const CONVENTIONS_UNSTABLE: &str =
+        "`C`, `cdecl`, `system`, `aapcs`, `win64`, `sysv64` or `efiapi`";
     const CONVENTIONS_STABLE: &str = "`C` or `cdecl`";
     const UNSTABLE_EXPLAIN: &str =
         "using calling conventions other than `C` or `cdecl` for varargs functions is unstable";
@@ -166,13 +167,12 @@ pub fn check_crate(tcx: TyCtxt<'_>) -> Result<(), ErrorGuaranteed> {
 
     // this ensures that later parts of type checking can assume that items
     // have valid types and not error
-    // FIXME(matthewjasper) We shouldn't need to use `track_errors`.
-    tcx.sess.track_errors(|| {
-        tcx.sess.time("type_collecting", || {
-            tcx.hir().for_each_module(|module| tcx.ensure().collect_mod_item_types(module))
-        });
-    })?;
+    tcx.sess.time("type_collecting", || {
+        tcx.hir().for_each_module(|module| tcx.ensure().collect_mod_item_types(module))
+    });
 
+    // FIXME(matthewjasper) We shouldn't need to use `track_errors` anywhere in this function
+    // or the compiler in general.
     if tcx.features().rustc_attrs {
         tcx.sess.track_errors(|| {
             tcx.sess.time("outlives_testing", || outlives::test::test_inferred_outlives(tcx));

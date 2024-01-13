@@ -495,16 +495,16 @@ impl<'tcx> Visitor<'tcx> for EmitIgnoredResolutionErrors<'tcx> {
                     .intersperse("::")
                     .collect::<String>()
             );
-            let mut err = rustc_errors::struct_span_err!(
+            rustc_errors::struct_span_code_err!(
                 self.tcx.dcx(),
                 path.span,
                 E0433,
                 "failed to resolve: {label}",
-            );
-            err.span_label(path.span, label);
-            err.note("this error was originally ignored because you are running `rustdoc`");
-            err.note("try running again with `rustc` or `cargo check` and you may get a more detailed error");
-            err.emit();
+            )
+            .with_span_label(path.span, label)
+            .with_note("this error was originally ignored because you are running `rustdoc`")
+            .with_note("try running again with `rustc` or `cargo check` and you may get a more detailed error")
+            .emit();
         }
         // We could have an outer resolution that succeeded,
         // but with generic parameters that failed.

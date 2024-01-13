@@ -813,6 +813,12 @@ pub struct UnknownExternLangItem {
 pub struct MissingPanicHandler;
 
 #[derive(Diagnostic)]
+#[diag(passes_panic_unwind_without_std)]
+#[help]
+#[note]
+pub struct PanicUnwindWithoutStd;
+
+#[derive(Diagnostic)]
 #[diag(passes_missing_lang_item)]
 #[note]
 #[help]
@@ -1040,7 +1046,7 @@ impl<'a, G: EmissionGuarantee> IntoDiagnostic<'_, G> for BreakNonLoop<'a> {
                     // This error is redundant, we will have already emitted a
                     // suggestion to use the label when `segment` wasn't found
                     // (hence the `Res::Err` check).
-                    diag.delay_as_bug();
+                    diag.downgrade_to_delayed_bug();
                 }
                 _ => {
                     diag.span_suggestion(

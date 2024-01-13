@@ -215,7 +215,7 @@ fn expand_macro<'cx>(
             // rhs has holes ( `$id` and `$(...)` that need filled)
             let tts = match transcribe(cx, &named_matches, rhs, rhs_span, transparency) {
                 Ok(tts) => tts,
-                Err(mut err) => {
+                Err(err) => {
                     err.emit();
                     return DummyResult::any(arm_span);
                 }
@@ -458,7 +458,7 @@ pub fn compile_declarative_macro(
                 return dummy_syn_ext();
             }
             Error(sp, msg) => {
-                sess.dcx().struct_span_err(sp.substitute_dummy(def.span), msg).emit();
+                sess.dcx().span_err(sp.substitute_dummy(def.span), msg);
                 return dummy_syn_ext();
             }
             ErrorReported(_) => {
