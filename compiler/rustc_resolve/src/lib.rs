@@ -213,7 +213,7 @@ enum ResolutionError<'a> {
     SelfImportOnlyInImportListWithNonEmptyPrefix,
     /// Error E0433: failed to resolve.
     FailedToResolve {
-        last_segment: Option<Symbol>,
+        segment: Option<Symbol>,
         label: String,
         suggestion: Option<Suggestion>,
         module: Option<ModuleOrUniformRoot<'a>>,
@@ -257,7 +257,7 @@ enum ResolutionError<'a> {
         kind: &'static str,
         trait_path: String,
         trait_item_span: Span,
-        code: rustc_errors::DiagnosticId,
+        code: String,
     },
     /// Error E0201: multiple impl items for the same trait item.
     TraitImplDuplicate { name: Symbol, trait_item_span: Span, old_span: Span },
@@ -265,6 +265,8 @@ enum ResolutionError<'a> {
     InvalidAsmSym,
     /// `self` used instead of `Self` in a generic parameter
     LowercaseSelf,
+    /// A never pattern has a binding.
+    BindingInNeverPattern,
 }
 
 enum VisResolutionError<'a> {
@@ -396,12 +398,14 @@ enum PathResult<'a> {
         suggestion: Option<Suggestion>,
         is_error_from_last_segment: bool,
         module: Option<ModuleOrUniformRoot<'a>>,
+        /// The segment name of target
+        segment_name: Symbol,
     },
 }
 
 impl<'a> PathResult<'a> {
     fn failed(
-        span: Span,
+        ident: Ident,
         is_error_from_last_segment: bool,
         finalize: bool,
         module: Option<ModuleOrUniformRoot<'a>>,
@@ -409,7 +413,14 @@ impl<'a> PathResult<'a> {
     ) -> PathResult<'a> {
         let (label, suggestion) =
             if finalize { label_and_suggestion() } else { (String::new(), None) };
-        PathResult::Failed { span, label, suggestion, is_error_from_last_segment, module }
+        PathResult::Failed {
+            span: ident.span,
+            segment_name: ident.name,
+            label,
+            suggestion,
+            is_error_from_last_segment,
+            module,
+        }
     }
 }
 

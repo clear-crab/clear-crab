@@ -662,9 +662,9 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         let (opt_hash_including_bodies, attrs_hash) = if self.tcx.needs_crate_hash() {
             self.tcx.with_stable_hashing_context(|mut hcx| {
                 let mut stable_hasher = StableHasher::new();
-                hcx.with_hir_bodies(node.def_id(), &bodies, |hcx| {
-                    node.hash_stable(hcx, &mut stable_hasher)
-                });
+                node.hash_stable(&mut hcx, &mut stable_hasher);
+                // Bodies are stored out of line, so we need to pull them explicitly in the hash.
+                bodies.hash_stable(&mut hcx, &mut stable_hasher);
                 let h1 = stable_hasher.finish();
 
                 let mut stable_hasher = StableHasher::new();
@@ -1043,7 +1043,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                         {
                             add_feature_diagnostics(
                                 &mut err,
-                                &self.tcx.sess.parse_sess,
+                                &self.tcx.sess,
                                 sym::return_type_notation,
                             );
                         }
@@ -2310,7 +2310,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                     hir::ArrayLen::Infer(self.lower_node_id(c.id), self.lower_span(c.value.span))
                 } else {
                     feature_err(
-                        &self.tcx.sess.parse_sess,
+                        &self.tcx.sess,
                         sym::generic_arg_infer,
                         c.value.span,
                         "using `_` for array lengths is unstable",

@@ -786,7 +786,7 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
             ResolutionError::SelfImportOnlyInImportListWithNonEmptyPrefix => {
                 self.dcx().create_err(errs::SelfImportOnlyInImportListWithNonEmptyPrefix { span })
             }
-            ResolutionError::FailedToResolve { last_segment, label, suggestion, module } => {
+            ResolutionError::FailedToResolve { segment, label, suggestion, module } => {
                 let mut err =
                     struct_span_code_err!(self.dcx(), span, E0433, "failed to resolve: {}", &label);
                 err.span_label(span, label);
@@ -801,9 +801,9 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
 
                 if let Some(ModuleOrUniformRoot::Module(module)) = module
                     && let Some(module) = module.opt_def_id()
-                    && let Some(last_segment) = last_segment
+                    && let Some(segment) = segment
                 {
-                    self.find_cfg_stripped(&mut err, &last_segment, module);
+                    self.find_cfg_stripped(&mut err, &segment, module);
                 }
 
                 err
@@ -959,6 +959,9 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
                 .create_err(errs::TraitImplDuplicate { span, name, trait_item_span, old_span }),
             ResolutionError::InvalidAsmSym => self.dcx().create_err(errs::InvalidAsmSym { span }),
             ResolutionError::LowercaseSelf => self.dcx().create_err(errs::LowercaseSelf { span }),
+            ResolutionError::BindingInNeverPattern => {
+                self.dcx().create_err(errs::BindingInNeverPattern { span })
+            }
         }
     }
 
@@ -981,12 +984,7 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
             }
             VisResolutionError::FailedToResolve(span, label, suggestion) => self.into_struct_error(
                 span,
-                ResolutionError::FailedToResolve {
-                    last_segment: None,
-                    label,
-                    suggestion,
-                    module: None,
-                },
+                ResolutionError::FailedToResolve { segment: None, label, suggestion, module: None },
             ),
             VisResolutionError::ExpectedFound(span, path_str, res) => {
                 self.dcx().create_err(errs::ExpectedFound { span, res, path_str })
@@ -2450,7 +2448,7 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
     pub(crate) fn find_cfg_stripped(
         &mut self,
         err: &mut Diagnostic,
-        last_segment: &Symbol,
+        segment: &Symbol,
         module: DefId,
     ) {
         let local_items;
@@ -2469,7 +2467,7 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
         };
 
         for &StrippedCfgItem { parent_module, name, ref cfg } in symbols {
-            if parent_module != module || name.name != *last_segment {
+            if parent_module != module || name.name != *segment {
                 continue;
             }
 

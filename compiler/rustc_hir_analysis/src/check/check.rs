@@ -368,7 +368,7 @@ fn check_opaque_meets_bounds<'tcx>(
         // Can have different predicates to their defining use
         hir::OpaqueTyOrigin::TyAlias { .. } => {
             let wf_tys = ocx.assumed_wf_types_and_report_errors(param_env, def_id)?;
-            let implied_bounds = infcx.implied_bounds_tys(param_env, def_id, wf_tys);
+            let implied_bounds = infcx.implied_bounds_tys(param_env, def_id, &wf_tys);
             let outlives_env = OutlivesEnvironment::with_bounds(param_env, implied_bounds);
             ocx.resolve_regions_and_report_errors(defining_use_anchor, &outlives_env)?;
         }
@@ -996,7 +996,7 @@ pub(super) fn check_transparent<'tcx>(tcx: TyCtxt<'tcx>, adt: ty::AdtDef<'tcx>) 
 
     if adt.is_union() && !tcx.features().transparent_unions {
         feature_err(
-            &tcx.sess.parse_sess,
+            &tcx.sess,
             sym::transparent_unions,
             tcx.def_span(adt.did()),
             "transparent unions are unstable",
@@ -1128,7 +1128,7 @@ fn check_enum(tcx: TyCtxt<'_>, def_id: LocalDefId) {
     if repr_type_ty == tcx.types.i128 || repr_type_ty == tcx.types.u128 {
         if !tcx.features().repr128 {
             feature_err(
-                &tcx.sess.parse_sess,
+                &tcx.sess,
                 sym::repr128,
                 tcx.def_span(def_id),
                 "repr with 128-bit type is unstable",
