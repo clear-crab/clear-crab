@@ -244,18 +244,23 @@ impl<'tcx> MirSource<'tcx> {
     }
 }
 
+/// Additional information carried by a MIR body when it is lowered from a coroutine.
+/// This information is modified as it is lowered during the `StateTransform` MIR pass,
+/// so not all fields will be active at a given time. For example, the `yield_ty` is
+/// taken out of the field after yields are turned into returns, and the `coroutine_drop`
+/// body is only populated after the state transform pass.
 #[derive(Clone, TyEncodable, TyDecodable, Debug, HashStable, TypeFoldable, TypeVisitable)]
 pub struct CoroutineInfo<'tcx> {
-    /// The yield type of the function, if it is a coroutine.
+    /// The yield type of the function. This field is removed after the state transform pass.
     pub yield_ty: Option<Ty<'tcx>>,
 
-    /// The resume type of the function, if it is a coroutine.
+    /// The resume type of the function. This field is removed after the state transform pass.
     pub resume_ty: Option<Ty<'tcx>>,
 
-    /// Coroutine drop glue.
+    /// Coroutine drop glue. This field is populated after the state transform pass.
     pub coroutine_drop: Option<Body<'tcx>>,
 
-    /// The layout of a coroutine. Produced by the state transformation.
+    /// The layout of a coroutine. This field is populated after the state transform pass.
     pub coroutine_layout: Option<CoroutineLayout<'tcx>>,
 
     /// If this is a coroutine then record the type of source expression that caused this coroutine
@@ -303,6 +308,12 @@ pub struct Body<'tcx> {
     /// and used for debuginfo. Indexed by a `SourceScope`.
     pub source_scopes: IndexVec<SourceScope, SourceScopeData<'tcx>>,
 
+    /// Additional information carried by a MIR body when it is lowered from a coroutine.
+    ///
+    /// Note that the coroutine drop shim, any promoted consts, and other synthetic MIR
+    /// bodies that come from processing a coroutine body are not typically coroutines
+    /// themselves, and should probably set this to `None` to avoid carrying redundant
+    /// information.
     pub coroutine: Option<Box<CoroutineInfo<'tcx>>>,
 
     /// Declarations of locals.
@@ -1672,19 +1683,13 @@ mod size_asserts {
     use super::*;
     use rustc_data_structures::static_assert_size;
     // tidy-alphabetical-start
-    // This can be removed after i128:128 is in the bootstrap compiler's target.
-    #[cfg(not(bootstrap))]
-    static_assert_size!(BasicBlockData<'_>, 144);
+    static_assert_size!(BasicBlockData<'_>, 136);
     static_assert_size!(LocalDecl<'_>, 40);
     static_assert_size!(SourceScopeData<'_>, 72);
     static_assert_size!(Statement<'_>, 32);
     static_assert_size!(StatementKind<'_>, 16);
-    // This can be removed after i128:128 is in the bootstrap compiler's target.
-    #[cfg(not(bootstrap))]
-    static_assert_size!(Terminator<'_>, 112);
-    // This can be removed after i128:128 is in the bootstrap compiler's target.
-    #[cfg(not(bootstrap))]
-    static_assert_size!(TerminatorKind<'_>, 96);
+    static_assert_size!(Terminator<'_>, 104);
+    static_assert_size!(TerminatorKind<'_>, 88);
     static_assert_size!(VarDebugInfo<'_>, 88);
     // tidy-alphabetical-end
 }

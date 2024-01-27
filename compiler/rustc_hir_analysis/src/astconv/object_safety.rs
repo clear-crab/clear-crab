@@ -22,7 +22,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
         &self,
         span: Span,
         hir_id: hir::HirId,
-        hir_trait_bounds: &[hir::PolyTraitRef<'_>],
+        hir_trait_bounds: &[hir::PolyTraitRef<'tcx>],
         lifetime: &hir::Lifetime,
         borrowed: bool,
         representation: DynKind,
@@ -220,7 +220,7 @@ impl<'o, 'tcx> dyn AstConv<'tcx> + 'o {
                 let def_id = projection_bound.projection_def_id();
                 def_ids.remove(&def_id);
                 if tcx.generics_require_sized_self(def_id) {
-                    tcx.emit_spanned_lint(
+                    tcx.emit_node_span_lint(
                         UNUSED_ASSOCIATED_TYPE_BOUNDS,
                         hir_id,
                         *span,

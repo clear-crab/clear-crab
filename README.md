@@ -15,6 +15,7 @@ If you wish to _contribute_ to the compiler, you should read
 <summary>Table of Contents</summary>
 
 - [Quick Start](#quick-start)
+- [Installing from Source](#installing-from-source)
 - [Getting Help](#getting-help)
 - [Contributing](#contributing)
 - [License](#license)
@@ -29,9 +30,10 @@ Read ["Installation"] from the [Book].
 ["Installation"]: https://github.com/clear-crab/book/blob/main/src/ch01-01-installation.md
 [Book]: https://github.com/clear-crab/book/blob/main/src/title-page.md
 
-## Installing from source
+## Installing from Source
 
-If you really want to install from source (though this is not recommended), see [INSTALL.md](INSTALL.md).
+If you really want to install from source (though this is not recommended), see
+[INSTALL.md](INSTALL.md).
 
 ## Getting Help
 

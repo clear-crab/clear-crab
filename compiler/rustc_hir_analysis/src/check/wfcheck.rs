@@ -116,7 +116,7 @@ where
     let errors = wfcx.select_all_or_error();
     if !errors.is_empty() {
         let err = infcx.err_ctxt().report_fulfillment_errors(errors);
-        if tcx.dcx().err_count() > 0 {
+        if tcx.dcx().has_errors().is_some() {
             return Err(err);
         } else {
             // HACK(oli-obk): tests/ui/specialization/min_specialization/specialize_on_type_error.rs
@@ -1790,7 +1790,7 @@ fn receiver_is_implemented<'tcx>(
 fn check_variances_for_type_defn<'tcx>(
     tcx: TyCtxt<'tcx>,
     item: &hir::Item<'tcx>,
-    hir_generics: &hir::Generics<'_>,
+    hir_generics: &hir::Generics<'tcx>,
 ) {
     let identity_args = ty::GenericArgs::identity_for_item(tcx, item.owner_id);
 

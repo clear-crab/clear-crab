@@ -6,7 +6,7 @@ use crate::method::MethodCallee;
 use crate::TupleArgumentsFlag::*;
 use crate::{errors, Expectation::*};
 use crate::{
-    struct_span_code_err, BreakableCtxt, Diverges, Expectation, FnCtxt, Needs, RawTy,
+    struct_span_code_err, BreakableCtxt, Diverges, Expectation, FnCtxt, LoweredTy, Needs,
     TupleArgumentsFlag,
 };
 use itertools::Itertools;
@@ -1327,7 +1327,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
     pub fn check_struct_path(
         &self,
-        qpath: &QPath<'_>,
+        qpath: &QPath<'tcx>,
         hir_id: hir::HirId,
     ) -> Result<(&'tcx ty::VariantDef, Ty<'tcx>), ErrorGuaranteed> {
         let path_span = qpath.span();
@@ -1471,6 +1471,12 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     /// Type check a `let` statement.
     pub fn check_decl_local(&self, local: &'tcx hir::Local<'tcx>) {
         self.check_decl(local.into());
+        if local.pat.is_never_pattern() {
+            self.diverges.set(Diverges::Always {
+                span: local.pat.span,
+                custom_note: Some("any code following a never pattern is unreachable"),
+            });
+        }
     }
 
     pub fn check_stmt(&self, stmt: &'tcx hir::Stmt<'tcx>) {
@@ -1783,15 +1789,15 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     // The newly resolved definition is written into `type_dependent_defs`.
     fn finish_resolving_struct_path(
         &self,
-        qpath: &QPath<'_>,
+        qpath: &QPath<'tcx>,
         path_span: Span,
         hir_id: hir::HirId,
-    ) -> (Res, RawTy<'tcx>) {
+    ) -> (Res, LoweredTy<'tcx>) {
         match *qpath {
             QPath::Resolved(ref maybe_qself, path) => {
                 let self_ty = maybe_qself.as_ref().map(|qself| self.to_ty(qself).raw);
                 let ty = self.astconv().res_to_ty(self_ty, path, hir_id, true);
-                (path.res, self.handle_raw_ty(path_span, ty))
+                (path.res, LoweredTy::from_raw(self, path_span, ty))
             }
             QPath::TypeRelative(qself, segment) => {
                 let ty = self.to_ty(qself);
@@ -1802,7 +1808,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 let ty = result
                     .map(|(ty, _, _)| ty)
                     .unwrap_or_else(|guar| Ty::new_error(self.tcx(), guar));
-                let ty = self.handle_raw_ty(path_span, ty);
+                let ty = LoweredTy::from_raw(self, path_span, ty);
                 let result = result.map(|(_, kind, def_id)| (kind, def_id));
 
                 // Write back the new resolution.
@@ -1812,7 +1818,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             }
             QPath::LangItem(lang_item, span) => {
                 let (res, ty) = self.resolve_lang_item_path(lang_item, span, hir_id);
-                (res, self.handle_raw_ty(path_span, ty))
+                (res, LoweredTy::from_raw(self, path_span, ty))
             }
         }
     }
