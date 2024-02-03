@@ -6,7 +6,6 @@ use std::fmt;
 use smallvec::{smallvec, SmallVec};
 
 use crate::constructor::{Constructor, Slice, SliceKind};
-use crate::usefulness::PlaceCtxt;
 use crate::{Captures, TypeCx};
 
 use self::Constructor::*;
@@ -218,14 +217,23 @@ impl<'p, Cx: TypeCx> fmt::Debug for DeconstructedPat<'p, Cx> {
 /// algorithm. Do not use `Wild` to represent a wildcard pattern comping from user input.
 ///
 /// This is morally `Option<&'p DeconstructedPat>` where `None` is interpreted as a wildcard.
-#[derive(derivative::Derivative)]
-#[derivative(Clone(bound = ""), Copy(bound = ""))]
 pub(crate) enum PatOrWild<'p, Cx: TypeCx> {
     /// A non-user-provided wildcard, created during specialization.
     Wild,
     /// A user-provided pattern.
     Pat(&'p DeconstructedPat<'p, Cx>),
 }
+
+impl<'p, Cx: TypeCx> Clone for PatOrWild<'p, Cx> {
+    fn clone(&self) -> Self {
+        match self {
+            PatOrWild::Wild => PatOrWild::Wild,
+            PatOrWild::Pat(pat) => PatOrWild::Pat(pat),
+        }
+    }
+}
+
+impl<'p, Cx: TypeCx> Copy for PatOrWild<'p, Cx> {}
 
 impl<'p, Cx: TypeCx> PatOrWild<'p, Cx> {
     pub(crate) fn as_pat(&self) -> Option<&'p DeconstructedPat<'p, Cx>> {
@@ -289,12 +297,26 @@ impl<'p, Cx: TypeCx> fmt::Debug for PatOrWild<'p, Cx> {
 
 /// Same idea as `DeconstructedPat`, except this is a fictitious pattern built up for diagnostics
 /// purposes. As such they don't use interning and can be cloned.
-#[derive(derivative::Derivative)]
-#[derivative(Debug(bound = ""), Clone(bound = ""))]
 pub struct WitnessPat<Cx: TypeCx> {
     ctor: Constructor<Cx>,
     pub(crate) fields: Vec<WitnessPat<Cx>>,
     ty: Cx::Ty,
+}
+
+impl<Cx: TypeCx> Clone for WitnessPat<Cx> {
+    fn clone(&self) -> Self {
+        Self { ctor: self.ctor.clone(), fields: self.fields.clone(), ty: self.ty.clone() }
+    }
+}
+
+impl<Cx: TypeCx> fmt::Debug for WitnessPat<Cx> {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt.debug_struct("WitnessPat")
+            .field("ctor", &self.ctor)
+            .field("fields", &self.fields)
+            .field("ty", &self.ty)
+            .finish()
+    }
 }
 
 impl<Cx: TypeCx> WitnessPat<Cx> {
@@ -308,9 +330,9 @@ impl<Cx: TypeCx> WitnessPat<Cx> {
     /// Construct a pattern that matches everything that starts with this constructor.
     /// For example, if `ctor` is a `Constructor::Variant` for `Option::Some`, we get the pattern
     /// `Some(_)`.
-    pub(crate) fn wild_from_ctor(pcx: &PlaceCtxt<'_, Cx>, ctor: Constructor<Cx>) -> Self {
-        let fields = pcx.ctor_sub_tys(&ctor).map(|ty| Self::wildcard(ty)).collect();
-        Self::new(ctor, fields, pcx.ty.clone())
+    pub(crate) fn wild_from_ctor(cx: &Cx, ctor: Constructor<Cx>, ty: Cx::Ty) -> Self {
+        let fields = cx.ctor_sub_tys(&ctor, &ty).map(|ty| Self::wildcard(ty)).collect();
+        Self::new(ctor, fields, ty)
     }
 
     pub fn ctor(&self) -> &Constructor<Cx> {

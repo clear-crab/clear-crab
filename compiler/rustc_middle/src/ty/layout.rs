@@ -269,7 +269,7 @@ impl<'tcx> fmt::Display for LayoutError<'tcx> {
 }
 
 impl<'tcx> IntoDiagnosticArg for LayoutError<'tcx> {
-    fn into_diagnostic_arg(self) -> DiagnosticArgValue<'static> {
+    fn into_diagnostic_arg(self) -> DiagnosticArgValue {
         self.to_string().into_diagnostic_arg()
     }
 }
@@ -1247,7 +1247,6 @@ pub fn fn_can_unwind(tcx: TyCtxt<'_>, fn_def_id: Option<DefId>, abi: SpecAbi) ->
         PtxKernel
         | Msp430Interrupt
         | X86Interrupt
-        | AmdGpuKernel
         | EfiApi
         | AvrInterrupt
         | AvrNonBlockingInterrupt
