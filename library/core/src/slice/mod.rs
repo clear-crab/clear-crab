@@ -68,7 +68,7 @@ pub use iter::{ArrayChunks, ArrayChunksMut};
 #[unstable(feature = "array_windows", issue = "75027")]
 pub use iter::ArrayWindows;
 
-#[stable(feature = "slice_group_by", since = "CURRENT_RUSTC_VERSION")]
+#[stable(feature = "slice_group_by", since = "1.77.0")]
 pub use iter::{ChunkBy, ChunkByMut};
 
 #[stable(feature = "split_inclusive", since = "1.51.0")]
@@ -334,8 +334,8 @@ impl<T> [T] {
     /// assert_eq!(Some(&[]), w.first_chunk::<0>());
     /// ```
     #[inline]
-    #[stable(feature = "slice_first_last_chunk", since = "CURRENT_RUSTC_VERSION")]
-    #[rustc_const_stable(feature = "slice_first_last_chunk", since = "CURRENT_RUSTC_VERSION")]
+    #[stable(feature = "slice_first_last_chunk", since = "1.77.0")]
+    #[rustc_const_stable(feature = "slice_first_last_chunk", since = "1.77.0")]
     pub const fn first_chunk<const N: usize>(&self) -> Option<&[T; N]> {
         if self.len() < N {
             None
@@ -364,7 +364,7 @@ impl<T> [T] {
     /// assert_eq!(None, x.first_chunk_mut::<4>());
     /// ```
     #[inline]
-    #[stable(feature = "slice_first_last_chunk", since = "CURRENT_RUSTC_VERSION")]
+    #[stable(feature = "slice_first_last_chunk", since = "1.77.0")]
     #[rustc_const_unstable(feature = "const_slice_first_last_chunk", issue = "111774")]
     pub const fn first_chunk_mut<const N: usize>(&mut self) -> Option<&mut [T; N]> {
         if self.len() < N {
@@ -394,8 +394,8 @@ impl<T> [T] {
     /// assert_eq!(None, x.split_first_chunk::<4>());
     /// ```
     #[inline]
-    #[stable(feature = "slice_first_last_chunk", since = "CURRENT_RUSTC_VERSION")]
-    #[rustc_const_stable(feature = "slice_first_last_chunk", since = "CURRENT_RUSTC_VERSION")]
+    #[stable(feature = "slice_first_last_chunk", since = "1.77.0")]
+    #[rustc_const_stable(feature = "slice_first_last_chunk", since = "1.77.0")]
     pub const fn split_first_chunk<const N: usize>(&self) -> Option<(&[T; N], &[T])> {
         if self.len() < N {
             None
@@ -429,7 +429,7 @@ impl<T> [T] {
     /// assert_eq!(None, x.split_first_chunk_mut::<4>());
     /// ```
     #[inline]
-    #[stable(feature = "slice_first_last_chunk", since = "CURRENT_RUSTC_VERSION")]
+    #[stable(feature = "slice_first_last_chunk", since = "1.77.0")]
     #[rustc_const_unstable(feature = "const_slice_first_last_chunk", issue = "111774")]
     pub const fn split_first_chunk_mut<const N: usize>(
         &mut self,
@@ -464,8 +464,8 @@ impl<T> [T] {
     /// assert_eq!(None, x.split_last_chunk::<4>());
     /// ```
     #[inline]
-    #[stable(feature = "slice_first_last_chunk", since = "CURRENT_RUSTC_VERSION")]
-    #[rustc_const_stable(feature = "slice_first_last_chunk", since = "CURRENT_RUSTC_VERSION")]
+    #[stable(feature = "slice_first_last_chunk", since = "1.77.0")]
+    #[rustc_const_stable(feature = "slice_first_last_chunk", since = "1.77.0")]
     pub const fn split_last_chunk<const N: usize>(&self) -> Option<(&[T], &[T; N])> {
         if self.len() < N {
             None
@@ -499,7 +499,7 @@ impl<T> [T] {
     /// assert_eq!(None, x.split_last_chunk_mut::<4>());
     /// ```
     #[inline]
-    #[stable(feature = "slice_first_last_chunk", since = "CURRENT_RUSTC_VERSION")]
+    #[stable(feature = "slice_first_last_chunk", since = "1.77.0")]
     #[rustc_const_unstable(feature = "const_slice_first_last_chunk", issue = "111774")]
     pub const fn split_last_chunk_mut<const N: usize>(
         &mut self,
@@ -534,7 +534,7 @@ impl<T> [T] {
     /// assert_eq!(Some(&[]), w.last_chunk::<0>());
     /// ```
     #[inline]
-    #[stable(feature = "slice_first_last_chunk", since = "CURRENT_RUSTC_VERSION")]
+    #[stable(feature = "slice_first_last_chunk", since = "1.77.0")]
     #[rustc_const_unstable(feature = "const_slice_first_last_chunk", issue = "111774")]
     pub const fn last_chunk<const N: usize>(&self) -> Option<&[T; N]> {
         if self.len() < N {
@@ -568,7 +568,7 @@ impl<T> [T] {
     /// assert_eq!(None, x.last_chunk_mut::<4>());
     /// ```
     #[inline]
-    #[stable(feature = "slice_first_last_chunk", since = "CURRENT_RUSTC_VERSION")]
+    #[stable(feature = "slice_first_last_chunk", since = "1.77.0")]
     #[rustc_const_unstable(feature = "const_slice_first_last_chunk", issue = "111774")]
     pub const fn last_chunk_mut<const N: usize>(&mut self) -> Option<&mut [T; N]> {
         if self.len() < N {
@@ -1777,7 +1777,7 @@ impl<T> [T] {
     /// assert_eq!(iter.next(), Some(&[2, 3, 4][..]));
     /// assert_eq!(iter.next(), None);
     /// ```
-    #[stable(feature = "slice_group_by", since = "CURRENT_RUSTC_VERSION")]
+    #[stable(feature = "slice_group_by", since = "1.77.0")]
     #[inline]
     pub fn chunk_by<F>(&self, pred: F) -> ChunkBy<'_, T, F>
     where
@@ -1818,7 +1818,7 @@ impl<T> [T] {
     /// assert_eq!(iter.next(), Some(&mut [2, 3, 4][..]));
     /// assert_eq!(iter.next(), None);
     /// ```
-    #[stable(feature = "slice_group_by", since = "CURRENT_RUSTC_VERSION")]
+    #[stable(feature = "slice_group_by", since = "1.77.0")]
     #[inline]
     pub fn chunk_by_mut<F>(&mut self, pred: F) -> ChunkByMut<'_, T, F>
     where
@@ -1951,10 +1951,7 @@ impl<T> [T] {
     /// }
     /// ```
     #[unstable(feature = "slice_split_at_unchecked", reason = "new API", issue = "76014")]
-    #[rustc_const_stable(
-        feature = "const_slice_split_at_unchecked",
-        since = "CURRENT_RUSTC_VERSION"
-    )]
+    #[rustc_const_stable(feature = "const_slice_split_at_unchecked", since = "1.77.0")]
     #[inline]
     #[must_use]
     pub const unsafe fn split_at_unchecked(&self, mid: usize) -> (&[T], &[T]) {
@@ -2989,7 +2986,7 @@ impl<T> [T] {
         sort::quicksort(self, |a, b| f(a).lt(&f(b)));
     }
 
-    /// Reorder the slice such that the element at `index` is at its final sorted position.
+    /// Reorder the slice such that the element at `index` after the reordering is at its final sorted position.
     ///
     /// This reordering has the additional property that any value at position `i < index` will be
     /// less than or equal to any value at a position `j > index`. Additionally, this reordering is
@@ -3017,7 +3014,7 @@ impl<T> [T] {
     /// # Examples
     ///
     /// ```
-    /// let mut v = [-5i32, 4, 1, -3, 2];
+    /// let mut v = [-5i32, 4, 2, -3, 1];
     ///
     /// // Find the median
     /// v.select_nth_unstable(2);
@@ -3038,8 +3035,8 @@ impl<T> [T] {
         select::partition_at_index(self, index, T::lt)
     }
 
-    /// Reorder the slice with a comparator function such that the element at `index` is at its
-    /// final sorted position.
+    /// Reorder the slice with a comparator function such that the element at `index` after the reordering is at
+    /// its final sorted position.
     ///
     /// This reordering has the additional property that any value at position `i < index` will be
     /// less than or equal to any value at a position `j > index` using the comparator function.
@@ -3068,7 +3065,7 @@ impl<T> [T] {
     /// # Examples
     ///
     /// ```
-    /// let mut v = [-5i32, 4, 1, -3, 2];
+    /// let mut v = [-5i32, 4, 2, -3, 1];
     ///
     /// // Find the median as if the slice were sorted in descending order.
     /// v.select_nth_unstable_by(2, |a, b| b.cmp(a));
@@ -3093,8 +3090,8 @@ impl<T> [T] {
         select::partition_at_index(self, index, |a: &T, b: &T| compare(a, b) == Less)
     }
 
-    /// Reorder the slice with a key extraction function such that the element at `index` is at its
-    /// final sorted position.
+    /// Reorder the slice with a key extraction function such that the element at `index` after the reordering is
+    /// at its final sorted position.
     ///
     /// This reordering has the additional property that any value at position `i < index` will be
     /// less than or equal to any value at a position `j > index` using the key extraction function.

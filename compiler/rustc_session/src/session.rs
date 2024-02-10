@@ -288,19 +288,9 @@ impl Session {
     pub fn finish_diagnostics(&self, registry: &Registry) {
         self.check_miri_unleashed_features();
         self.dcx().print_error_count(registry);
-        self.emit_future_breakage();
-    }
-
-    fn emit_future_breakage(&self) {
-        if !self.opts.json_future_incompat {
-            return;
+        if self.opts.json_future_incompat {
+            self.dcx().emit_future_breakage_report();
         }
-
-        let diags = self.dcx().take_future_breakage_diagnostics();
-        if diags.is_empty() {
-            return;
-        }
-        self.dcx().emit_future_breakage_report(diags);
     }
 
     /// Returns true if the crate is a testing one.
@@ -325,7 +315,7 @@ impl Session {
     pub fn compile_status(&self) -> Result<(), ErrorGuaranteed> {
         // We must include lint errors here.
         if let Some(reported) = self.dcx().has_errors_or_lint_errors() {
-            let _ = self.dcx().emit_stashed_diagnostics();
+            self.dcx().emit_stashed_diagnostics();
             Err(reported)
         } else {
             Ok(())
@@ -775,6 +765,13 @@ impl Session {
 
     pub fn tls_model(&self) -> TlsModel {
         self.opts.unstable_opts.tls_model.unwrap_or(self.target.tls_model)
+    }
+
+    pub fn direct_access_external_data(&self) -> Option<bool> {
+        self.opts
+            .unstable_opts
+            .direct_access_external_data
+            .or(self.target.direct_access_external_data)
     }
 
     pub fn split_debuginfo(&self) -> SplitDebuginfo {

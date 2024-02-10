@@ -167,17 +167,6 @@ pub struct LifetimesOrBoundsMismatchOnTrait {
 }
 
 #[derive(Diagnostic)]
-#[diag(hir_analysis_async_trait_impl_should_be_async)]
-pub struct AsyncTraitImplShouldBeAsync {
-    #[primary_span]
-    // #[label]
-    pub span: Span,
-    #[label(hir_analysis_trait_item_label)]
-    pub trait_item_span: Option<Span>,
-    pub method_name: Symbol,
-}
-
-#[derive(Diagnostic)]
 #[diag(hir_analysis_drop_impl_on_wrong_item, code = E0120)]
 pub struct DropImplOnWrongItem {
     #[primary_span]
@@ -1510,4 +1499,38 @@ pub struct NotSupportedDelegation<'a> {
     pub descr: &'a str,
     #[label]
     pub callee_span: Span,
+}
+
+#[derive(Diagnostic)]
+#[diag(hir_analysis_method_should_return_future)]
+pub struct MethodShouldReturnFuture {
+    #[primary_span]
+    pub span: Span,
+    pub method_name: Symbol,
+    #[note]
+    pub trait_item_span: Option<Span>,
+}
+
+#[derive(Diagnostic)]
+#[diag(hir_analysis_unused_generic_parameter)]
+pub(crate) struct UnusedGenericParameter {
+    #[primary_span]
+    #[label]
+    pub span: Span,
+    pub param_name: Ident,
+    pub param_def_kind: &'static str,
+    #[subdiagnostic]
+    pub help: UnusedGenericParameterHelp,
+    #[help(hir_analysis_const_param_help)]
+    pub const_param_help: Option<()>,
+}
+
+#[derive(Subdiagnostic)]
+pub(crate) enum UnusedGenericParameterHelp {
+    #[help(hir_analysis_unused_generic_parameter_adt_help)]
+    Adt { param_name: Ident, phantom_data: String },
+    #[help(hir_analysis_unused_generic_parameter_adt_no_phantom_data_help)]
+    AdtNoPhantomData { param_name: Ident },
+    #[help(hir_analysis_unused_generic_parameter_ty_alias_help)]
+    TyAlias { param_name: Ident },
 }

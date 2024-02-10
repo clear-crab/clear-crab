@@ -20,7 +20,7 @@ use std::mem;
 use std::ops::{ControlFlow, Deref};
 
 use super::ops::{self, NonConstOp, Status};
-use super::qualifs::{self, CustomEq, HasMutInterior, NeedsDrop, NeedsNonConstDrop};
+use super::qualifs::{self, HasMutInterior, NeedsDrop, NeedsNonConstDrop};
 use super::resolver::FlowSensitiveAnalysis;
 use super::{ConstCx, Qualif};
 use crate::const_eval::is_unstable_const_fn;
@@ -149,37 +149,10 @@ impl<'mir, 'tcx> Qualifs<'mir, 'tcx> {
 
         let return_loc = ccx.body.terminator_loc(return_block);
 
-        let custom_eq = match ccx.const_kind() {
-            // We don't care whether a `const fn` returns a value that is not structurally
-            // matchable. Functions calls are opaque and always use type-based qualification, so
-            // this value should never be used.
-            hir::ConstContext::ConstFn => true,
-
-            // If we know that all values of the return type are structurally matchable, there's no
-            // need to run dataflow.
-            // Opaque types do not participate in const generics or pattern matching, so we can safely count them out.
-            _ if ccx.body.return_ty().has_opaque_types()
-                || !CustomEq::in_any_value_of_ty(ccx, ccx.body.return_ty()) =>
-            {
-                false
-            }
-
-            hir::ConstContext::Const { .. } | hir::ConstContext::Static(_) => {
-                let mut cursor = FlowSensitiveAnalysis::new(CustomEq, ccx)
-                    .into_engine(ccx.tcx, ccx.body)
-                    .iterate_to_fixpoint()
-                    .into_results_cursor(ccx.body);
-
-                cursor.seek_after_primary_effect(return_loc);
-                cursor.get().contains(RETURN_PLACE)
-            }
-        };
-
         ConstQualifs {
             needs_drop: self.needs_drop(ccx, RETURN_PLACE, return_loc),
             needs_non_const_drop: self.needs_non_const_drop(ccx, RETURN_PLACE, return_loc),
             has_mut_interior: self.has_mut_interior(ccx, RETURN_PLACE, return_loc),
-            custom_eq,
             tainted_by_errors,
         }
     }
@@ -476,33 +449,25 @@ impl<'tcx> Visitor<'tcx> for Checker<'_, 'tcx> {
                 }
             }
 
-            Rvalue::Ref(_, BorrowKind::Mut { .. }, place) => {
-                let ty = place.ty(self.body, self.tcx).ty;
-                let is_allowed = match ty.kind() {
-                    // Inside a `static mut`, `&mut [...]` is allowed.
-                    ty::Array(..) | ty::Slice(_)
-                        if self.const_kind() == hir::ConstContext::Static(hir::Mutability::Mut) =>
-                    {
-                        true
-                    }
-
-                    // FIXME(ecstaticmorse): We could allow `&mut []` inside a const context given
-                    // that this is merely a ZST and it is already eligible for promotion.
-                    // This may require an RFC?
-                    /*
-                    ty::Array(_, len) if len.try_eval_target_usize(cx.tcx, cx.param_env) == Some(0)
-                        => true,
-                    */
-                    _ => false,
-                };
+            Rvalue::Ref(_, BorrowKind::Mut { .. }, place)
+            | Rvalue::AddressOf(Mutability::Mut, place) => {
+                // Inside mutable statics, we allow arbitrary mutable references.
+                // We've allowed `static mut FOO = &mut [elements];` for a long time (the exact
+                // reasons why are lost to history), and there is no reason to restrict that to
+                // arrays and slices.
+                let is_allowed =
+                    self.const_kind() == hir::ConstContext::Static(hir::Mutability::Mut);
 
                 if !is_allowed {
-                    self.check_mut_borrow(place.local, hir::BorrowKind::Ref)
+                    self.check_mut_borrow(
+                        place.local,
+                        if matches!(rvalue, Rvalue::Ref(..)) {
+                            hir::BorrowKind::Ref
+                        } else {
+                            hir::BorrowKind::Raw
+                        },
+                    );
                 }
-            }
-
-            Rvalue::AddressOf(Mutability::Mut, place) => {
-                self.check_mut_borrow(place.local, hir::BorrowKind::Raw)
             }
 
             Rvalue::Ref(_, BorrowKind::Shared | BorrowKind::Fake, place)
@@ -571,7 +536,10 @@ impl<'tcx> Visitor<'tcx> for Checker<'_, 'tcx> {
 
             Rvalue::Cast(_, _, _) => {}
 
-            Rvalue::NullaryOp(NullOp::SizeOf | NullOp::AlignOf | NullOp::OffsetOf(_), _) => {}
+            Rvalue::NullaryOp(
+                NullOp::SizeOf | NullOp::AlignOf | NullOp::OffsetOf(_) | NullOp::DebugAssertions,
+                _,
+            ) => {}
             Rvalue::ShallowInitBox(_, _) => {}
 
             Rvalue::UnaryOp(_, operand) => {

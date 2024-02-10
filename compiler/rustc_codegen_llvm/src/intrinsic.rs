@@ -119,10 +119,18 @@ impl<'ll, 'tcx> IntrinsicCallMethods<'tcx> for Builder<'_, 'll, 'tcx> {
             sym::likely => {
                 self.call_intrinsic("llvm.expect.i1", &[args[0].immediate(), self.const_bool(true)])
             }
-            sym::is_val_statically_known => self.call_intrinsic(
-                &format!("llvm.is.constant.{:?}", args[0].layout.immediate_llvm_type(self.cx)),
-                &[args[0].immediate()],
-            ),
+            sym::is_val_statically_known => {
+                let intrinsic_type = args[0].layout.immediate_llvm_type(self.cx);
+                match self.type_kind(intrinsic_type) {
+                    TypeKind::Pointer | TypeKind::Integer | TypeKind::Float | TypeKind::Double => {
+                        self.call_intrinsic(
+                            &format!("llvm.is.constant.{:?}", intrinsic_type),
+                            &[args[0].immediate()],
+                        )
+                    }
+                    _ => self.const_bool(false),
+                }
+            }
             sym::unlikely => self
                 .call_intrinsic("llvm.expect.i1", &[args[0].immediate(), self.const_bool(false)]),
             kw::Try => {
@@ -1977,10 +1985,9 @@ fn generic_simd_intrinsic<'ll, 'tcx>(
 
         match in_elem.kind() {
             ty::RawPtr(p) => {
-                let (metadata, check_sized) = p.ty.ptr_metadata_ty(bx.tcx, |ty| {
+                let metadata = p.ty.ptr_metadata_ty(bx.tcx, |ty| {
                     bx.tcx.normalize_erasing_regions(ty::ParamEnv::reveal_all(), ty)
                 });
-                assert!(!check_sized); // we are in codegen, so we shouldn't see these types
                 require!(
                     metadata.is_unit(),
                     InvalidMonomorphization::CastFatPointer { span, name, ty: in_elem }
@@ -1992,10 +1999,9 @@ fn generic_simd_intrinsic<'ll, 'tcx>(
         }
         match out_elem.kind() {
             ty::RawPtr(p) => {
-                let (metadata, check_sized) = p.ty.ptr_metadata_ty(bx.tcx, |ty| {
+                let metadata = p.ty.ptr_metadata_ty(bx.tcx, |ty| {
                     bx.tcx.normalize_erasing_regions(ty::ParamEnv::reveal_all(), ty)
                 });
-                assert!(!check_sized); // we are in codegen, so we shouldn't see these types
                 require!(
                     metadata.is_unit(),
                     InvalidMonomorphization::CastFatPointer { span, name, ty: out_elem }

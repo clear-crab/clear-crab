@@ -102,7 +102,7 @@ pub(crate) struct ParseTargetMachineConfig<'a>(pub LlvmError<'a>);
 impl<G: EmissionGuarantee> IntoDiagnostic<'_, G> for ParseTargetMachineConfig<'_> {
     fn into_diagnostic(self, dcx: &'_ DiagCtxt, level: Level) -> DiagnosticBuilder<'_, G> {
         let diag: DiagnosticBuilder<'_, G> = self.0.into_diagnostic(dcx, level);
-        let (message, _) = diag.messages().first().expect("`LlvmError` with no message");
+        let (message, _) = diag.messages.first().expect("`LlvmError` with no message");
         let message = dcx.eagerly_translate_to_string(message.clone(), diag.args());
 
         DiagnosticBuilder::new(dcx, level, fluent::codegen_llvm_parse_target_machine_config)
@@ -252,4 +252,10 @@ pub struct MismatchedDataLayout<'a> {
     pub rustc_layout: &'a str,
     pub llvm_target: &'a str,
     pub llvm_layout: &'a str,
+}
+
+#[derive(Diagnostic)]
+#[diag(codegen_llvm_invalid_target_feature_prefix)]
+pub(crate) struct InvalidTargetFeaturePrefix<'a> {
+    pub feature: &'a str,
 }

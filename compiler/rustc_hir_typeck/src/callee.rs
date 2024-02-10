@@ -41,7 +41,7 @@ pub fn check_legal_trait_for_method_call(
     receiver: Option<Span>,
     expr_span: Span,
     trait_id: DefId,
-) {
+) -> Result<(), ErrorGuaranteed> {
     if tcx.lang_items().drop_trait() == Some(trait_id) {
         let sugg = if let Some(receiver) = receiver.filter(|s| !s.is_empty()) {
             errors::ExplicitDestructorCallSugg::Snippet {
@@ -51,8 +51,9 @@ pub fn check_legal_trait_for_method_call(
         } else {
             errors::ExplicitDestructorCallSugg::Empty(span)
         };
-        tcx.dcx().emit_err(errors::ExplicitDestructorCall { span, sugg });
+        return Err(tcx.dcx().emit_err(errors::ExplicitDestructorCall { span, sugg }));
     }
+    tcx.ensure().coherent_trait(trait_id)
 }
 
 #[derive(Debug)]
@@ -141,33 +142,77 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 return Some(CallStep::Builtin(adjusted_ty));
             }
 
-            ty::Closure(def_id, args) => {
+            // Check whether this is a call to a closure where we
+            // haven't yet decided on whether the closure is fn vs
+            // fnmut vs fnonce. If so, we have to defer further processing.
+            ty::Closure(def_id, args) if self.closure_kind(adjusted_ty).is_none() => {
                 let def_id = def_id.expect_local();
+                let closure_sig = args.as_closure().sig();
+                let closure_sig = self.instantiate_binder_with_fresh_vars(
+                    call_expr.span,
+                    infer::FnCall,
+                    closure_sig,
+                );
+                let adjustments = self.adjust_steps(autoderef);
+                self.record_deferred_call_resolution(
+                    def_id,
+                    DeferredCallResolution {
+                        call_expr,
+                        callee_expr,
+                        closure_ty: adjusted_ty,
+                        adjustments,
+                        fn_sig: closure_sig,
+                    },
+                );
+                return Some(CallStep::DeferredClosure(def_id, closure_sig));
+            }
 
-                // Check whether this is a call to a closure where we
-                // haven't yet decided on whether the closure is fn vs
-                // fnmut vs fnonce. If so, we have to defer further processing.
-                if self.closure_kind(args).is_none() {
-                    let closure_sig = args.as_closure().sig();
-                    let closure_sig = self.instantiate_binder_with_fresh_vars(
-                        call_expr.span,
-                        infer::FnCall,
-                        closure_sig,
-                    );
-                    let adjustments = self.adjust_steps(autoderef);
-                    self.record_deferred_call_resolution(
-                        def_id,
-                        DeferredCallResolution {
-                            call_expr,
-                            callee_expr,
-                            adjusted_ty,
-                            adjustments,
-                            fn_sig: closure_sig,
-                            closure_args: args,
-                        },
-                    );
-                    return Some(CallStep::DeferredClosure(def_id, closure_sig));
-                }
+            // When calling a `CoroutineClosure` that is local to the body, we will
+            // not know what its `closure_kind` is yet. Instead, just fill in the
+            // signature with an infer var for the `tupled_upvars_ty` of the coroutine,
+            // and record a deferred call resolution which will constrain that var
+            // as part of `AsyncFn*` trait confirmation.
+            ty::CoroutineClosure(def_id, args) if self.closure_kind(adjusted_ty).is_none() => {
+                let def_id = def_id.expect_local();
+                let closure_args = args.as_coroutine_closure();
+                let coroutine_closure_sig = self.instantiate_binder_with_fresh_vars(
+                    call_expr.span,
+                    infer::FnCall,
+                    closure_args.coroutine_closure_sig(),
+                );
+                let tupled_upvars_ty = self.next_ty_var(TypeVariableOrigin {
+                    kind: TypeVariableOriginKind::TypeInference,
+                    span: callee_expr.span,
+                });
+                let call_sig = self.tcx.mk_fn_sig(
+                    [coroutine_closure_sig.tupled_inputs_ty],
+                    coroutine_closure_sig.to_coroutine(
+                        self.tcx,
+                        closure_args.parent_args(),
+                        // Inherit the kind ty of the closure, since we're calling this
+                        // coroutine with the most relaxed `AsyncFn*` trait that we can.
+                        // We don't necessarily need to do this here, but it saves us
+                        // computing one more infer var that will get constrained later.
+                        closure_args.kind_ty(),
+                        self.tcx.coroutine_for_closure(def_id),
+                        tupled_upvars_ty,
+                    ),
+                    coroutine_closure_sig.c_variadic,
+                    coroutine_closure_sig.unsafety,
+                    coroutine_closure_sig.abi,
+                );
+                let adjustments = self.adjust_steps(autoderef);
+                self.record_deferred_call_resolution(
+                    def_id,
+                    DeferredCallResolution {
+                        call_expr,
+                        callee_expr,
+                        closure_ty: adjusted_ty,
+                        adjustments,
+                        fn_sig: call_sig,
+                    },
+                );
+                return Some(CallStep::DeferredClosure(def_id, call_sig));
             }
 
             // Hack: we know that there are traits implementing Fn for &F
@@ -216,23 +261,40 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         adjusted_ty: Ty<'tcx>,
         opt_arg_exprs: Option<&'tcx [hir::Expr<'tcx>]>,
     ) -> Option<(Option<Adjustment<'tcx>>, MethodCallee<'tcx>)> {
+        // HACK(async_closures): For async closures, prefer `AsyncFn*`
+        // over `Fn*`, since all async closures implement `FnOnce`, but
+        // choosing that over `AsyncFn`/`AsyncFnMut` would be more restrictive.
+        // For other callables, just prefer `Fn*` for perf reasons.
+        //
+        // The order of trait choices here is not that big of a deal,
+        // since it just guides inference (and our choice of autoref).
+        // Though in the future, I'd like typeck to choose:
+        // `Fn > AsyncFn > FnMut > AsyncFnMut > FnOnce > AsyncFnOnce`
+        // ...or *ideally*, we just have `LendingFn`/`LendingFnMut`, which
+        // would naturally unify these two trait hierarchies in the most
+        // general way.
+        let call_trait_choices = if self.shallow_resolve(adjusted_ty).is_coroutine_closure() {
+            [
+                (self.tcx.lang_items().async_fn_trait(), sym::async_call, true),
+                (self.tcx.lang_items().async_fn_mut_trait(), sym::async_call_mut, true),
+                (self.tcx.lang_items().async_fn_once_trait(), sym::async_call_once, false),
+                (self.tcx.lang_items().fn_trait(), sym::call, true),
+                (self.tcx.lang_items().fn_mut_trait(), sym::call_mut, true),
+                (self.tcx.lang_items().fn_once_trait(), sym::call_once, false),
+            ]
+        } else {
+            [
+                (self.tcx.lang_items().fn_trait(), sym::call, true),
+                (self.tcx.lang_items().fn_mut_trait(), sym::call_mut, true),
+                (self.tcx.lang_items().fn_once_trait(), sym::call_once, false),
+                (self.tcx.lang_items().async_fn_trait(), sym::async_call, true),
+                (self.tcx.lang_items().async_fn_mut_trait(), sym::async_call_mut, true),
+                (self.tcx.lang_items().async_fn_once_trait(), sym::async_call_once, false),
+            ]
+        };
+
         // Try the options that are least restrictive on the caller first.
-        for (opt_trait_def_id, method_name, borrow) in [
-            (self.tcx.lang_items().fn_trait(), Ident::with_dummy_span(sym::call), true),
-            (self.tcx.lang_items().fn_mut_trait(), Ident::with_dummy_span(sym::call_mut), true),
-            (self.tcx.lang_items().fn_once_trait(), Ident::with_dummy_span(sym::call_once), false),
-            (self.tcx.lang_items().async_fn_trait(), Ident::with_dummy_span(sym::async_call), true),
-            (
-                self.tcx.lang_items().async_fn_mut_trait(),
-                Ident::with_dummy_span(sym::async_call_mut),
-                true,
-            ),
-            (
-                self.tcx.lang_items().async_fn_once_trait(),
-                Ident::with_dummy_span(sym::async_call_once),
-                false,
-            ),
-        ] {
+        for (opt_trait_def_id, method_name, borrow) in call_trait_choices {
             let Some(trait_def_id) = opt_trait_def_id else { continue };
 
             let opt_input_type = opt_arg_exprs.map(|arg_exprs| {
@@ -249,7 +311,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
             if let Some(ok) = self.lookup_method_in_trait(
                 self.misc(call_expr.span),
-                method_name,
+                Ident::with_dummy_span(method_name),
                 trait_def_id,
                 adjusted_ty,
                 opt_input_type.as_ref().map(slice::from_ref),
@@ -886,10 +948,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 pub struct DeferredCallResolution<'tcx> {
     call_expr: &'tcx hir::Expr<'tcx>,
     callee_expr: &'tcx hir::Expr<'tcx>,
-    adjusted_ty: Ty<'tcx>,
+    closure_ty: Ty<'tcx>,
     adjustments: Vec<Adjustment<'tcx>>,
     fn_sig: ty::FnSig<'tcx>,
-    closure_args: GenericArgsRef<'tcx>,
 }
 
 impl<'a, 'tcx> DeferredCallResolution<'tcx> {
@@ -898,10 +959,10 @@ impl<'a, 'tcx> DeferredCallResolution<'tcx> {
 
         // we should not be invoked until the closure kind has been
         // determined by upvar inference
-        assert!(fcx.closure_kind(self.closure_args).is_some());
+        assert!(fcx.closure_kind(self.closure_ty).is_some());
 
         // We may now know enough to figure out fn vs fnmut etc.
-        match fcx.try_overloaded_call_traits(self.call_expr, self.adjusted_ty, None) {
+        match fcx.try_overloaded_call_traits(self.call_expr, self.closure_ty, None) {
             Some((autoref, method_callee)) => {
                 // One problem is that when we get here, we are going
                 // to have a newly instantiated function signature
@@ -937,7 +998,7 @@ impl<'a, 'tcx> DeferredCallResolution<'tcx> {
                 span_bug!(
                     self.call_expr.span,
                     "Expected to find a suitable `Fn`/`FnMut`/`FnOnce` implementation for `{}`",
-                    self.adjusted_ty
+                    self.closure_ty
                 )
             }
         }

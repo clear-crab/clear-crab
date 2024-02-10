@@ -652,12 +652,12 @@ compiler-team = [
     "@davidtwco",
     "@estebank",
     "@oli-obk",
+    "@pnkfelix",
     "@wesleywiser",
     "@michaelwoerister",
 ]
 compiler-team-contributors = [
     "@TaKO8Ki",
-    "@b-naber",
     "@nnethercote",
     "@fmease",
 ]
@@ -669,7 +669,6 @@ libs = [
     "@cuviper",
     "@joshtriplett",
     "@Mark-Simulacrum",
-    "@m-ou-se",
 ]
 bootstrap = [
     "@Mark-Simulacrum",

@@ -57,6 +57,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         match ty.kind() {
             // Not all of these (e.g., unsafe fns) implement `FnOnce`,
             // so we look for these beforehand.
+            // FIXME(async_closures): These don't impl `FnOnce` by default.
             ty::Closure(..) | ty::FnDef(..) | ty::FnPtr(_) => true,
             // If it's not a simple function, look for things which implement `FnOnce`.
             _ => {
@@ -229,7 +230,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         }
                         if let hir::ExprKind::Path(hir::QPath::Resolved(None, path)) = kind
                             && let hir::def::Res::Local(hir_id) = path.res
-                            && let Some(hir::Node::Pat(b)) = self.tcx.opt_hir_node(hir_id)
+                            && let hir::Node::Pat(b) = self.tcx.hir_node(hir_id)
                             && let Some(hir::Node::Param(p)) = self.tcx.hir().find_parent(b.hir_id)
                             && let Some(node) = self.tcx.hir().find_parent(p.hir_id)
                             && let Some(decl) = node.fn_decl()
@@ -540,6 +541,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         let mut bound_spans: SortedMap<Span, Vec<String>> = Default::default();
         let mut restrict_type_params = false;
+        let mut suggested_derive = false;
         let mut unsatisfied_bounds = false;
         if item_name.name == sym::count && self.is_slice_ty(rcvr_ty, span) {
             let msg = "consider using `len` instead";
@@ -554,6 +556,17 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     "`count` is defined on `{iterator_trait}`, which `{rcvr_ty}` does not implement"
                 ));
             }
+        } else if !unsatisfied_predicates.is_empty() && matches!(rcvr_ty.kind(), ty::Param(_)) {
+            // We special case the situation where we are looking for `_` in
+            // `<TypeParam as _>::method` because otherwise the machinery will look for blanket
+            // implementations that have unsatisfied trait bounds to suggest, leading us to claim
+            // things like "we're looking for a trait with method `cmp`, both `Iterator` and `Ord`
+            // have one, in order to implement `Ord` you need to restrict `TypeParam: FnPtr` so
+            // that `impl<T: FnPtr> Ord for T` can apply", which is not what we want. We have a type
+            // parameter, we want to directly say "`Ord::cmp` and `Iterator::cmp` exist, restrict
+            // `TypeParam: Ord` or `TypeParam: Iterator`"". That is done further down when calling
+            // `self.suggest_traits_to_import`, so we ignore the `unsatisfied_predicates`
+            // suggestions.
         } else if !unsatisfied_predicates.is_empty() {
             let mut type_params = FxIndexMap::default();
 
@@ -916,20 +929,22 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 .enumerate()
                 .collect::<Vec<(usize, String)>>();
 
-            for ((span, add_where_or_comma), obligations) in type_params.into_iter() {
-                restrict_type_params = true;
-                // #74886: Sort here so that the output is always the same.
-                let obligations = obligations.into_sorted_stable_ord();
-                err.span_suggestion_verbose(
-                    span,
-                    format!(
-                        "consider restricting the type parameter{s} to satisfy the \
-                         trait bound{s}",
-                        s = pluralize!(obligations.len())
-                    ),
-                    format!("{} {}", add_where_or_comma, obligations.join(", ")),
-                    Applicability::MaybeIncorrect,
-                );
+            if !matches!(rcvr_ty.peel_refs().kind(), ty::Param(_)) {
+                for ((span, add_where_or_comma), obligations) in type_params.into_iter() {
+                    restrict_type_params = true;
+                    // #74886: Sort here so that the output is always the same.
+                    let obligations = obligations.into_sorted_stable_ord();
+                    err.span_suggestion_verbose(
+                        span,
+                        format!(
+                            "consider restricting the type parameter{s} to satisfy the trait \
+                             bound{s}",
+                            s = pluralize!(obligations.len())
+                        ),
+                        format!("{} {}", add_where_or_comma, obligations.join(", ")),
+                        Applicability::MaybeIncorrect,
+                    );
+                }
             }
 
             bound_list.sort_by(|(_, a), (_, b)| a.cmp(b)); // Sort alphabetically.
@@ -977,7 +992,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         "the following trait bounds were not satisfied:\n{bound_list}"
                     ));
                 }
-                self.suggest_derive(&mut err, unsatisfied_predicates);
+                suggested_derive = self.suggest_derive(&mut err, unsatisfied_predicates);
 
                 unsatisfied_bounds = true;
             }
@@ -1116,9 +1131,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                                         item_name.span,
                                         format!(
                                             "you might have meant to use `{}`",
-                                            inherent_method.name.as_str()
+                                            inherent_method.name
                                         ),
-                                        inherent_method.name.as_str(),
+                                        inherent_method.name,
                                         Applicability::MaybeIncorrect,
                                     );
                                     break 'outer;
@@ -1200,7 +1215,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             );
         }
 
-        if rcvr_ty.is_numeric() && rcvr_ty.is_fresh() || restrict_type_params {
+        if rcvr_ty.is_numeric() && rcvr_ty.is_fresh() || restrict_type_params || suggested_derive {
         } else {
             self.suggest_traits_to_import(
                 &mut err,
@@ -1210,7 +1225,6 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 args.map(|args| args.len() + 1),
                 source,
                 no_match_data.out_of_scope_traits.clone(),
-                unsatisfied_predicates,
                 static_candidates,
                 unsatisfied_bounds,
                 expected.only_has_type(self),
@@ -1325,7 +1339,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             }
         }
         self.note_derefed_ty_has_method(&mut err, source, rcvr_ty, item_name, expected);
-        return Some(err);
+        Some(err)
     }
 
     fn note_candidates_on_method_error(
@@ -2003,7 +2017,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         visitor.visit_body(body);
 
         let parent = self.tcx.hir().parent_id(seg1.hir_id);
-        if let Some(Node::Expr(call_expr)) = self.tcx.opt_hir_node(parent)
+        if let Node::Expr(call_expr) = self.tcx.hir_node(parent)
             && let Some(expr) = visitor.result
             && let Some(self_ty) = self.node_ty_opt(expr.hir_id)
         {
@@ -2019,7 +2033,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 diag.span_suggestion_verbose(
                     sm.span_extend_while(seg1.ident.span.shrink_to_hi(), |c| c == ':').unwrap(),
                     "you may have meant to call an instance method",
-                    ".".to_string(),
+                    ".",
                     Applicability::MaybeIncorrect,
                 );
             }
@@ -2470,7 +2484,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             Option<ty::Predicate<'tcx>>,
             Option<ObligationCause<'tcx>>,
         )],
-    ) {
+    ) -> bool {
         let mut derives = self.note_predicate_source_and_get_derives(err, unsatisfied_predicates);
         derives.sort();
         derives.dedup();
@@ -2495,6 +2509,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 Applicability::MaybeIncorrect,
             );
         }
+        !derives_grouped.is_empty()
     }
 
     fn note_derefed_ty_has_method(
@@ -2697,11 +2712,6 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         inputs_len: Option<usize>,
         source: SelfSource<'tcx>,
         valid_out_of_scope_traits: Vec<DefId>,
-        unsatisfied_predicates: &[(
-            ty::Predicate<'tcx>,
-            Option<ty::Predicate<'tcx>>,
-            Option<ObligationCause<'tcx>>,
-        )],
         static_candidates: &[CandidateSource],
         unsatisfied_bounds: bool,
         return_type: Option<Ty<'tcx>>,
@@ -2918,19 +2928,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 // this isn't perfect (that is, there are cases when
                 // implementing a trait would be legal but is rejected
                 // here).
-                unsatisfied_predicates.iter().all(|(p, _, _)| {
-                    match p.kind().skip_binder() {
-                        // Hide traits if they are present in predicates as they can be fixed without
-                        // having to implement them.
-                        ty::PredicateKind::Clause(ty::ClauseKind::Trait(t)) => {
-                            t.def_id() == info.def_id
-                        }
-                        ty::PredicateKind::Clause(ty::ClauseKind::Projection(p)) => {
-                            p.projection_ty.def_id == info.def_id
-                        }
-                        _ => false,
-                    }
-                }) && (type_is_local || info.def_id.is_local())
+                (type_is_local || info.def_id.is_local())
                     && !self.tcx.trait_is_auto(info.def_id)
                     && self
                         .associated_value(info.def_id, item_name)
@@ -3253,7 +3251,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         }
 
         let parent = self.tcx.hir().parent_id(expr.hir_id);
-        if let Some(Node::Expr(call_expr)) = self.tcx.opt_hir_node(parent)
+        if let Node::Expr(call_expr) = self.tcx.hir_node(parent)
             && let hir::ExprKind::MethodCall(
                 hir::PathSegment { ident: method_name, .. },
                 self_expr,
