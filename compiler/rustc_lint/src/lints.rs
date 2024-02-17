@@ -1,7 +1,6 @@
 #![allow(rustc::diagnostic_outside_of_impl)]
 #![allow(rustc::untranslatable_diagnostic)]
-
-use std::num::NonZeroU32;
+use std::num::NonZero;
 
 use crate::errors::RequestedLevel;
 use crate::fluent_generated as fluent;
@@ -402,7 +401,7 @@ pub struct BuiltinIncompleteFeaturesHelp;
 #[derive(Subdiagnostic)]
 #[note(lint_note)]
 pub struct BuiltinFeatureIssueNote {
-    pub n: NonZeroU32,
+    pub n: NonZero<u32>,
 }
 
 pub struct BuiltinUnpermittedTypeInit<'a> {
@@ -716,7 +715,7 @@ pub enum InvalidFromUtf8Diag {
 
 // reference_casting.rs
 #[derive(LintDiagnostic)]
-pub enum InvalidReferenceCastingDiag {
+pub enum InvalidReferenceCastingDiag<'tcx> {
     #[diag(lint_invalid_reference_casting_borrow_as_mut)]
     #[note(lint_invalid_reference_casting_note_book)]
     BorrowAsMut {
@@ -732,6 +731,18 @@ pub enum InvalidReferenceCastingDiag {
         orig_cast: Option<Span>,
         #[note(lint_invalid_reference_casting_note_ty_has_interior_mutability)]
         ty_has_interior_mutability: Option<()>,
+    },
+    #[diag(lint_invalid_reference_casting_bigger_layout)]
+    #[note(lint_layout)]
+    BiggerLayout {
+        #[label]
+        orig_cast: Option<Span>,
+        #[label(lint_alloc)]
+        alloc: Span,
+        from_ty: Ty<'tcx>,
+        from_size: u64,
+        to_ty: Ty<'tcx>,
+        to_size: u64,
     },
 }
 
@@ -1746,7 +1757,7 @@ impl<'a> DecorateLint<'a, ()> for UnusedDef<'_, '_> {
             diag.note(note.to_string());
         }
         if let Some(sugg) = self.suggestion {
-            diag.subdiagnostic(sugg);
+            diag.subdiagnostic(diag.dcx, sugg);
         }
     }
 

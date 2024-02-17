@@ -1227,7 +1227,7 @@ impl<'tcx> LateLintPass<'tcx> for MutableTransmutes {
         }
 
         fn def_id_is_transmute(cx: &LateContext<'_>, def_id: DefId) -> bool {
-            cx.tcx.is_intrinsic(def_id) && cx.tcx.item_name(def_id) == sym::transmute
+            matches!(cx.tcx.intrinsic(def_id), Some(sym::transmute))
         }
     }
 }
@@ -1416,8 +1416,7 @@ impl<'tcx> LateLintPass<'tcx> for UnreachablePub {
     }
 
     fn check_field_def(&mut self, cx: &LateContext<'_>, field: &hir::FieldDef<'_>) {
-        let map = cx.tcx.hir();
-        if matches!(map.get_parent(field.hir_id), Node::Variant(_)) {
+        if matches!(cx.tcx.parent_hir_node(field.hir_id), Node::Variant(_)) {
             return;
         }
         self.perform_lint(cx, "field", field.def_id, field.vis_span, false);

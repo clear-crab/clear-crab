@@ -3,7 +3,7 @@ use crate::{
     CodeSuggestion, DiagnosticBuilder, DiagnosticMessage, EmissionGuarantee, ErrCode, Level,
     MultiSpan, SubdiagnosticMessage, Substitution, SubstitutionPart, SuggestionStyle,
 };
-use rustc_data_structures::fx::{FxHashMap, FxIndexMap};
+use rustc_data_structures::fx::FxIndexMap;
 use rustc_error_messages::fluent_value_from_str_list_sep_by_and;
 use rustc_error_messages::FluentValue;
 use rustc_lint_defs::{Applicability, LintExpectationId};
@@ -105,7 +105,7 @@ pub struct Diagnostic {
     pub span: MultiSpan,
     pub children: Vec<SubDiagnostic>,
     pub suggestions: Result<Vec<CodeSuggestion>, SuggestionsDisabled>,
-    args: FxHashMap<DiagnosticArgName, DiagnosticArgValue>,
+    args: FxIndexMap<DiagnosticArgName, DiagnosticArgValue>,
 
     /// This is not used for highlighting or rendering any error message. Rather, it can be used
     /// as a sort key to sort a buffer of diagnostics. By default, it is the primary span of
@@ -237,8 +237,7 @@ impl Diagnostic {
         match self.level {
             Level::Bug | Level::Fatal | Level::Error | Level::DelayedBug => true,
 
-            Level::GoodPathDelayedBug
-            | Level::ForceWarning(_)
+            Level::ForceWarning(_)
             | Level::Warning
             | Level::Note
             | Level::OnceNote
@@ -516,6 +515,17 @@ impl Diagnostic {
 
     /// Helper for pushing to `self.suggestions`, if available (not disable).
     fn push_suggestion(&mut self, suggestion: CodeSuggestion) {
+        for subst in &suggestion.substitutions {
+            for part in &subst.parts {
+                let span = part.span;
+                let call_site = span.ctxt().outer_expn_data().call_site;
+                if span.in_derive_expansion() && span.overlaps_or_adjacent(call_site) {
+                    // Ignore if spans is from derive macro.
+                    return;
+                }
+            }
+        }
+
         if let Ok(suggestions) = &mut self.suggestions {
             suggestions.push(suggestion);
         }
@@ -842,17 +852,10 @@ impl Diagnostic {
     }
 
     /// Add a subdiagnostic from a type that implements `Subdiagnostic` (see
-    /// [rustc_macros::Subdiagnostic]).
-    pub fn subdiagnostic(&mut self, subdiagnostic: impl AddToDiagnostic) -> &mut Self {
-        subdiagnostic.add_to_diagnostic(self);
-        self
-    }
-
-    /// Add a subdiagnostic from a type that implements `Subdiagnostic` (see
     /// [rustc_macros::Subdiagnostic]). Performs eager translation of any translatable messages
     /// used in the subdiagnostic, so suitable for use with repeated messages (i.e. re-use of
     /// interpolated variables).
-    pub fn eager_subdiagnostic(
+    pub fn subdiagnostic(
         &mut self,
         dcx: &crate::DiagCtxt,
         subdiagnostic: impl AddToDiagnostic,
@@ -888,9 +891,6 @@ impl Diagnostic {
         self
     }
 
-    // Exact iteration order of diagnostic arguments shouldn't make a difference to output because
-    // they're only used in interpolation.
-    #[allow(rustc::potential_query_instability)]
     pub fn args(&self) -> impl Iterator<Item = DiagnosticArg<'_>> {
         self.args.iter()
     }
@@ -904,14 +904,14 @@ impl Diagnostic {
         self
     }
 
-    pub fn replace_args(&mut self, args: FxHashMap<DiagnosticArgName, DiagnosticArgValue>) {
+    pub fn replace_args(&mut self, args: FxIndexMap<DiagnosticArgName, DiagnosticArgValue>) {
         self.args = args;
     }
 
     /// Helper function that takes a `SubdiagnosticMessage` and returns a `DiagnosticMessage` by
     /// combining it with the primary message of the diagnostic (if translatable, otherwise it just
     /// passes the user's string along).
-    fn subdiagnostic_message_to_diagnostic_message(
+    pub(crate) fn subdiagnostic_message_to_diagnostic_message(
         &self,
         attr: impl Into<SubdiagnosticMessage>,
     ) -> DiagnosticMessage {

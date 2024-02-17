@@ -383,7 +383,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     }
                 };
                 if self.check_for_missing_semi(expr, &mut err)
-                    && let hir::Node::Expr(expr) = self.tcx.hir().get_parent(expr.hir_id)
+                    && let hir::Node::Expr(expr) = self.tcx.parent_hir_node(expr.hir_id)
                     && let hir::ExprKind::Assign(..) = expr.kind
                 {
                     // We defer to the later error produced by `check_lhs_assignable`.
@@ -824,7 +824,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         // If the previous expression was a block expression, suggest parentheses
                         // (turning this into a binary subtraction operation instead.)
                         // for example, `{2} - 2` -> `({2}) - 2` (see src\test\ui\parser\expr-as-stmt.rs)
-                        err.subdiagnostic(ExprParenthesesNeeded::surrounding(*sp));
+                        err.subdiagnostic(self.dcx(), ExprParenthesesNeeded::surrounding(*sp));
                     } else {
                         match actual.kind() {
                             Uint(_) if op == hir::UnOp::Neg => {

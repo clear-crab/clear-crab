@@ -57,6 +57,7 @@ use rustc_hir::def::{DefKind, LifetimeRes, Namespace, PartialRes, PerNS, Res};
 use rustc_hir::def_id::{LocalDefId, LocalDefIdMap, CRATE_DEF_ID, LOCAL_CRATE};
 use rustc_hir::{ConstArg, GenericArg, ItemLocalMap, ParamName, TraitCandidate};
 use rustc_index::{Idx, IndexSlice, IndexVec};
+use rustc_macros::extension;
 use rustc_middle::span_bug;
 use rustc_middle::ty::{ResolverAstLowering, TyCtxt};
 use rustc_session::parse::{add_feature_diagnostics, feature_err};
@@ -190,16 +191,8 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
     }
 }
 
-trait ResolverAstLoweringExt {
-    fn legacy_const_generic_args(&self, expr: &Expr) -> Option<Vec<usize>>;
-    fn get_partial_res(&self, id: NodeId) -> Option<PartialRes>;
-    fn get_import_res(&self, id: NodeId) -> PerNS<Option<Res<NodeId>>>;
-    fn get_label_res(&self, id: NodeId) -> Option<NodeId>;
-    fn get_lifetime_res(&self, id: NodeId) -> Option<LifetimeRes>;
-    fn take_extra_lifetime_params(&mut self, id: NodeId) -> Vec<(Ident, NodeId, LifetimeRes)>;
-}
-
-impl ResolverAstLoweringExt for ResolverAstLowering {
+#[extension(trait ResolverAstLoweringExt)]
+impl ResolverAstLowering {
     fn legacy_const_generic_args(&self, expr: &Expr) -> Option<Vec<usize>> {
         if let ExprKind::Path(None, path) = &expr.kind {
             // Don't perform legacy const generics rewriting if the path already
@@ -966,10 +959,11 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                 {
                     lit
                 } else {
+                    let guar = self.dcx().has_errors().unwrap();
                     MetaItemLit {
                         symbol: kw::Empty,
                         suffix: None,
-                        kind: LitKind::Err,
+                        kind: LitKind::Err(guar),
                         span: DUMMY_SP,
                     }
                 };
@@ -1285,20 +1279,45 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
     fn lower_ty_direct(&mut self, t: &Ty, itctx: ImplTraitContext) -> hir::Ty<'hir> {
         let kind = match &t.kind {
             TyKind::Infer => hir::TyKind::Infer,
-            TyKind::Err => {
-                hir::TyKind::Err(self.dcx().span_delayed_bug(t.span, "TyKind::Err lowered"))
-            }
-            // FIXME(unnamed_fields): IMPLEMENTATION IN PROGRESS
-            #[allow(rustc::untranslatable_diagnostic)]
-            #[allow(rustc::diagnostic_outside_of_impl)]
-            TyKind::AnonStruct(ref _fields) => {
-                hir::TyKind::Err(self.dcx().span_err(t.span, "anonymous structs are unimplemented"))
-            }
-            // FIXME(unnamed_fields): IMPLEMENTATION IN PROGRESS
-            #[allow(rustc::untranslatable_diagnostic)]
-            #[allow(rustc::diagnostic_outside_of_impl)]
-            TyKind::AnonUnion(ref _fields) => {
-                hir::TyKind::Err(self.dcx().span_err(t.span, "anonymous unions are unimplemented"))
+            TyKind::Err(guar) => hir::TyKind::Err(*guar),
+            // Lower the anonymous structs or unions in a nested lowering context.
+            //
+            // ```
+            // struct Foo {
+            //     _: union {
+            // //     ^__________________  <-- within the nested lowering context,
+            //         /* fields */ //   |     we lower all fields defined into an
+            //     } //                  |     owner node of struct or union item
+            // //  ^_____________________|
+            // }
+            // ```
+            TyKind::AnonStruct(node_id, fields) | TyKind::AnonUnion(node_id, fields) => {
+                // Here its `def_id` is created in `build_reduced_graph`.
+                let def_id = self.local_def_id(*node_id);
+                debug!(?def_id);
+                let owner_id = hir::OwnerId { def_id };
+                self.with_hir_id_owner(*node_id, |this| {
+                    let fields = this.arena.alloc_from_iter(
+                        fields.iter().enumerate().map(|f| this.lower_field_def(f)),
+                    );
+                    let span = t.span;
+                    let variant_data = hir::VariantData::Struct { fields, recovered: false };
+                    // FIXME: capture the generics from the outer adt.
+                    let generics = hir::Generics::empty();
+                    let kind = match t.kind {
+                        TyKind::AnonStruct(..) => hir::ItemKind::Struct(variant_data, generics),
+                        TyKind::AnonUnion(..) => hir::ItemKind::Union(variant_data, generics),
+                        _ => unreachable!(),
+                    };
+                    hir::OwnerNode::Item(this.arena.alloc(hir::Item {
+                        ident: Ident::new(kw::Empty, span),
+                        owner_id,
+                        kind,
+                        span: this.lower_span(span),
+                        vis_span: this.lower_span(span.shrink_to_lo()),
+                    }))
+                });
+                hir::TyKind::AnonAdt(hir::ItemId { owner_id })
             }
             TyKind::Slice(ty) => hir::TyKind::Slice(self.lower_ty(ty, itctx)),
             TyKind::Ptr(mt) => hir::TyKind::Ptr(self.lower_mt(mt, itctx)),
@@ -1478,6 +1497,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                 );
                 hir::TyKind::Err(guar)
             }
+            TyKind::Dummy => panic!("`TyKind::Dummy` should never be lowered"),
         };
 
         hir::Ty { kind, span: self.lower_span(t.span), hir_id: self.lower_node_id(t.id) }

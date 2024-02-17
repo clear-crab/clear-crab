@@ -447,10 +447,10 @@ pub fn walk_ty<'a, V: Visitor<'a>>(visitor: &mut V, typ: &'a Ty) {
             walk_list!(visitor, visit_param_bound, bounds, BoundKind::Impl);
         }
         TyKind::Typeof(expression) => visitor.visit_anon_const(expression),
-        TyKind::Infer | TyKind::ImplicitSelf | TyKind::Err => {}
+        TyKind::Infer | TyKind::ImplicitSelf | TyKind::Dummy | TyKind::Err(_) => {}
         TyKind::MacCall(mac) => visitor.visit_mac_call(mac),
         TyKind::Never | TyKind::CVarArgs => {}
-        TyKind::AnonStruct(ref fields, ..) | TyKind::AnonUnion(ref fields, ..) => {
+        TyKind::AnonStruct(_, ref fields) | TyKind::AnonUnion(_, ref fields) => {
             walk_list!(visitor, visit_field_def, fields)
         }
     }

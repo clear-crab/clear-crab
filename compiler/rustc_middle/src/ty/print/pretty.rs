@@ -877,7 +877,24 @@ pub trait PrettyPrinter<'tcx>: Printer<'tcx> + fmt::Write {
             ty::CoroutineClosure(did, args) => {
                 p!(write("{{"));
                 if !self.should_print_verbose() {
-                    p!(write("coroutine-closure"));
+                    match self.tcx().coroutine_kind(self.tcx().coroutine_for_closure(did)).unwrap()
+                    {
+                        hir::CoroutineKind::Desugared(
+                            hir::CoroutineDesugaring::Async,
+                            hir::CoroutineSource::Closure,
+                        ) => p!("async closure"),
+                        hir::CoroutineKind::Desugared(
+                            hir::CoroutineDesugaring::AsyncGen,
+                            hir::CoroutineSource::Closure,
+                        ) => p!("async gen closure"),
+                        hir::CoroutineKind::Desugared(
+                            hir::CoroutineDesugaring::Gen,
+                            hir::CoroutineSource::Closure,
+                        ) => p!("gen closure"),
+                        _ => unreachable!(
+                            "coroutine from coroutine-closure should have CoroutineSource::Closure"
+                        ),
+                    }
                     // FIXME(eddyb) should use `def_span`.
                     if let Some(did) = did.as_local() {
                         if self.tcx().sess.opts.unstable_opts.span_free_formats {
@@ -3139,13 +3156,12 @@ fn for_each_def(tcx: TyCtxt<'_>, mut collect_fn: impl for<'b> FnMut(&'b Ident, N
 // this is pub to be able to intra-doc-link it
 pub fn trimmed_def_paths(tcx: TyCtxt<'_>, (): ()) -> DefIdMap<Symbol> {
     // Trimming paths is expensive and not optimized, since we expect it to only be used for error
-    // reporting.
+    // reporting. Record the fact that we did it, so we can abort if we later found it was
+    // unnecessary.
     //
-    // For good paths causing this bug, the `rustc_middle::ty::print::with_no_trimmed_paths`
-    // wrapper can be used to suppress this query, in exchange for full paths being formatted.
-    tcx.sess.good_path_delayed_bug(
-        "trimmed_def_paths constructed but no error emitted; use `DelayDm` for lints or `with_no_trimmed_paths` for debugging",
-    );
+    // The `rustc_middle::ty::print::with_no_trimmed_paths` wrapper can be used to suppress this
+    // checking, in exchange for full paths being formatted.
+    tcx.sess.record_trimmed_def_paths();
 
     // Once constructed, unique namespace+symbol pairs will have a `Some(_)` entry, while
     // non-unique pairs will have a `None` entry.

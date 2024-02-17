@@ -1846,7 +1846,7 @@ pub enum LitKind {
     /// A boolean literal (`true`, `false`).
     Bool(bool),
     /// Placeholder for a literal that wasn't well-formed in some way.
-    Err,
+    Err(ErrorGuaranteed),
 }
 
 impl LitKind {
@@ -1893,7 +1893,7 @@ impl LitKind {
             | LitKind::Int(_, LitIntType::Unsuffixed)
             | LitKind::Float(_, LitFloatType::Unsuffixed)
             | LitKind::Bool(..)
-            | LitKind::Err => false,
+            | LitKind::Err(_) => false,
         }
     }
 }
@@ -2107,9 +2107,9 @@ pub enum TyKind {
     /// A tuple (`(A, B, C, D,...)`).
     Tup(ThinVec<P<Ty>>),
     /// An anonymous struct type i.e. `struct { foo: Type }`
-    AnonStruct(ThinVec<FieldDef>),
+    AnonStruct(NodeId, ThinVec<FieldDef>),
     /// An anonymous union type i.e. `union { bar: Type }`
-    AnonUnion(ThinVec<FieldDef>),
+    AnonUnion(NodeId, ThinVec<FieldDef>),
     /// A path (`module::module::...::Type`), optionally
     /// "qualified", e.g., `<Vec<T> as SomeTrait>::SomeType`.
     ///
@@ -2136,10 +2136,12 @@ pub enum TyKind {
     ImplicitSelf,
     /// A macro in the type position.
     MacCall(P<MacCall>),
-    /// Placeholder for a kind that has failed to be defined.
-    Err,
     /// Placeholder for a `va_list`.
     CVarArgs,
+    /// Sometimes we need a dummy value when no error has occurred.
+    Dummy,
+    /// Placeholder for a kind that has failed to be defined.
+    Err(ErrorGuaranteed),
 }
 
 impl TyKind {
@@ -2160,6 +2162,10 @@ impl TyKind {
         } else {
             None
         }
+    }
+
+    pub fn is_anon_adt(&self) -> bool {
+        matches!(self, TyKind::AnonStruct(..) | TyKind::AnonUnion(..))
     }
 }
 

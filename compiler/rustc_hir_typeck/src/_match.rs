@@ -79,7 +79,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             CoerceMany::with_coercion_sites(coerce_first, arms)
         };
 
-        let mut other_arms = vec![]; // Used only for diagnostics.
+        let mut prior_non_diverging_arms = vec![]; // Used only for diagnostics.
         let mut prior_arm = None;
         for arm in arms {
             if let Some(e) = &arm.guard {
@@ -118,9 +118,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         prior_arm_ty,
                         prior_arm_span,
                         scrut_span: scrut.span,
-                        scrut_hir_id: scrut.hir_id,
                         source: match_src,
-                        prior_arms: other_arms.clone(),
+                        prior_non_diverging_arms: prior_non_diverging_arms.clone(),
                         opt_suggest_box_span,
                     })),
                 ),
@@ -142,16 +141,16 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 false,
             );
 
-            other_arms.push(arm_span);
-            if other_arms.len() > 5 {
-                other_arms.remove(0);
-            }
-
             if !arm_ty.is_never() {
                 // When a match arm has type `!`, then it doesn't influence the expected type for
                 // the following arm. If all of the prior arms are `!`, then the influence comes
                 // from elsewhere and we shouldn't point to any previous arm.
                 prior_arm = Some((arm_block_id, arm_ty, arm_span));
+
+                prior_non_diverging_arms.push(arm_span);
+                if prior_non_diverging_arms.len() > 5 {
+                    prior_non_diverging_arms.remove(0);
+                }
             }
         }
 
@@ -261,7 +260,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         let semi = expr.span.shrink_to_hi().with_hi(semi_span.hi());
         let sugg = crate::errors::RemoveSemiForCoerce { expr: expr.span, ret, semi };
-        diag.subdiagnostic(sugg);
+        diag.subdiagnostic(self.dcx(), sugg);
     }
 
     /// When the previously checked expression (the scrutinee) diverges,
@@ -287,7 +286,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     {
         // If this `if` expr is the parent's function return expr,
         // the cause of the type coercion is the return type, point at it. (#25228)
-        let hir_id = self.tcx.hir().parent_id(self.tcx.hir().parent_id(then_expr.hir_id));
+        let hir_id = self.tcx.parent_hir_id(self.tcx.parent_hir_id(then_expr.hir_id));
         let ret_reason = self.maybe_get_coercion_reason(hir_id, if_span);
         let cause = self.cause(if_span, ObligationCauseCode::IfExpressionWithNoElse);
         let mut error = false;
@@ -312,7 +311,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         error: &mut bool,
     ) {
         if let Some((if_span, msg)) = ret_reason {
-            err.span_label(if_span, msg.clone());
+            err.span_label(if_span, msg);
         } else if let ExprKind::Block(block, _) = then_expr.kind
             && let Some(expr) = block.expr
         {
@@ -396,7 +395,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let node = self.tcx.hir_node(hir_id);
         if let hir::Node::Block(block) = node {
             // check that the body's parent is an fn
-            let parent = self.tcx.hir().get_parent(self.tcx.hir().parent_id(block.hir_id));
+            let parent = self.tcx.parent_hir_node(self.tcx.parent_hir_id(block.hir_id));
             if let (Some(expr), hir::Node::Item(hir::Item { kind: hir::ItemKind::Fn(..), .. })) =
                 (&block.expr, parent)
             {

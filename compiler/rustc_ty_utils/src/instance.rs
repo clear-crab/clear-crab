@@ -28,7 +28,8 @@ fn resolve_instance<'tcx>(
             tcx.normalize_erasing_regions(param_env, args),
         )
     } else {
-        let def = if matches!(tcx.def_kind(def_id), DefKind::Fn) && tcx.is_intrinsic(def_id) {
+        let def = if matches!(tcx.def_kind(def_id), DefKind::Fn) && tcx.intrinsic(def_id).is_some()
+        {
             debug!(" => intrinsic");
             ty::InstanceDef::Intrinsic(def_id)
         } else if Some(def_id) == tcx.lang_items().drop_in_place_fn() {
@@ -209,10 +210,8 @@ fn resolve_associated_item<'tcx>(
                 let name = tcx.item_name(trait_item_id);
                 if name == sym::clone {
                     let self_ty = trait_ref.self_ty();
-
-                    let is_copy = self_ty.is_copy_modulo_regions(tcx, param_env);
                     match self_ty.kind() {
-                        _ if is_copy => (),
+                        ty::FnDef(..) | ty::FnPtr(_) => (),
                         ty::Coroutine(..)
                         | ty::CoroutineWitness(..)
                         | ty::Closure(..)

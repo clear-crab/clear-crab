@@ -98,8 +98,11 @@ struct CollectRetsVisitor<'tcx> {
 
 impl<'tcx> Visitor<'tcx> for CollectRetsVisitor<'tcx> {
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
-        if let hir::ExprKind::Ret(_) = expr.kind {
-            self.ret_exprs.push(expr);
+        match expr.kind {
+            hir::ExprKind::Ret(_) => self.ret_exprs.push(expr),
+            // `return` in closures does not return from the outer function
+            hir::ExprKind::Closure(_) => return,
+            _ => {}
         }
         intravisit::walk_expr(self, expr);
     }
@@ -185,17 +188,6 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
         let a = self.shallow_resolve(a);
         let b = self.shallow_resolve(b);
         debug!("Coerce.tys({:?} => {:?})", a, b);
-
-        // Just ignore error types.
-        if let Err(guar) = (a, b).error_reported() {
-            // Best-effort try to unify these types -- we're already on the error path,
-            // so this will have the side-effect of making sure we have no ambiguities
-            // due to `[type error]` and `_` not coercing together.
-            let _ = self.commit_if_ok(|_| {
-                self.at(&self.cause, self.param_env).eq(DefineOpaqueTypes::Yes, a, b)
-            });
-            return success(vec![], Ty::new_error(self.fcx.tcx, guar), vec![]);
-        }
 
         // Coercing from `!` to any type is allowed:
         if a.is_never() {
@@ -763,7 +755,7 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
         let mut obligations: Vec<_> = predicates
             .iter()
             .map(|predicate| {
-                // For each existential predicate (e.g., `?Self: Clone`) substitute
+                // For each existential predicate (e.g., `?Self: Clone`) instantiate
                 // the type of the expression (e.g., `usize` in our example above)
                 // and then require that the resulting predicate (e.g., `usize: Clone`)
                 // holds (it does).
@@ -875,7 +867,7 @@ impl<'f, 'tcx> Coerce<'f, 'tcx> {
                 let a_sig = a.fn_sig(self.tcx);
                 if let ty::FnDef(def_id, _) = *a.kind() {
                     // Intrinsics are not coercible to function pointers
-                    if self.tcx.is_intrinsic(def_id) {
+                    if self.tcx.intrinsic(def_id).is_some() {
                         return Err(TypeError::IntrinsicCast);
                     }
 
@@ -1605,7 +1597,7 @@ impl<'tcx, 'exprs, E: AsCoercionSite> CoerceMany<'tcx, 'exprs, E> {
                         err.span_label(cause.span, "return type is not `()`");
                     }
                     ObligationCauseCode::BlockTailExpression(blk_id, ..) => {
-                        let parent_id = fcx.tcx.hir().parent_id(blk_id);
+                        let parent_id = fcx.tcx.parent_hir_id(blk_id);
                         err = self.report_return_mismatched_types(
                             cause,
                             expected,
@@ -1796,7 +1788,7 @@ impl<'tcx, 'exprs, E: AsCoercionSite> CoerceMany<'tcx, 'exprs, E> {
     ) -> DiagnosticBuilder<'a> {
         let mut err = fcx.err_ctxt().report_mismatched_types(cause, expected, found, ty_err);
 
-        let parent_id = fcx.tcx.hir().parent_id(id);
+        let parent_id = fcx.tcx.parent_hir_id(id);
         let parent = fcx.tcx.hir_node(parent_id);
         if let Some(expr) = expression
             && let hir::Node::Expr(hir::Expr {
@@ -1856,13 +1848,31 @@ impl<'tcx, 'exprs, E: AsCoercionSite> CoerceMany<'tcx, 'exprs, E> {
         }
 
         let parent_id = fcx.tcx.hir().get_parent_item(id);
-        let parent_item = fcx.tcx.hir_node_by_def_id(parent_id.def_id);
+        let mut parent_item = fcx.tcx.hir_node_by_def_id(parent_id.def_id);
+        // When suggesting return, we need to account for closures and async blocks, not just items.
+        for (_, node) in fcx.tcx.hir().parent_iter(id) {
+            match node {
+                hir::Node::Expr(&hir::Expr {
+                    kind: hir::ExprKind::Closure(hir::Closure { .. }),
+                    ..
+                }) => {
+                    parent_item = node;
+                    break;
+                }
+                hir::Node::Item(_) | hir::Node::TraitItem(_) | hir::Node::ImplItem(_) => break,
+                _ => {}
+            }
+        }
 
-        if let (Some(expr), Some(_), Some((fn_id, fn_decl, _, _))) =
-            (expression, blk_id, fcx.get_node_fn_decl(parent_item))
-        {
+        if let (Some(expr), Some(_), Some(fn_decl)) = (expression, blk_id, parent_item.fn_decl()) {
             fcx.suggest_missing_break_or_return_expr(
-                &mut err, expr, fn_decl, expected, found, id, fn_id,
+                &mut err,
+                expr,
+                fn_decl,
+                expected,
+                found,
+                id,
+                parent_id.into(),
             );
         }
 

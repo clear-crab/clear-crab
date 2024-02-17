@@ -15,13 +15,14 @@
 #![allow(rustc::diagnostic_outside_of_impl)]
 #![allow(rustc::untranslatable_diagnostic)]
 
-use rustc_data_structures::fx::FxHashMap;
+use rustc_data_structures::fx::FxIndexMap;
 use rustc_errors::Diagnostic;
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_hir::lang_items::LangItem;
 use rustc_hir::BodyOwnerKind;
 use rustc_index::IndexVec;
 use rustc_infer::infer::NllRegionVariableOrigin;
+use rustc_macros::extension;
 use rustc_middle::ty::fold::TypeFoldable;
 use rustc_middle::ty::print::with_no_trimmed_paths;
 use rustc_middle::ty::{self, InlineConstArgs, InlineConstArgsParts, RegionVid, Ty, TyCtxt};
@@ -180,7 +181,7 @@ struct UniversalRegionIndices<'tcx> {
     /// basically equivalent to an `GenericArgs`, except that it also
     /// contains an entry for `ReStatic` -- it might be nice to just
     /// use an args, and then handle `ReStatic` another way.
-    indices: FxHashMap<ty::Region<'tcx>, RegionVid>,
+    indices: FxIndexMap<ty::Region<'tcx>, RegionVid>,
 
     /// The vid assigned to `'static`. Used only for diagnostics.
     pub fr_static: RegionVid,
@@ -325,9 +326,6 @@ impl<'tcx> UniversalRegions<'tcx> {
     }
 
     /// Gets an iterator over all the early-bound regions that have names.
-    /// Iteration order may be unstable, so this should only be used when
-    /// iteration order doesn't affect anything
-    #[allow(rustc::potential_query_instability)]
     pub fn named_universal_regions<'s>(
         &'s self,
     ) -> impl Iterator<Item = (ty::Region<'tcx>, ty::RegionVid)> + 's {
@@ -796,27 +794,8 @@ impl<'cx, 'tcx> UniversalRegionsBuilder<'cx, 'tcx> {
     }
 }
 
-trait InferCtxtExt<'tcx> {
-    fn replace_free_regions_with_nll_infer_vars<T>(
-        &self,
-        origin: NllRegionVariableOrigin,
-        value: T,
-    ) -> T
-    where
-        T: TypeFoldable<TyCtxt<'tcx>>;
-
-    fn replace_bound_regions_with_nll_infer_vars<T>(
-        &self,
-        origin: NllRegionVariableOrigin,
-        all_outlive_scope: LocalDefId,
-        value: ty::Binder<'tcx, T>,
-        indices: &mut UniversalRegionIndices<'tcx>,
-    ) -> T
-    where
-        T: TypeFoldable<TyCtxt<'tcx>>;
-}
-
-impl<'cx, 'tcx> InferCtxtExt<'tcx> for BorrowckInferCtxt<'cx, 'tcx> {
+#[extension(trait InferCtxtExt<'tcx>)]
+impl<'cx, 'tcx> BorrowckInferCtxt<'cx, 'tcx> {
     #[instrument(skip(self), level = "debug")]
     fn replace_free_regions_with_nll_infer_vars<T>(
         &self,

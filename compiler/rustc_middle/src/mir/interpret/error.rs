@@ -1,4 +1,4 @@
-use super::{AllocId, AllocRange, Pointer, Scalar};
+use super::{AllocId, AllocRange, ConstAllocation, Pointer, Scalar};
 
 use crate::error;
 use crate::mir::{ConstAlloc, ConstValue};
@@ -12,6 +12,7 @@ use rustc_macros::HashStable;
 use rustc_session::CtfeBacktrace;
 use rustc_span::{def_id::DefId, Span, DUMMY_SP};
 use rustc_target::abi::{call, Align, Size, VariantIdx, WrappingRange};
+use rustc_type_ir::Mutability;
 
 use std::borrow::Cow;
 use std::{any::Any, backtrace::Backtrace, fmt};
@@ -83,6 +84,7 @@ impl Into<ErrorGuaranteed> for ReportedErrorInfo {
 TrivialTypeTraversalImpls! { ErrorHandled }
 
 pub type EvalToAllocationRawResult<'tcx> = Result<ConstAlloc<'tcx>, ErrorHandled>;
+pub type EvalStaticInitializerRawResult<'tcx> = Result<ConstAllocation<'tcx>, ErrorHandled>;
 pub type EvalToConstValueResult<'tcx> = Result<ConstValue<'tcx>, ErrorHandled>;
 /// `Ok(None)` indicates the constant was fine, but the valtree couldn't be constructed.
 /// This is needed in `thir::pattern::lower_inline_const`.
@@ -356,6 +358,8 @@ pub enum UndefinedBehaviorInfo<'tcx> {
     UninhabitedEnumVariantWritten(VariantIdx),
     /// An uninhabited enum variant is projected.
     UninhabitedEnumVariantRead(VariantIdx),
+    /// Trying to set discriminant to the niched variant, but the value does not match.
+    InvalidNichedEnumVariantWritten { enum_ty: Ty<'tcx> },
     /// ABI-incompatible argument types.
     AbiMismatchArgument { caller_ty: Ty<'tcx>, callee_ty: Ty<'tcx> },
     /// ABI-incompatible return types.
@@ -364,7 +368,7 @@ pub enum UndefinedBehaviorInfo<'tcx> {
 
 #[derive(Debug, Clone, Copy)]
 pub enum PointerKind {
-    Ref,
+    Ref(Mutability),
     Box,
 }
 
@@ -372,7 +376,7 @@ impl IntoDiagnosticArg for PointerKind {
     fn into_diagnostic_arg(self) -> DiagnosticArgValue {
         DiagnosticArgValue::Str(
             match self {
-                Self::Ref => "ref",
+                Self::Ref(_) => "ref",
                 Self::Box => "box",
             }
             .into(),
@@ -405,7 +409,7 @@ impl From<PointerKind> for ExpectedKind {
     fn from(x: PointerKind) -> ExpectedKind {
         match x {
             PointerKind::Box => ExpectedKind::Box,
-            PointerKind::Ref => ExpectedKind::Reference,
+            PointerKind::Ref(_) => ExpectedKind::Reference,
         }
     }
 }
@@ -416,7 +420,7 @@ pub enum ValidationErrorKind<'tcx> {
     PartialPointer,
     PtrToUninhabited { ptr_kind: PointerKind, ty: Ty<'tcx> },
     PtrToStatic { ptr_kind: PointerKind },
-    MutableRefInConst,
+    MutableRefInConstOrStatic,
     ConstRefToMutable,
     ConstRefToExtern,
     MutableRefToImmutable,
@@ -468,7 +472,7 @@ pub enum UnsupportedOpInfo {
     /// Accessing thread local statics
     ThreadLocalStatic(DefId),
     /// Accessing an unsupported extern static.
-    ReadExternStatic(DefId),
+    ExternStatic(DefId),
 }
 
 /// Error information for when the program exhausted the resources granted to it

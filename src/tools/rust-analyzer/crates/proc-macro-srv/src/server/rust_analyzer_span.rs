@@ -72,7 +72,7 @@ impl server::FreeFunctions for RaSpanServer {
     ) -> Result<bridge::Literal<Self::Span, Self::Symbol>, ()> {
         // FIXME: keep track of LitKind and Suffix
         Ok(bridge::Literal {
-            kind: bridge::LitKind::Err,
+            kind: bridge::LitKind::Integer, // dummy
             symbol: Symbol::intern(self.interner, s),
             suffix: None,
             span: self.call_site,
@@ -104,7 +104,7 @@ impl server::TokenStream for RaSpanServer {
                     delimiter: delim_to_internal(group.delimiter, group.span),
                     token_trees: match group.stream {
                         Some(stream) => stream.into_iter().collect(),
-                        None => Vec::new(),
+                        None => Box::new([]),
                     },
                 };
                 let tree = tt::TokenTree::from(group);
@@ -202,7 +202,7 @@ impl server::TokenStream for RaSpanServer {
                 tt::TokenTree::Leaf(tt::Leaf::Literal(lit)) => {
                     bridge::TokenTree::Literal(bridge::Literal {
                         // FIXME: handle literal kinds
-                        kind: bridge::LitKind::Err,
+                        kind: bridge::LitKind::Integer, // dummy
                         symbol: Symbol::intern(self.interner, &lit.text),
                         // FIXME: handle suffixes
                         suffix: None,
@@ -221,7 +221,7 @@ impl server::TokenStream for RaSpanServer {
                     stream: if subtree.token_trees.is_empty() {
                         None
                     } else {
-                        Some(subtree.token_trees.into_iter().collect())
+                        Some(subtree.token_trees.into_vec().into_iter().collect())
                     },
                     span: bridge::DelimSpan::from_single(subtree.delimiter.open),
                 }),

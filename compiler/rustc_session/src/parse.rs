@@ -11,7 +11,7 @@ use crate::lint::{
 };
 use crate::Session;
 use rustc_ast::node_id::NodeId;
-use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use rustc_data_structures::fx::{FxHashMap, FxIndexMap, FxIndexSet};
 use rustc_data_structures::sync::{AppendOnlyVec, Lock, Lrc};
 use rustc_errors::{emitter::SilentEmitter, DiagCtxt};
 use rustc_errors::{
@@ -173,21 +173,21 @@ pub fn add_feature_diagnostics_for_issue(
     feature_from_cli: bool,
 ) {
     if let Some(n) = find_feature_issue(feature, issue) {
-        err.subdiagnostic(FeatureDiagnosticForIssue { n });
+        err.subdiagnostic(sess.dcx(), FeatureDiagnosticForIssue { n });
     }
 
     // #23973: do not suggest `#![feature(...)]` if we are in beta/stable
     if sess.parse_sess.unstable_features.is_nightly_build() {
         if feature_from_cli {
-            err.subdiagnostic(CliFeatureDiagnosticHelp { feature });
+            err.subdiagnostic(sess.dcx(), CliFeatureDiagnosticHelp { feature });
         } else {
-            err.subdiagnostic(FeatureDiagnosticHelp { feature });
+            err.subdiagnostic(sess.dcx(), FeatureDiagnosticHelp { feature });
         }
 
         if sess.opts.unstable_opts.ui_testing {
-            err.subdiagnostic(SuggestUpgradeCompiler::ui_testing());
+            err.subdiagnostic(sess.dcx(), SuggestUpgradeCompiler::ui_testing());
         } else if let Some(suggestion) = SuggestUpgradeCompiler::new() {
-            err.subdiagnostic(suggestion);
+            err.subdiagnostic(sess.dcx(), suggestion);
         }
     }
 }
@@ -205,19 +205,19 @@ pub struct ParseSess {
     /// Places where identifiers that contain invalid Unicode codepoints but that look like they
     /// should be. Useful to avoid bad tokenization when encountering emoji. We group them to
     /// provide a single error per unique incorrect identifier.
-    pub bad_unicode_identifiers: Lock<FxHashMap<Symbol, Vec<Span>>>,
+    pub bad_unicode_identifiers: Lock<FxIndexMap<Symbol, Vec<Span>>>,
     source_map: Lrc<SourceMap>,
     pub buffered_lints: Lock<Vec<BufferedEarlyLint>>,
     /// Contains the spans of block expressions that could have been incomplete based on the
     /// operation token that followed it, but that the parser cannot identify without further
     /// analysis.
-    pub ambiguous_block_expr_parse: Lock<FxHashMap<Span, Span>>,
+    pub ambiguous_block_expr_parse: Lock<FxIndexMap<Span, Span>>,
     pub gated_spans: GatedSpans,
     pub symbol_gallery: SymbolGallery,
     /// Environment variables accessed during the build and their values when they exist.
-    pub env_depinfo: Lock<FxHashSet<(Symbol, Option<Symbol>)>>,
+    pub env_depinfo: Lock<FxIndexSet<(Symbol, Option<Symbol>)>>,
     /// File paths accessed during the build.
-    pub file_depinfo: Lock<FxHashSet<Symbol>>,
+    pub file_depinfo: Lock<FxIndexSet<Symbol>>,
     /// Whether cfg(version) should treat the current release as incomplete
     pub assume_incomplete_release: bool,
     /// Spans passed to `proc_macro::quote_span`. Each span has a numerical
@@ -247,7 +247,7 @@ impl ParseSess {
             bad_unicode_identifiers: Lock::new(Default::default()),
             source_map,
             buffered_lints: Lock::new(vec![]),
-            ambiguous_block_expr_parse: Lock::new(FxHashMap::default()),
+            ambiguous_block_expr_parse: Lock::new(Default::default()),
             gated_spans: GatedSpans::default(),
             symbol_gallery: SymbolGallery::default(),
             env_depinfo: Default::default(),

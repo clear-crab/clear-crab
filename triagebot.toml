@@ -480,12 +480,16 @@ cc = ["@lcnr", "@compiler-errors"]
 message = "Some changes occurred in diagnostic error codes"
 cc = ["@GuillaumeGomez"]
 
+[mentions."compiler/rustc_mir_build/src/build/matches"]
+message = "Some changes occurred in match lowering"
+cc = ["@Nadrieril"]
+
 [mentions."compiler/rustc_mir_build/src/thir/pattern"]
-message = "Some changes might have occurred in exhaustiveness checking"
+message = "Some changes occurred in match checking"
 cc = ["@Nadrieril"]
 
 [mentions."compiler/rustc_pattern_analysis"]
-message = "Some changes might have occurred in exhaustiveness checking"
+message = "Some changes occurred in exhaustiveness checking"
 cc = ["@Nadrieril"]
 
 [mentions."library/core/src/intrinsics/simd.rs"]
@@ -651,6 +655,7 @@ compiler-team = [
     "@petrochenkov",
     "@davidtwco",
     "@estebank",
+    "@lcnr",
     "@oli-obk",
     "@pnkfelix",
     "@wesleywiser",
@@ -658,6 +663,7 @@ compiler-team = [
 ]
 compiler-team-contributors = [
     "@TaKO8Ki",
+    "@Nadrieril",
     "@nnethercote",
     "@fmease",
 ]
@@ -667,7 +673,6 @@ compiler = [
 ]
 libs = [
     "@cuviper",
-    "@joshtriplett",
     "@Mark-Simulacrum",
 ]
 bootstrap = [
@@ -681,7 +686,6 @@ infra-ci = [
     "@Kobzol",
 ]
 rustdoc = [
-    "@jsha",
     "@GuillaumeGomez",
     "@notriddle",
     "@fmease",
@@ -811,7 +815,7 @@ project-stable-mir = [
 "/library/panic_abort" =                                 ["libs"]
 "/library/panic_unwind" =                                ["libs"]
 "/library/proc_macro" =                                  ["@petrochenkov"]
-"/library/std" =                                         ["libs"]
+"/library/std" =                                         ["libs", "@ChrisDenton"]
 "/library/std/src/sys/pal/windows" =                     ["@ChrisDenton"]
 "/library/stdarch" =                                     ["libs"]
 "/library/test" =                                        ["libs"]
@@ -833,7 +837,7 @@ project-stable-mir = [
 "/src/rustdoc-json-types" =                              ["rustdoc"]
 "/src/stage0.json" =                                     ["bootstrap"]
 "/tests/ui" =                                            ["compiler"]
-"/src/tools/cargo" =                                     ["@ehuss", "@joshtriplett"]
+"/src/tools/cargo" =                                     ["@ehuss"]
 "/src/tools/compiletest" =                               ["bootstrap", "@wesleywiser", "@oli-obk", "@compiler-errors"]
 "/src/tools/linkchecker" =                               ["@ehuss"]
 "/src/tools/rust-installer" =                            ["bootstrap"]

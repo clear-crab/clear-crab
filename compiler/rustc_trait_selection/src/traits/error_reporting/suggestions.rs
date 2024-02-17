@@ -106,279 +106,6 @@ impl<'tcx, 'a> CoroutineData<'tcx, 'a> {
     }
 }
 
-// This trait is public to expose the diagnostics methods to clippy.
-pub trait TypeErrCtxtExt<'tcx> {
-    fn suggest_restricting_param_bound(
-        &self,
-        err: &mut Diagnostic,
-        trait_pred: ty::PolyTraitPredicate<'tcx>,
-        associated_item: Option<(&'static str, Ty<'tcx>)>,
-        body_id: LocalDefId,
-    );
-
-    fn suggest_dereferences(
-        &self,
-        obligation: &PredicateObligation<'tcx>,
-        err: &mut Diagnostic,
-        trait_pred: ty::PolyTraitPredicate<'tcx>,
-    ) -> bool;
-
-    fn get_closure_name(
-        &self,
-        def_id: DefId,
-        err: &mut Diagnostic,
-        msg: Cow<'static, str>,
-    ) -> Option<Symbol>;
-
-    fn suggest_fn_call(
-        &self,
-        obligation: &PredicateObligation<'tcx>,
-        err: &mut Diagnostic,
-        trait_pred: ty::PolyTraitPredicate<'tcx>,
-    ) -> bool;
-
-    fn check_for_binding_assigned_block_without_tail_expression(
-        &self,
-        obligation: &PredicateObligation<'tcx>,
-        err: &mut Diagnostic,
-        trait_pred: ty::PolyTraitPredicate<'tcx>,
-    );
-
-    fn suggest_add_clone_to_arg(
-        &self,
-        obligation: &PredicateObligation<'tcx>,
-        err: &mut Diagnostic,
-        trait_pred: ty::PolyTraitPredicate<'tcx>,
-    ) -> bool;
-
-    fn extract_callable_info(
-        &self,
-        body_id: LocalDefId,
-        param_env: ty::ParamEnv<'tcx>,
-        found: Ty<'tcx>,
-    ) -> Option<(DefIdOrName, Ty<'tcx>, Vec<Ty<'tcx>>)>;
-
-    fn suggest_add_reference_to_arg(
-        &self,
-        obligation: &PredicateObligation<'tcx>,
-        err: &mut Diagnostic,
-        trait_pred: ty::PolyTraitPredicate<'tcx>,
-        has_custom_message: bool,
-    ) -> bool;
-
-    fn suggest_borrowing_for_object_cast(
-        &self,
-        err: &mut Diagnostic,
-        obligation: &PredicateObligation<'tcx>,
-        self_ty: Ty<'tcx>,
-        object_ty: Ty<'tcx>,
-    );
-
-    fn suggest_remove_reference(
-        &self,
-        obligation: &PredicateObligation<'tcx>,
-        err: &mut Diagnostic,
-        trait_pred: ty::PolyTraitPredicate<'tcx>,
-    ) -> bool;
-
-    fn suggest_remove_await(&self, obligation: &PredicateObligation<'tcx>, err: &mut Diagnostic);
-
-    fn suggest_change_mut(
-        &self,
-        obligation: &PredicateObligation<'tcx>,
-        err: &mut Diagnostic,
-        trait_pred: ty::PolyTraitPredicate<'tcx>,
-    );
-
-    fn suggest_semicolon_removal(
-        &self,
-        obligation: &PredicateObligation<'tcx>,
-        err: &mut Diagnostic,
-        span: Span,
-        trait_pred: ty::PolyTraitPredicate<'tcx>,
-    ) -> bool;
-
-    fn return_type_span(&self, obligation: &PredicateObligation<'tcx>) -> Option<Span>;
-
-    fn suggest_impl_trait(
-        &self,
-        err: &mut Diagnostic,
-        obligation: &PredicateObligation<'tcx>,
-        trait_pred: ty::PolyTraitPredicate<'tcx>,
-    ) -> bool;
-
-    fn point_at_returns_when_relevant(
-        &self,
-        err: &mut DiagnosticBuilder<'tcx>,
-        obligation: &PredicateObligation<'tcx>,
-    );
-
-    fn report_closure_arg_mismatch(
-        &self,
-        span: Span,
-        found_span: Option<Span>,
-        found: ty::PolyTraitRef<'tcx>,
-        expected: ty::PolyTraitRef<'tcx>,
-        cause: &ObligationCauseCode<'tcx>,
-        found_node: Option<Node<'_>>,
-        param_env: ty::ParamEnv<'tcx>,
-    ) -> DiagnosticBuilder<'tcx>;
-
-    fn note_conflicting_fn_args(
-        &self,
-        err: &mut Diagnostic,
-        cause: &ObligationCauseCode<'tcx>,
-        expected: Ty<'tcx>,
-        found: Ty<'tcx>,
-        param_env: ty::ParamEnv<'tcx>,
-    );
-
-    fn note_conflicting_closure_bounds(
-        &self,
-        cause: &ObligationCauseCode<'tcx>,
-        err: &mut DiagnosticBuilder<'tcx>,
-    );
-
-    fn suggest_fully_qualified_path(
-        &self,
-        err: &mut Diagnostic,
-        item_def_id: DefId,
-        span: Span,
-        trait_ref: DefId,
-    );
-
-    fn maybe_note_obligation_cause_for_async_await(
-        &self,
-        err: &mut Diagnostic,
-        obligation: &PredicateObligation<'tcx>,
-    ) -> bool;
-
-    fn note_obligation_cause_for_async_await(
-        &self,
-        err: &mut Diagnostic,
-        interior_or_upvar_span: CoroutineInteriorOrUpvar,
-        is_async: bool,
-        outer_coroutine: Option<DefId>,
-        trait_pred: ty::TraitPredicate<'tcx>,
-        target_ty: Ty<'tcx>,
-        obligation: &PredicateObligation<'tcx>,
-        next_code: Option<&ObligationCauseCode<'tcx>>,
-    );
-
-    fn note_obligation_cause_code<T>(
-        &self,
-        body_id: LocalDefId,
-        err: &mut Diagnostic,
-        predicate: T,
-        param_env: ty::ParamEnv<'tcx>,
-        cause_code: &ObligationCauseCode<'tcx>,
-        obligated_types: &mut Vec<Ty<'tcx>>,
-        seen_requirements: &mut FxHashSet<DefId>,
-    ) where
-        T: ToPredicate<'tcx>;
-
-    /// Suggest to await before try: future? => future.await?
-    fn suggest_await_before_try(
-        &self,
-        err: &mut Diagnostic,
-        obligation: &PredicateObligation<'tcx>,
-        trait_pred: ty::PolyTraitPredicate<'tcx>,
-        span: Span,
-    );
-
-    fn suggest_floating_point_literal(
-        &self,
-        obligation: &PredicateObligation<'tcx>,
-        err: &mut Diagnostic,
-        trait_ref: &ty::PolyTraitRef<'tcx>,
-    );
-
-    fn suggest_derive(
-        &self,
-        obligation: &PredicateObligation<'tcx>,
-        err: &mut Diagnostic,
-        trait_pred: ty::PolyTraitPredicate<'tcx>,
-    );
-
-    fn suggest_dereferencing_index(
-        &self,
-        obligation: &PredicateObligation<'tcx>,
-        err: &mut Diagnostic,
-        trait_pred: ty::PolyTraitPredicate<'tcx>,
-    );
-
-    fn suggest_option_method_if_applicable(
-        &self,
-        failed_pred: ty::Predicate<'tcx>,
-        param_env: ty::ParamEnv<'tcx>,
-        err: &mut Diagnostic,
-        expr: &hir::Expr<'_>,
-    );
-
-    fn note_function_argument_obligation(
-        &self,
-        body_id: LocalDefId,
-        err: &mut Diagnostic,
-        arg_hir_id: HirId,
-        parent_code: &ObligationCauseCode<'tcx>,
-        param_env: ty::ParamEnv<'tcx>,
-        predicate: ty::Predicate<'tcx>,
-        call_hir_id: HirId,
-    );
-
-    fn look_for_iterator_item_mistakes(
-        &self,
-        assocs_in_this_method: &[Option<(Span, (DefId, Ty<'tcx>))>],
-        typeck_results: &TypeckResults<'tcx>,
-        type_diffs: &[TypeError<'tcx>],
-        param_env: ty::ParamEnv<'tcx>,
-        path_segment: &hir::PathSegment<'_>,
-        args: &[hir::Expr<'_>],
-        err: &mut Diagnostic,
-    );
-
-    fn point_at_chain(
-        &self,
-        expr: &hir::Expr<'_>,
-        typeck_results: &TypeckResults<'tcx>,
-        type_diffs: Vec<TypeError<'tcx>>,
-        param_env: ty::ParamEnv<'tcx>,
-        err: &mut Diagnostic,
-    );
-
-    fn probe_assoc_types_at_expr(
-        &self,
-        type_diffs: &[TypeError<'tcx>],
-        span: Span,
-        prev_ty: Ty<'tcx>,
-        body_id: hir::HirId,
-        param_env: ty::ParamEnv<'tcx>,
-    ) -> Vec<Option<(Span, (DefId, Ty<'tcx>))>>;
-
-    fn suggest_convert_to_slice(
-        &self,
-        err: &mut Diagnostic,
-        obligation: &PredicateObligation<'tcx>,
-        trait_ref: ty::PolyTraitRef<'tcx>,
-        candidate_impls: &[ImplCandidate<'tcx>],
-        span: Span,
-    );
-
-    fn explain_hrtb_projection(
-        &self,
-        diag: &mut Diagnostic,
-        pred: ty::PolyTraitPredicate<'tcx>,
-        param_env: ty::ParamEnv<'tcx>,
-        cause: &ObligationCause<'tcx>,
-    );
-
-    fn suggest_desugaring_async_fn_in_trait(
-        &self,
-        err: &mut Diagnostic,
-        trait_ref: ty::PolyTraitRef<'tcx>,
-    );
-}
-
 fn predicate_constraint(generics: &hir::Generics<'_>, pred: ty::Predicate<'_>) -> (Span, String) {
     (
         generics.tail_span_for_predicate_suggestion(),
@@ -509,7 +236,8 @@ pub fn suggest_restriction<'tcx>(
     }
 }
 
-impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
+#[extension(pub trait TypeErrCtxtExt<'tcx>)]
+impl<'tcx> TypeErrCtxt<'_, 'tcx> {
     fn suggest_restricting_param_bound(
         &self,
         err: &mut Diagnostic,
@@ -635,7 +363,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                 | hir::Node::ImplItem(hir::ImplItem { generics, .. })
                     if param_ty =>
                 {
-                    // We skip the 0'th subst (self) because we do not want
+                    // We skip the 0'th arg (self) because we do not want
                     // to consider the predicate as not suggestible if the
                     // self type is an arg position `impl Trait` -- instead,
                     // we handle that by adding ` + Bound` below.
@@ -1032,15 +760,14 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             }
         };
 
-        let hir = self.tcx.hir();
         let hir_id = self.tcx.local_def_id_to_hir_id(def_id.as_local()?);
-        match hir.find_parent(hir_id) {
-            Some(hir::Node::Stmt(hir::Stmt { kind: hir::StmtKind::Local(local), .. })) => {
+        match self.tcx.parent_hir_node(hir_id) {
+            hir::Node::Stmt(hir::Stmt { kind: hir::StmtKind::Local(local), .. }) => {
                 get_name(err, &local.pat.kind)
             }
             // Different to previous arm because one is `&hir::Local` and the other
             // is `P<hir::Local>`.
-            Some(hir::Node::Local(local)) => get_name(err, &local.pat.kind),
+            hir::Node::Local(local) => get_name(err, &local.pat.kind),
             _ => None,
         }
     }
@@ -1202,8 +929,8 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
         let hir::Node::Pat(pat) = self.tcx.hir_node(hir_id) else {
             return;
         };
-        let Some(hir::Node::Local(hir::Local { ty: None, init: Some(init), .. })) =
-            self.tcx.hir().find_parent(pat.hir_id)
+        let hir::Node::Local(hir::Local { ty: None, init: Some(init), .. }) =
+            self.tcx.parent_hir_node(pat.hir_id)
         else {
             return;
         };
@@ -1790,7 +1517,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             if let hir::ExprKind::Path(hir::QPath::Resolved(None, path)) = expr.kind
                 && let Res::Local(hir_id) = path.res
                 && let hir::Node::Pat(binding) = self.tcx.hir_node(hir_id)
-                && let Some(hir::Node::Local(local)) = self.tcx.hir().find_parent(binding.hir_id)
+                && let hir::Node::Local(local) = self.tcx.parent_hir_node(binding.hir_id)
                 && let None = local.ty
                 && let Some(binding_expr) = local.init
             {
@@ -2344,7 +2071,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
         err: &mut DiagnosticBuilder<'tcx>,
     ) {
         // First, look for an `ExprBindingObligation`, which means we can get
-        // the unsubstituted predicate list of the called function. And check
+        // the uninstantiated predicate list of the called function. And check
         // that the predicate that we failed to satisfy is a `Fn`-like trait.
         if let ObligationCauseCode::ExprBindingObligation(def_id, _, _, idx) = cause
             && let predicates = self.tcx.predicates_of(def_id).instantiate_identity(self.tcx)
@@ -3042,7 +2769,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                             this = "the implicit `Sized` requirement on this type parameter";
                         }
                         if let Some(hir::Node::TraitItem(hir::TraitItem {
-                            ident,
+                            generics,
                             kind: hir::TraitItemKind::Type(bounds, None),
                             ..
                         })) = tcx.hir().get_if_local(item_def_id)
@@ -3054,7 +2781,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                             let (span, separator) = if let [.., last] = bounds {
                                 (last.span().shrink_to_hi(), " +")
                             } else {
-                                (ident.span.shrink_to_hi(), ":")
+                                (generics.span.shrink_to_hi(), ":")
                             };
                             err.span_suggestion_verbose(
                                 span,
@@ -3188,8 +2915,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                 }
             }
             ObligationCauseCode::VariableType(hir_id) => {
-                let parent_node = tcx.hir().parent_id(hir_id);
-                match tcx.hir_node(parent_node) {
+                match tcx.parent_hir_node(hir_id) {
                     Node::Local(hir::Local { ty: Some(ty), .. }) => {
                         err.span_suggestion_verbose(
                             ty.span.shrink_to_lo(),
@@ -3237,8 +2963,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
                                     types always have a known size";
                 if let Some(hir_id) = hir_id
                     && let hir::Node::Param(param) = self.tcx.hir_node(hir_id)
-                    && let Some(item) = self.tcx.hir().find_parent(hir_id)
-                    && let Some(decl) = item.fn_decl()
+                    && let Some(decl) = self.tcx.parent_hir_node(hir_id).fn_decl()
                     && let Some(t) = decl.inputs.iter().find(|t| param.ty_span.contains(t.span))
                 {
                     // We use `contains` because the type might be surrounded by parentheses,
@@ -4079,8 +3804,7 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             if let hir::ExprKind::Path(hir::QPath::Resolved(None, path)) = expr.kind
                 && let hir::Path { res: Res::Local(hir_id), .. } = path
                 && let hir::Node::Pat(binding) = self.tcx.hir_node(*hir_id)
-                && let parent_hir_id = self.tcx.hir().parent_id(binding.hir_id)
-                && let hir::Node::Local(local) = self.tcx.hir_node(parent_hir_id)
+                && let hir::Node::Local(local) = self.tcx.parent_hir_node(binding.hir_id)
                 && let Some(binding_expr) = local.init
             {
                 // If the expression we're calling on is a binding, we want to point at the
@@ -4338,8 +4062,8 @@ impl<'tcx> TypeErrCtxtExt<'tcx> for TypeErrCtxt<'_, 'tcx> {
             if let hir::ExprKind::Path(hir::QPath::Resolved(None, path)) = expr.kind
                 && let hir::Path { res: Res::Local(hir_id), .. } = path
                 && let hir::Node::Pat(binding) = self.tcx.hir_node(*hir_id)
-                && let Some(parent) = self.tcx.hir().find_parent(binding.hir_id)
             {
+                let parent = self.tcx.parent_hir_node(binding.hir_id);
                 // We've reached the root of the method call chain...
                 if let hir::Node::Local(local) = parent
                     && let Some(binding_expr) = local.init
@@ -4834,11 +4558,14 @@ fn hint_missing_borrow<'tcx>(
     }
 
     if !to_borrow.is_empty() {
-        err.subdiagnostic(errors::AdjustSignatureBorrow::Borrow { to_borrow });
+        err.subdiagnostic(infcx.dcx(), errors::AdjustSignatureBorrow::Borrow { to_borrow });
     }
 
     if !remove_borrow.is_empty() {
-        err.subdiagnostic(errors::AdjustSignatureBorrow::RemoveBorrow { remove_borrow });
+        err.subdiagnostic(
+            infcx.dcx(),
+            errors::AdjustSignatureBorrow::RemoveBorrow { remove_borrow },
+        );
     }
 }
 
