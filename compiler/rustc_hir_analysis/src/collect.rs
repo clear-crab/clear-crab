@@ -520,7 +520,7 @@ fn get_new_lifetime_name<'tcx>(
     generics: &hir::Generics<'tcx>,
 ) -> String {
     let existing_lifetimes = tcx
-        .collect_referenced_late_bound_regions(&poly_trait_ref)
+        .collect_referenced_late_bound_regions(poly_trait_ref)
         .into_iter()
         .filter_map(|lt| {
             if let ty::BoundRegionKind::BrNamed(_, name) = lt {
@@ -943,7 +943,15 @@ impl<'tcx> FieldUniquenessCheckContext<'tcx> {
                 }
             }
             hir::TyKind::Path(hir::QPath::Resolved(_, hir::Path { res, .. })) => {
-                self.check_field_in_nested_adt(self.tcx.adt_def(res.def_id()), field.span);
+                // If this is a direct path to an ADT, we can check it
+                // If this is a type alias or non-ADT, `check_unnamed_fields` should verify it
+                if let Some(def_id) = res.opt_def_id()
+                    && let Some(local) = def_id.as_local()
+                    && let Node::Item(item) = self.tcx.hir_node_by_def_id(local)
+                    && item.is_adt()
+                {
+                    self.check_field_in_nested_adt(self.tcx.adt_def(def_id), field.span);
+                }
             }
             // Abort due to errors (there must be an error if an unnamed field
             //  has any type kind other than an anonymous adt or a named adt)
@@ -1017,9 +1025,17 @@ fn adt_def(tcx: TyCtxt<'_>, def_id: LocalDefId) -> ty::AdtDef<'_> {
 
     let is_anonymous = item.ident.name == kw::Empty;
     let repr = if is_anonymous {
-        tcx.adt_def(tcx.local_parent(def_id)).repr()
+        let parent = tcx.local_parent(def_id);
+        if let Node::Item(item) = tcx.hir_node_by_def_id(parent)
+            && item.is_struct_or_union()
+        {
+            tcx.adt_def(parent).repr()
+        } else {
+            tcx.dcx().span_delayed_bug(item.span, "anonymous field inside non struct/union");
+            ty::ReprOptions::default()
+        }
     } else {
-        tcx.repr_options_of_def(def_id.to_def_id())
+        tcx.repr_options_of_def(def_id)
     };
     let (kind, variants) = match &item.kind {
         ItemKind::Enum(def, _) => {
@@ -1622,7 +1638,7 @@ fn early_bound_lifetimes_from_generics<'a, 'tcx: 'a>(
 #[instrument(level = "debug", skip(tcx))]
 fn predicates_defined_on(tcx: TyCtxt<'_>, def_id: DefId) -> ty::GenericPredicates<'_> {
     let mut result = tcx.explicit_predicates_of(def_id);
-    debug!("predicates_defined_on: explicit_predicates_of({:?}) = {:?}", def_id, result,);
+    debug!("predicates_defined_on: explicit_predicates_of({:?}) = {:?}", def_id, result);
     let inferred_outlives = tcx.inferred_outlives_of(def_id);
     if !inferred_outlives.is_empty() {
         debug!(

@@ -89,8 +89,7 @@ declare_lint_pass! {
         SINGLE_USE_LIFETIMES,
         SOFT_UNSTABLE,
         STABLE_FEATURES,
-        STATIC_MUT_REF,
-        SUSPICIOUS_AUTO_TRAIT_IMPLS,
+        STATIC_MUT_REFS,
         TEST_UNSTABLE_LINT,
         TEXT_DIRECTION_CODEPOINT_IN_COMMENT,
         TRIVIAL_CASTS,
@@ -1503,7 +1502,7 @@ declare_lint! {
     Warn,
     "distinct impls distinguished only by the leak-check code",
     @future_incompatible = FutureIncompatibleInfo {
-        reason: FutureIncompatibilityReason::FutureReleaseErrorDontReportInDeps,
+        reason: FutureIncompatibilityReason::Custom("the behavior may change in a future release"),
         reference: "issue #56105 <https://github.com/rust-lang/rust/issues/56105>",
     };
 }
@@ -1769,7 +1768,7 @@ declare_lint! {
 }
 
 declare_lint! {
-    /// The `static_mut_ref` lint checks for shared or mutable references
+    /// The `static_mut_refs` lint checks for shared or mutable references
     /// of mutable static inside `unsafe` blocks and `unsafe` functions.
     ///
     /// ### Example
@@ -1807,9 +1806,9 @@ declare_lint! {
     /// Shared or mutable references of mutable static are almost always a mistake and
     /// can lead to undefined behavior and various other problems in your code.
     ///
-    /// This lint is "warn" by default on editions up to 2021, from 2024 there is
+    /// This lint is "warn" by default on editions up to 2021, in 2024 there is
     /// a hard error instead.
-    pub STATIC_MUT_REF,
+    pub STATIC_MUT_REFS,
     Warn,
     "shared references or mutable references of mutable static is discouraged",
     @future_incompatible = FutureIncompatibleInfo {
@@ -4030,40 +4029,6 @@ declare_lint! {
     pub DUPLICATE_MACRO_ATTRIBUTES,
     Warn,
     "duplicated attribute"
-}
-
-declare_lint! {
-    /// The `suspicious_auto_trait_impls` lint checks for potentially incorrect
-    /// implementations of auto traits.
-    ///
-    /// ### Example
-    ///
-    /// ```rust
-    /// struct Foo<T>(T);
-    ///
-    /// unsafe impl<T> Send for Foo<*const T> {}
-    /// ```
-    ///
-    /// {{produces}}
-    ///
-    /// ### Explanation
-    ///
-    /// A type can implement auto traits, e.g. `Send`, `Sync` and `Unpin`,
-    /// in two different ways: either by writing an explicit impl or if
-    /// all fields of the type implement that auto trait.
-    ///
-    /// The compiler disables the automatic implementation if an explicit one
-    /// exists for given type constructor. The exact rules governing this
-    /// were previously unsound, quite subtle, and have been recently modified.
-    /// This change caused the automatic implementation to be disabled in more
-    /// cases, potentially breaking some code.
-    pub SUSPICIOUS_AUTO_TRAIT_IMPLS,
-    Warn,
-    "the rules governing auto traits have recently changed resulting in potential breakage",
-    @future_incompatible = FutureIncompatibleInfo {
-        reason: FutureIncompatibilityReason::FutureReleaseSemanticsChange,
-        reference: "issue #93367 <https://github.com/rust-lang/rust/issues/93367>",
-    };
 }
 
 declare_lint! {
