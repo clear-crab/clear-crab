@@ -12,8 +12,7 @@ use rustc_data_structures::fx::{FxIndexMap, FxIndexSet};
 use rustc_data_structures::sorted_map::SortedMap;
 use rustc_data_structures::unord::UnordSet;
 use rustc_errors::{
-    codes::*, pluralize, struct_span_code_err, Applicability, DiagnosticBuilder, MultiSpan,
-    StashKey,
+    codes::*, pluralize, struct_span_code_err, Applicability, Diag, MultiSpan, StashKey,
 };
 use rustc_hir as hir;
 use rustc_hir::def::DefKind;
@@ -208,7 +207,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         args: Option<&'tcx [hir::Expr<'tcx>]>,
         expected: Expectation<'tcx>,
         trait_missing_method: bool,
-    ) -> Option<DiagnosticBuilder<'_>> {
+    ) -> Option<Diag<'_>> {
         // Avoid suggestions when we don't know what's going on.
         if rcvr_ty.references_error() {
             return None;
@@ -344,11 +343,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         None
     }
 
-    fn suggest_missing_writer(
-        &self,
-        rcvr_ty: Ty<'tcx>,
-        rcvr_expr: &hir::Expr<'tcx>,
-    ) -> DiagnosticBuilder<'_> {
+    fn suggest_missing_writer(&self, rcvr_ty: Ty<'tcx>, rcvr_expr: &hir::Expr<'tcx>) -> Diag<'_> {
         let mut file = None;
         let ty_str = self.tcx.short_ty_string(rcvr_ty, &mut file);
         let mut err = struct_span_code_err!(
@@ -370,9 +365,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         };
         if let Some(file) = file {
             err.note(format!("the full type name has been written to '{}'", file.display()));
-            err.note(format!(
-                "consider using `--verbose` to print the full type name to the console"
-            ));
+            err.note("consider using `--verbose` to print the full type name to the console");
         }
 
         err
@@ -389,7 +382,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         no_match_data: &mut NoMatchData<'tcx>,
         expected: Expectation<'tcx>,
         trait_missing_method: bool,
-    ) -> Option<DiagnosticBuilder<'_>> {
+    ) -> Option<Diag<'_>> {
         let mode = no_match_data.mode;
         let tcx = self.tcx;
         let rcvr_ty = self.resolve_vars_if_possible(rcvr_ty);
@@ -497,9 +490,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         if let Some(file) = ty_file {
             err.note(format!("the full type name has been written to '{}'", file.display(),));
-            err.note(format!(
-                "consider using `--verbose` to print the full type name to the console"
-            ));
+            err.note("consider using `--verbose` to print the full type name to the console");
         }
         if rcvr_ty.references_error() {
             err.downgrade_to_delayed_bug();
@@ -1058,6 +1049,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     bound_list.into_iter().map(|(_, path)| path).collect::<Vec<_>>().join("\n");
                 let actual_prefix = rcvr_ty.prefix_string(self.tcx);
                 info!("unimplemented_traits.len() == {}", unimplemented_traits.len());
+                let mut long_ty_file = None;
                 let (primary_message, label) = if unimplemented_traits.len() == 1
                     && unimplemented_traits_only
                 {
@@ -1070,8 +1062,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                                 // Avoid crashing.
                                 return (None, None);
                             }
-                            let OnUnimplementedNote { message, label, .. } =
-                                self.err_ctxt().on_unimplemented_note(trait_ref, &obligation);
+                            let OnUnimplementedNote { message, label, .. } = self
+                                .err_ctxt()
+                                .on_unimplemented_note(trait_ref, &obligation, &mut long_ty_file);
                             (message, label)
                         })
                         .unwrap()
@@ -1085,6 +1078,15 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     )
                 });
                 err.primary_message(primary_message);
+                if let Some(file) = long_ty_file {
+                    err.note(format!(
+                        "the full name for the type has been written to '{}'",
+                        file.display(),
+                    ));
+                    err.note(
+                        "consider using `--verbose` to print the full type name to the console",
+                    );
+                }
                 if let Some(label) = label {
                     custom_span_label = true;
                     err.span_label(span, label);
@@ -1134,7 +1136,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             }
         }
 
-        let label_span_not_found = |err: &mut DiagnosticBuilder<'_>| {
+        let label_span_not_found = |err: &mut Diag<'_>| {
             if unsatisfied_predicates.is_empty() {
                 err.span_label(span, format!("{item_kind} not found in `{ty_str}`"));
                 let is_string_or_ref_str = match rcvr_ty.kind() {
@@ -1418,7 +1420,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
     fn find_likely_intended_associated_item(
         &self,
-        err: &mut DiagnosticBuilder<'_>,
+        err: &mut Diag<'_>,
         similar_candidate: ty::AssocItem,
         span: Span,
         args: Option<&'tcx [hir::Expr<'tcx>]>,
@@ -1496,7 +1498,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
     pub(crate) fn confusable_method_name(
         &self,
-        err: &mut DiagnosticBuilder<'_>,
+        err: &mut Diag<'_>,
         rcvr_ty: Ty<'tcx>,
         item_name: Ident,
         call_args: Option<Vec<Ty<'tcx>>>,
@@ -1563,7 +1565,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         self_source: SelfSource<'tcx>,
         args: Option<&'tcx [hir::Expr<'tcx>]>,
         span: Span,
-        err: &mut DiagnosticBuilder<'_>,
+        err: &mut Diag<'_>,
         sources: &mut Vec<CandidateSource>,
         sugg_span: Option<Span>,
     ) {
@@ -1709,7 +1711,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
     /// Look at all the associated functions without receivers in the type's inherent impls
     /// to look for builders that return `Self`, `Option<Self>` or `Result<Self, _>`.
-    fn find_builder_fn(&self, err: &mut DiagnosticBuilder<'_>, rcvr_ty: Ty<'tcx>) {
+    fn find_builder_fn(&self, err: &mut Diag<'_>, rcvr_ty: Ty<'tcx>) {
         let ty::Adt(adt_def, _) = rcvr_ty.kind() else {
             return;
         };
@@ -1794,7 +1796,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     /// doesn't take a `self` receiver.
     fn suggest_associated_call_syntax(
         &self,
-        err: &mut DiagnosticBuilder<'_>,
+        err: &mut Diag<'_>,
         static_candidates: &Vec<CandidateSource>,
         rcvr_ty: Ty<'tcx>,
         source: SelfSource<'tcx>,
@@ -1938,7 +1940,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         rcvr_ty: Ty<'tcx>,
         expr: &hir::Expr<'_>,
         item_name: Ident,
-        err: &mut DiagnosticBuilder<'_>,
+        err: &mut Diag<'_>,
     ) -> bool {
         let tcx = self.tcx;
         let field_receiver = self.autoderef(span, rcvr_ty).find_map(|(ty, _)| match ty.kind() {
@@ -2203,65 +2205,65 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let [seg1, seg2] = segs else {
             return;
         };
-        let Some(mut diag) =
-            self.dcx().steal_diagnostic(seg1.ident.span, StashKey::CallAssocMethod)
-        else {
-            return;
-        };
-
-        let map = self.infcx.tcx.hir();
-        let body_id = self.tcx.hir().body_owned_by(self.body_id);
-        let body = map.body(body_id);
-        struct LetVisitor<'a> {
-            result: Option<&'a hir::Expr<'a>>,
-            ident_name: Symbol,
-        }
-
-        // FIXME: This really should be taking scoping, etc into account.
-        impl<'v> Visitor<'v> for LetVisitor<'v> {
-            fn visit_stmt(&mut self, ex: &'v hir::Stmt<'v>) {
-                if let hir::StmtKind::Local(hir::Local { pat, init, .. }) = &ex.kind
-                    && let Binding(_, _, ident, ..) = pat.kind
-                    && ident.name == self.ident_name
-                {
-                    self.result = *init;
-                } else {
-                    hir::intravisit::walk_stmt(self, ex);
+        self.dcx().try_steal_modify_and_emit_err(
+            seg1.ident.span,
+            StashKey::CallAssocMethod,
+            |err| {
+                let map = self.infcx.tcx.hir();
+                let body_id = self.tcx.hir().body_owned_by(self.body_id);
+                let body = map.body(body_id);
+                struct LetVisitor<'a> {
+                    result: Option<&'a hir::Expr<'a>>,
+                    ident_name: Symbol,
                 }
-            }
-        }
 
-        let mut visitor = LetVisitor { result: None, ident_name: seg1.ident.name };
-        visitor.visit_body(body);
+                // FIXME: This really should be taking scoping, etc into account.
+                impl<'v> Visitor<'v> for LetVisitor<'v> {
+                    fn visit_stmt(&mut self, ex: &'v hir::Stmt<'v>) {
+                        if let hir::StmtKind::Local(hir::Local { pat, init, .. }) = &ex.kind
+                            && let Binding(_, _, ident, ..) = pat.kind
+                            && ident.name == self.ident_name
+                        {
+                            self.result = *init;
+                        } else {
+                            hir::intravisit::walk_stmt(self, ex);
+                        }
+                    }
+                }
 
-        if let Node::Expr(call_expr) = self.tcx.parent_hir_node(seg1.hir_id)
-            && let Some(expr) = visitor.result
-            && let Some(self_ty) = self.node_ty_opt(expr.hir_id)
-        {
-            let probe = self.lookup_probe_for_diagnostic(
-                seg2.ident,
-                self_ty,
-                call_expr,
-                ProbeScope::TraitsInScope,
-                None,
-            );
-            if probe.is_ok() {
-                let sm = self.infcx.tcx.sess.source_map();
-                diag.span_suggestion_verbose(
-                    sm.span_extend_while(seg1.ident.span.shrink_to_hi(), |c| c == ':').unwrap(),
-                    "you may have meant to call an instance method",
-                    ".",
-                    Applicability::MaybeIncorrect,
-                );
-            }
-        }
-        diag.emit();
+                let mut visitor = LetVisitor { result: None, ident_name: seg1.ident.name };
+                visitor.visit_body(body);
+
+                if let Node::Expr(call_expr) = self.tcx.parent_hir_node(seg1.hir_id)
+                    && let Some(expr) = visitor.result
+                    && let Some(self_ty) = self.node_ty_opt(expr.hir_id)
+                {
+                    let probe = self.lookup_probe_for_diagnostic(
+                        seg2.ident,
+                        self_ty,
+                        call_expr,
+                        ProbeScope::TraitsInScope,
+                        None,
+                    );
+                    if probe.is_ok() {
+                        let sm = self.infcx.tcx.sess.source_map();
+                        err.span_suggestion_verbose(
+                            sm.span_extend_while(seg1.ident.span.shrink_to_hi(), |c| c == ':')
+                                .unwrap(),
+                            "you may have meant to call an instance method",
+                            ".",
+                            Applicability::MaybeIncorrect,
+                        );
+                    }
+                }
+            },
+        );
     }
 
     /// Suggest calling a method on a field i.e. `a.field.bar()` instead of `a.bar()`
     fn suggest_calling_method_on_field(
         &self,
-        err: &mut DiagnosticBuilder<'_>,
+        err: &mut Diag<'_>,
         source: SelfSource<'tcx>,
         span: Span,
         actual: Ty<'tcx>,
@@ -2341,7 +2343,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
     fn suggest_unwrapping_inner_self(
         &self,
-        err: &mut DiagnosticBuilder<'_>,
+        err: &mut Diag<'_>,
         source: SelfSource<'tcx>,
         actual: Ty<'tcx>,
         item_name: Ident,
@@ -2530,7 +2532,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
     pub(crate) fn note_unmet_impls_on_type(
         &self,
-        err: &mut DiagnosticBuilder<'_>,
+        err: &mut Diag<'_>,
         errors: Vec<FulfillmentError<'tcx>>,
         suggest_derive: bool,
     ) {
@@ -2613,7 +2615,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
     fn note_predicate_source_and_get_derives(
         &self,
-        err: &mut DiagnosticBuilder<'_>,
+        err: &mut Diag<'_>,
         unsatisfied_predicates: &[(
             ty::Predicate<'tcx>,
             Option<ty::Predicate<'tcx>>,
@@ -2695,7 +2697,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
     pub(crate) fn suggest_derive(
         &self,
-        err: &mut DiagnosticBuilder<'_>,
+        err: &mut Diag<'_>,
         unsatisfied_predicates: &[(
             ty::Predicate<'tcx>,
             Option<ty::Predicate<'tcx>>,
@@ -2731,7 +2733,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
     fn note_derefed_ty_has_method(
         &self,
-        err: &mut DiagnosticBuilder<'_>,
+        err: &mut Diag<'_>,
         self_source: SelfSource<'tcx>,
         rcvr_ty: Ty<'tcx>,
         item_name: Ident,
@@ -2811,7 +2813,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
     fn suggest_await_before_method(
         &self,
-        err: &mut DiagnosticBuilder<'_>,
+        err: &mut Diag<'_>,
         item_name: Ident,
         ty: Ty<'tcx>,
         call: &hir::Expr<'_>,
@@ -2834,12 +2836,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         }
     }
 
-    fn suggest_use_candidates(
-        &self,
-        err: &mut DiagnosticBuilder<'_>,
-        msg: String,
-        candidates: Vec<DefId>,
-    ) {
+    fn suggest_use_candidates(&self, err: &mut Diag<'_>, msg: String, candidates: Vec<DefId>) {
         let parent_map = self.tcx.visible_parent_map(());
 
         // Separate out candidates that must be imported with a glob, because they are named `_`
@@ -2886,7 +2883,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
     fn suggest_valid_traits(
         &self,
-        err: &mut DiagnosticBuilder<'_>,
+        err: &mut Diag<'_>,
         item_name: Ident,
         valid_out_of_scope_traits: Vec<DefId>,
         explain: bool,
@@ -2935,7 +2932,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
     fn suggest_traits_to_import(
         &self,
-        err: &mut DiagnosticBuilder<'_>,
+        err: &mut Diag<'_>,
         span: Span,
         rcvr_ty: Ty<'tcx>,
         item_name: Ident,
@@ -3479,7 +3476,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     /// FIXME: currently not working for suggesting `map_or_else`, see #102408
     pub(crate) fn suggest_else_fn_with_closure(
         &self,
-        err: &mut DiagnosticBuilder<'_>,
+        err: &mut Diag<'_>,
         expr: &hir::Expr<'_>,
         found: Ty<'tcx>,
         expected: Ty<'tcx>,
@@ -3605,7 +3602,7 @@ pub fn all_traits(tcx: TyCtxt<'_>) -> Vec<TraitInfo> {
 
 fn print_disambiguation_help<'tcx>(
     tcx: TyCtxt<'tcx>,
-    err: &mut DiagnosticBuilder<'_>,
+    err: &mut Diag<'_>,
     source: SelfSource<'tcx>,
     args: Option<&'tcx [hir::Expr<'tcx>]>,
     trait_ref: ty::TraitRef<'tcx>,

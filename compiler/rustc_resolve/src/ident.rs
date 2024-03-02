@@ -1,4 +1,5 @@
 use rustc_ast::{self as ast, NodeId};
+use rustc_errors::ErrorGuaranteed;
 use rustc_hir::def::{DefKind, Namespace, NonMacroAttrKind, PartialRes, PerNS};
 use rustc_middle::bug;
 use rustc_middle::ty;
@@ -23,6 +24,18 @@ use Namespace::*;
 
 type Visibility = ty::Visibility<LocalDefId>;
 
+#[derive(Copy, Clone)]
+pub enum UsePrelude {
+    No,
+    Yes,
+}
+
+impl From<UsePrelude> for bool {
+    fn from(up: UsePrelude) -> bool {
+        matches!(up, UsePrelude::Yes)
+    }
+}
+
 impl<'a, 'tcx> Resolver<'a, 'tcx> {
     /// A generic scope visitor.
     /// Visits scopes in order to resolve some identifier in them or perform other actions.
@@ -32,12 +45,7 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
         scope_set: ScopeSet<'a>,
         parent_scope: &ParentScope<'a>,
         ctxt: SyntaxContext,
-        mut visitor: impl FnMut(
-            &mut Self,
-            Scope<'a>,
-            /*use_prelude*/ bool,
-            SyntaxContext,
-        ) -> Option<T>,
+        mut visitor: impl FnMut(&mut Self, Scope<'a>, UsePrelude, SyntaxContext) -> Option<T>,
     ) -> Option<T> {
         // General principles:
         // 1. Not controlled (user-defined) names should have higher priority than controlled names
@@ -133,6 +141,7 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
             };
 
             if visit {
+                let use_prelude = if use_prelude { UsePrelude::Yes } else { UsePrelude::No };
                 if let break_result @ Some(..) = visitor(self, scope, use_prelude, ctxt) {
                     return break_result;
                 }
@@ -579,7 +588,9 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
                                 None,
                                 ignore_binding,
                             ) {
-                                if use_prelude || this.is_builtin_macro(binding.res()) {
+                                if matches!(use_prelude, UsePrelude::Yes)
+                                    || this.is_builtin_macro(binding.res())
+                                {
                                     result = Ok((binding, Flags::MISC_FROM_PRELUDE));
                                 }
                             }
@@ -1056,7 +1067,6 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
         original_rib_ident_def: Ident,
         all_ribs: &[Rib<'a>],
     ) -> Res {
-        const CG_BUG_STR: &str = "min_const_generics resolve check didn't stop compilation";
         debug!("validate_res_from_ribs({:?})", res);
         let ribs = &all_ribs[rib_index + 1..];
 
@@ -1199,8 +1209,7 @@ impl<'a, 'tcx> Resolver<'a, 'tcx> {
                                                 }
                                             }
                                         };
-                                        self.report_error(span, error);
-                                        self.dcx().span_delayed_bug(span, CG_BUG_STR);
+                                        let _: ErrorGuaranteed = self.report_error(span, error);
                                     }
 
                                     return Res::Err;

@@ -93,8 +93,14 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     variable_source_info,
                     true,
                 ));
-                this.cfg.goto(lhs_success_block, variable_source_info, rhs_success_block);
-                rhs_success_block.unit()
+
+                // Make the LHS and RHS success arms converge to a common block.
+                // (We can't just make LHS goto RHS, because `rhs_success_block`
+                // might contain statements that we don't want on the LHS path.)
+                let success_block = this.cfg.start_new_block();
+                this.cfg.goto(lhs_success_block, variable_source_info, success_block);
+                this.cfg.goto(rhs_success_block, variable_source_info, success_block);
+                success_block.unit()
             }
             ExprKind::Unary { op: UnOp::Not, arg } => {
                 let local_scope = this.local_scope();
@@ -315,20 +321,14 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         // The set of places that we are creating fake borrows of. If there are
         // no match guards then we don't need any fake borrows, so don't track
         // them.
-        let mut fake_borrows = match_has_guard.then(FxIndexSet::default);
+        let fake_borrows = match_has_guard
+            .then(|| util::FakeBorrowCollector::collect_fake_borrows(self, candidates));
 
         let otherwise_block = self.cfg.start_new_block();
 
         // This will generate code to test scrutinee_place and
         // branch to the appropriate arm block
-        self.match_candidates(
-            match_start_span,
-            scrutinee_span,
-            block,
-            otherwise_block,
-            candidates,
-            &mut fake_borrows,
-        );
+        self.match_candidates(match_start_span, scrutinee_span, block, otherwise_block, candidates);
 
         // See the doc comment on `match_candidates` for why we may have an
         // otherwise block. Match checking will ensure this is actually
@@ -938,6 +938,40 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
     }
 }
 
+/// A pattern in a form suitable for generating code.
+#[derive(Debug, Clone)]
+struct FlatPat<'pat, 'tcx> {
+    /// [`Span`] of the original pattern.
+    span: Span,
+
+    /// To match the pattern, all of these must be satisfied...
+    // Invariant: all the `MatchPair`s are recursively simplified.
+    // Invariant: or-patterns must be sorted to the end.
+    match_pairs: Vec<MatchPair<'pat, 'tcx>>,
+
+    /// ...these bindings established...
+    bindings: Vec<Binding<'tcx>>,
+
+    /// ...and these types asserted.
+    ascriptions: Vec<Ascription<'tcx>>,
+}
+
+impl<'tcx, 'pat> FlatPat<'pat, 'tcx> {
+    fn new(
+        place: PlaceBuilder<'tcx>,
+        pattern: &'pat Pat<'tcx>,
+        cx: &mut Builder<'_, 'tcx>,
+    ) -> Self {
+        let mut match_pairs = vec![MatchPair::new(place, pattern, cx)];
+        let mut bindings = Vec::new();
+        let mut ascriptions = Vec::new();
+
+        cx.simplify_match_pairs(&mut match_pairs, &mut bindings, &mut ascriptions);
+
+        FlatPat { span: pattern.span, match_pairs, bindings, ascriptions }
+    }
+}
+
 #[derive(Debug)]
 struct Candidate<'pat, 'tcx> {
     /// [`Span`] of the original pattern that gave rise to this candidate.
@@ -952,11 +986,11 @@ struct Candidate<'pat, 'tcx> {
     match_pairs: Vec<MatchPair<'pat, 'tcx>>,
 
     /// ...these bindings established...
-    // Invariant: not mutated outside `Candidate::new()`.
+    // Invariant: not mutated after candidate creation.
     bindings: Vec<Binding<'tcx>>,
 
     /// ...and these types asserted...
-    // Invariant: not mutated outside `Candidate::new()`.
+    // Invariant: not mutated after candidate creation.
     ascriptions: Vec<Ascription<'tcx>>,
 
     /// ...and if this is non-empty, one of these subcandidates also has to match...
@@ -978,25 +1012,21 @@ impl<'tcx, 'pat> Candidate<'pat, 'tcx> {
         has_guard: bool,
         cx: &mut Builder<'_, 'tcx>,
     ) -> Self {
-        let mut candidate = Candidate {
-            span: pattern.span,
+        Self::from_flat_pat(FlatPat::new(place, pattern, cx), has_guard)
+    }
+
+    fn from_flat_pat(flat_pat: FlatPat<'pat, 'tcx>, has_guard: bool) -> Self {
+        Candidate {
+            span: flat_pat.span,
+            match_pairs: flat_pat.match_pairs,
+            bindings: flat_pat.bindings,
+            ascriptions: flat_pat.ascriptions,
             has_guard,
-            match_pairs: vec![MatchPair::new(place, pattern, cx)],
-            bindings: Vec::new(),
-            ascriptions: Vec::new(),
             subcandidates: Vec::new(),
             otherwise_block: None,
             pre_binding_block: None,
             next_candidate_pre_binding_block: None,
-        };
-
-        cx.simplify_match_pairs(
-            &mut candidate.match_pairs,
-            &mut candidate.bindings,
-            &mut candidate.ascriptions,
-        );
-
-        candidate
+        }
     }
 
     /// Visit the leaf candidates (those with no subcandidates) contained in
@@ -1059,7 +1089,7 @@ enum TestCase<'pat, 'tcx> {
     Constant { value: mir::Const<'tcx> },
     Range(&'pat PatRange<'tcx>),
     Slice { len: usize, variable_length: bool },
-    Or,
+    Or { pats: Box<[FlatPat<'pat, 'tcx>]> },
 }
 
 #[derive(Debug, Clone)]
@@ -1091,20 +1121,17 @@ enum TestKind<'tcx> {
         variants: BitSet<VariantIdx>,
     },
 
-    /// Test what value an integer, `bool`, or `char` has.
+    /// Test what value an integer or `char` has.
     SwitchInt {
-        /// The type of the value that we're testing.
-        switch_ty: Ty<'tcx>,
         /// The (ordered) set of values that we test for.
         ///
-        /// For integers and `char`s we create a branch to each of the values in
-        /// `options`, as well as an "otherwise" branch for all other values, even
-        /// in the (rare) case that `options` is exhaustive.
-        ///
-        /// For `bool` we always generate two edges, one for `true` and one for
-        /// `false`.
+        /// We create a branch to each of the values in `options`, as well as an "otherwise" branch
+        /// for all other values, even in the (rare) case that `options` is exhaustive.
         options: FxIndexMap<Const<'tcx>, u128>,
     },
+
+    /// Test what value a `bool` has.
+    If,
 
     /// Test for equality with value, possibly after an unsizing coercion to
     /// `ty`,
@@ -1150,40 +1177,62 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
     /// the value, we will set and generate a branch to the appropriate
     /// pre-binding block.
     ///
-    /// If we find that *NONE* of the candidates apply, we branch to the
-    /// `otherwise_block`, setting it to `Some` if required. In principle, this
-    /// means that the input list was not exhaustive, though at present we
-    /// sometimes are not smart enough to recognize all exhaustive inputs.
+    /// If we find that *NONE* of the candidates apply, we branch to `otherwise_block`.
     ///
     /// It might be surprising that the input can be non-exhaustive.
     /// Indeed, initially, it is not, because all matches are
     /// exhaustive in Rust. But during processing we sometimes divide
     /// up the list of candidates and recurse with a non-exhaustive
-    /// list. This is important to keep the size of the generated code
-    /// under control. See [`Builder::test_candidates`] for more details.
+    /// list. This is how our lowering approach (called "backtracking
+    /// automaton" in the literature) works.
+    /// See [`Builder::test_candidates`] for more details.
     ///
     /// If `fake_borrows` is `Some`, then places which need fake borrows
     /// will be added to it.
     ///
-    /// For an example of a case where we set `otherwise_block`, even for an
-    /// exhaustive match, consider:
-    ///
+    /// For an example of how we use `otherwise_block`, consider:
     /// ```
-    /// # fn foo(x: (bool, bool)) {
-    /// match x {
-    ///     (true, true) => (),
-    ///     (_, false) => (),
-    ///     (false, true) => (),
+    /// # fn foo((x, y): (bool, bool)) -> u32 {
+    /// match (x, y) {
+    ///     (true, true) => 1,
+    ///     (_, false) => 2,
+    ///     (false, true) => 3,
     /// }
     /// # }
     /// ```
+    /// For this match, we generate something like:
+    /// ```
+    /// # fn foo((x, y): (bool, bool)) -> u32 {
+    /// if x {
+    ///     if y {
+    ///         return 1
+    ///     } else {
+    ///         // continue
+    ///     }
+    /// } else {
+    ///     // continue
+    /// }
+    /// if y {
+    ///     if x {
+    ///         // This is actually unreachable because the `(true, true)` case was handled above.
+    ///         // continue
+    ///     } else {
+    ///         return 3
+    ///     }
+    /// } else {
+    ///     return 2
+    /// }
+    /// // this is the final `otherwise_block`, which is unreachable because the match was exhaustive.
+    /// unreachable!()
+    /// # }
+    /// ```
     ///
-    /// For this match, we check if `x.0` matches `true` (for the first
-    /// arm). If it doesn't match, we check `x.1`. If `x.1` is `true` we check
-    /// if `x.0` matches `false` (for the third arm). In the (impossible at
-    /// runtime) case when `x.0` is now `true`, we branch to
-    /// `otherwise_block`.
-    #[instrument(skip(self, fake_borrows), level = "debug")]
+    /// Every `continue` is an instance of branching to some `otherwise_block` somewhere deep within
+    /// the algorithm. For more details on why we lower like this, see [`Builder::test_candidates`].
+    ///
+    /// Note how we test `x` twice. This is the tradeoff of backtracking automata: we prefer smaller
+    /// code size at the expense of non-optimal code paths.
+    #[instrument(skip(self), level = "debug")]
     fn match_candidates<'pat>(
         &mut self,
         span: Span,
@@ -1191,11 +1240,10 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         start_block: BasicBlock,
         otherwise_block: BasicBlock,
         candidates: &mut [&mut Candidate<'pat, 'tcx>],
-        fake_borrows: &mut Option<FxIndexSet<Place<'tcx>>>,
     ) {
         let mut split_or_candidate = false;
         for candidate in &mut *candidates {
-            if let [MatchPair { pattern: Pat { kind: PatKind::Or { pats }, .. }, place, .. }] =
+            if let [MatchPair { test_case: TestCase::Or { pats, .. }, .. }] =
                 &*candidate.match_pairs
             {
                 // Split a candidate in which the only match-pair is an or-pattern into multiple
@@ -1207,8 +1255,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 // }
                 //
                 // only generates a single switch.
-                candidate.subcandidates =
-                    self.create_or_subcandidates(place, pats, candidate.has_guard);
+                candidate.subcandidates = self.create_or_subcandidates(pats, candidate.has_guard);
                 candidate.match_pairs.pop();
                 split_or_candidate = true;
             }
@@ -1229,7 +1276,6 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     start_block,
                     otherwise_block,
                     &mut *new_candidates,
-                    fake_borrows,
                 );
             } else {
                 self.match_simplified_candidates(
@@ -1238,7 +1284,6 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     start_block,
                     otherwise_block,
                     candidates,
-                    fake_borrows,
                 );
             }
         });
@@ -1251,7 +1296,6 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         mut start_block: BasicBlock,
         otherwise_block: BasicBlock,
         candidates: &mut [&mut Candidate<'_, 'tcx>],
-        fake_borrows: &mut Option<FxIndexSet<Place<'tcx>>>,
     ) {
         match candidates {
             [] => {
@@ -1263,14 +1307,13 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             [first, remaining @ ..] if first.match_pairs.is_empty() => {
                 // The first candidate has satisfied all its match pairs; we link it up and continue
                 // with the remaining candidates.
-                start_block = self.select_matched_candidate(first, start_block, fake_borrows);
+                start_block = self.select_matched_candidate(first, start_block);
                 self.match_simplified_candidates(
                     span,
                     scrutinee_span,
                     start_block,
                     otherwise_block,
                     remaining,
-                    fake_borrows,
                 )
             }
             candidates => {
@@ -1281,7 +1324,6 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     candidates,
                     start_block,
                     otherwise_block,
-                    fake_borrows,
                 );
             }
         }
@@ -1316,42 +1358,10 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         &mut self,
         candidate: &mut Candidate<'_, 'tcx>,
         start_block: BasicBlock,
-        fake_borrows: &mut Option<FxIndexSet<Place<'tcx>>>,
     ) -> BasicBlock {
         assert!(candidate.otherwise_block.is_none());
         assert!(candidate.pre_binding_block.is_none());
         assert!(candidate.subcandidates.is_empty());
-
-        if let Some(fake_borrows) = fake_borrows {
-            // Insert a borrows of prefixes of places that are bound and are
-            // behind a dereference projection.
-            //
-            // These borrows are taken to avoid situations like the following:
-            //
-            // match x[10] {
-            //     _ if { x = &[0]; false } => (),
-            //     y => (), // Out of bounds array access!
-            // }
-            //
-            // match *x {
-            //     // y is bound by reference in the guard and then by copy in the
-            //     // arm, so y is 2 in the arm!
-            //     y if { y == 1 && (x = &2) == () } => y,
-            //     _ => 3,
-            // }
-            for Binding { source, .. } in &candidate.bindings {
-                if let Some(i) =
-                    source.projection.iter().rposition(|elem| elem == ProjectionElem::Deref)
-                {
-                    let proj_base = &source.projection[..i];
-
-                    fake_borrows.insert(Place {
-                        local: source.local,
-                        projection: self.tcx.mk_place_elems(proj_base),
-                    });
-                }
-            }
-        }
 
         candidate.pre_binding_block = Some(start_block);
         let otherwise_block = self.cfg.start_new_block();
@@ -1423,38 +1433,22 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         candidates: &mut [&mut Candidate<'_, 'tcx>],
         start_block: BasicBlock,
         otherwise_block: BasicBlock,
-        fake_borrows: &mut Option<FxIndexSet<Place<'tcx>>>,
     ) {
         let (first_candidate, remaining_candidates) = candidates.split_first_mut().unwrap();
         assert!(first_candidate.subcandidates.is_empty());
-        if !matches!(first_candidate.match_pairs[0].pattern.kind, PatKind::Or { .. }) {
-            self.test_candidates(
-                span,
-                scrutinee_span,
-                candidates,
-                start_block,
-                otherwise_block,
-                fake_borrows,
-            );
+        if !matches!(first_candidate.match_pairs[0].test_case, TestCase::Or { .. }) {
+            self.test_candidates(span, scrutinee_span, candidates, start_block, otherwise_block);
             return;
         }
 
         let match_pairs = mem::take(&mut first_candidate.match_pairs);
         let (first_match_pair, remaining_match_pairs) = match_pairs.split_first().unwrap();
-        let PatKind::Or { ref pats } = &first_match_pair.pattern.kind else { unreachable!() };
+        let TestCase::Or { ref pats } = &first_match_pair.test_case else { unreachable!() };
 
         let remainder_start = self.cfg.start_new_block();
         let or_span = first_match_pair.pattern.span;
         // Test the alternatives of this or-pattern.
-        self.test_or_pattern(
-            first_candidate,
-            start_block,
-            remainder_start,
-            pats,
-            or_span,
-            &first_match_pair.place,
-            fake_borrows,
-        );
+        self.test_or_pattern(first_candidate, start_block, remainder_start, pats, or_span);
 
         if !remaining_match_pairs.is_empty() {
             // If more match pairs remain, test them after each subcandidate.
@@ -1475,7 +1469,6 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     &mut [leaf_candidate],
                     or_start,
                     or_otherwise,
-                    fake_borrows,
                 );
             });
         }
@@ -1487,12 +1480,11 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             remainder_start,
             otherwise_block,
             remaining_candidates,
-            fake_borrows,
         );
     }
 
     #[instrument(
-        skip(self, start_block, otherwise_block, or_span, place, fake_borrows, candidate, pats),
+        skip(self, start_block, otherwise_block, or_span, candidate, pats),
         level = "debug"
     )]
     fn test_or_pattern<'pat>(
@@ -1500,15 +1492,14 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         candidate: &mut Candidate<'pat, 'tcx>,
         start_block: BasicBlock,
         otherwise_block: BasicBlock,
-        pats: &'pat [Box<Pat<'tcx>>],
+        pats: &[FlatPat<'pat, 'tcx>],
         or_span: Span,
-        place: &PlaceBuilder<'tcx>,
-        fake_borrows: &mut Option<FxIndexSet<Place<'tcx>>>,
     ) {
         debug!("candidate={:#?}\npats={:#?}", candidate, pats);
         let mut or_candidates: Vec<_> = pats
             .iter()
-            .map(|pat| Candidate::new(place.clone(), pat, candidate.has_guard, self))
+            .cloned()
+            .map(|flat_pat| Candidate::from_flat_pat(flat_pat, candidate.has_guard))
             .collect();
         let mut or_candidate_refs: Vec<_> = or_candidates.iter_mut().collect();
         self.match_candidates(
@@ -1517,7 +1508,6 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             start_block,
             otherwise_block,
             &mut or_candidate_refs,
-            fake_borrows,
         );
         candidate.subcandidates = or_candidates;
         self.merge_trivial_subcandidates(candidate, self.source_info(or_span));
@@ -1557,18 +1547,12 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         }
     }
 
-    /// This is the most subtle part of the matching algorithm. At
-    /// this point, the input candidates have been fully simplified,
-    /// and so we know that all remaining match-pairs require some
-    /// sort of test. To decide what test to perform, we take the highest
-    /// priority candidate (the first one in the list, as of January 2021)
-    /// and extract the first match-pair from the list. From this we decide
-    /// what kind of test is needed using [`Builder::test`], defined in the
-    /// [`test` module](mod@test).
+    /// Pick a test to run. Which test doesn't matter as long as it is guaranteed to fully match at
+    /// least one match pair. We currently simply pick the test corresponding to the first match
+    /// pair of the first candidate in the list.
     ///
-    /// *Note:* taking the first match pair is somewhat arbitrary, and
-    /// we might do better here by choosing more carefully what to
-    /// test.
+    /// *Note:* taking the first match pair is somewhat arbitrary, and we might do better here by
+    /// choosing more carefully what to test.
     ///
     /// For example, consider the following possible match-pairs:
     ///
@@ -1580,38 +1564,141 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
     /// [`Switch`]: TestKind::Switch
     /// [`SwitchInt`]: TestKind::SwitchInt
     /// [`Range`]: TestKind::Range
+    fn pick_test(
+        &mut self,
+        candidates: &mut [&mut Candidate<'_, 'tcx>],
+    ) -> (PlaceBuilder<'tcx>, Test<'tcx>) {
+        // Extract the match-pair from the highest priority candidate
+        let match_pair = &candidates.first().unwrap().match_pairs[0];
+        let mut test = self.test(match_pair);
+        let match_place = match_pair.place.clone();
+
+        debug!(?test, ?match_pair);
+        // Most of the time, the test to perform is simply a function of the main candidate; but for
+        // a test like SwitchInt, we may want to add cases based on the candidates that are
+        // available
+        match test.kind {
+            TestKind::SwitchInt { ref mut options } => {
+                for candidate in candidates.iter() {
+                    if !self.add_cases_to_switch(&match_place, candidate, options) {
+                        break;
+                    }
+                }
+            }
+            TestKind::Switch { adt_def: _, ref mut variants } => {
+                for candidate in candidates.iter() {
+                    if !self.add_variants_to_switch(&match_place, candidate, variants) {
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        (match_place, test)
+    }
+
+    /// Given a test, we sort the input candidates into several buckets. If a candidate only matches
+    /// in one of the branches of `test`, we move it there. If it could match in more than one of
+    /// the branches of `test`, we stop sorting candidates.
     ///
-    /// Once we know what sort of test we are going to perform, this
-    /// test may also help us winnow down our candidates. So we walk over
-    /// the candidates (from high to low priority) and check. This
-    /// gives us, for each outcome of the test, a transformed list of
-    /// candidates. For example, if we are testing `x.0`'s variant,
-    /// and we have a candidate `(x.0 @ Some(v), x.1 @ 22)`,
-    /// then we would have a resulting candidate of `((x.0 as Some).0 @ v, x.1 @ 22)`.
-    /// Note that the first match-pair is now simpler (and, in fact, irrefutable).
+    /// This returns a pair of
+    /// - the candidates that weren't sorted;
+    /// - for each possible outcome of the test, the candidates that match in that outcome.
     ///
-    /// But there may also be candidates that the test just doesn't
-    /// apply to. The classical example involves wildcards:
+    /// Moreover, we transform the branched candidates to reflect the fact that we know which
+    /// outcome of `test` occurred.
     ///
+    /// For example:
     /// ```
     /// # let (x, y, z) = (true, true, true);
     /// match (x, y, z) {
     ///     (true , _    , true ) => true,  // (0)
-    ///     (_    , true , _    ) => true,  // (1)
-    ///     (false, false, _    ) => false, // (2)
+    ///     (false, false, _    ) => false, // (1)
+    ///     (_    , true , _    ) => true,  // (2)
     ///     (true , _    , false) => false, // (3)
     /// }
     /// # ;
     /// ```
     ///
-    /// In that case, after we test on `x`, there are 2 overlapping candidate
-    /// sets:
-    ///
-    /// - If the outcome is that `x` is true, candidates 0, 1, and 3
+    /// Assume we are testing on `x`. There are 2 overlapping candidate sets:
+    /// - If the outcome is that `x` is true, candidates 0, 2, and 3
     /// - If the outcome is that `x` is false, candidates 1 and 2
     ///
-    /// Here, the traditional "decision tree" method would generate 2
-    /// separate code-paths for the 2 separate cases.
+    /// Following our algorithm, candidate 0 is sorted into outcome `x == true`, candidate 1 goes
+    /// into outcome `x == false`, and candidate 2 and 3 remain unsorted.
+    ///
+    /// The sorted candidates are transformed:
+    /// - candidate 0 becomes `[z @ true]` since we know that `x` was `true`;
+    /// - candidate 1 becomes `[y @ false]` since we know that `x` was `false`.
+    fn sort_candidates<'b, 'c, 'pat>(
+        &mut self,
+        match_place: &PlaceBuilder<'tcx>,
+        test: &Test<'tcx>,
+        mut candidates: &'b mut [&'c mut Candidate<'pat, 'tcx>],
+    ) -> (&'b mut [&'c mut Candidate<'pat, 'tcx>], Vec<Vec<&'b mut Candidate<'pat, 'tcx>>>) {
+        // For each of the N possible outcomes, create a (initially empty) vector of candidates.
+        // Those are the candidates that apply if the test has that particular outcome.
+        let mut target_candidates: Vec<Vec<&mut Candidate<'pat, 'tcx>>> = vec![];
+        target_candidates.resize_with(test.targets(), Default::default);
+
+        let total_candidate_count = candidates.len();
+
+        // Sort the candidates into the appropriate vector in `target_candidates`. Note that at some
+        // point we may encounter a candidate where the test is not relevant; at that point, we stop
+        // sorting.
+        while let Some(candidate) = candidates.first_mut() {
+            let Some(idx) = self.sort_candidate(&match_place, &test, candidate) else {
+                break;
+            };
+            let (candidate, rest) = candidates.split_first_mut().unwrap();
+            target_candidates[idx].push(candidate);
+            candidates = rest;
+        }
+
+        // At least the first candidate ought to be tested
+        assert!(
+            total_candidate_count > candidates.len(),
+            "{total_candidate_count}, {candidates:#?}"
+        );
+        debug!("tested_candidates: {}", total_candidate_count - candidates.len());
+        debug!("untested_candidates: {}", candidates.len());
+
+        (candidates, target_candidates)
+    }
+
+    /// This is the most subtle part of the match lowering algorithm. At this point, the input
+    /// candidates have been fully simplified, so all remaining match-pairs require some sort of
+    /// test.
+    ///
+    /// Once we pick what sort of test we are going to perform, this test will help us winnow down
+    /// our candidates. So we walk over the candidates (from high to low priority) and check. We
+    /// compute, for each outcome of the test, a transformed list of candidates. If a candidate
+    /// matches in a single branch of our test, we add it to the corresponding outcome. We also
+    /// transform it to record the fact that we know which outcome occurred.
+    ///
+    /// For example, if we are testing `x.0`'s variant, and we have a candidate `(x.0 @ Some(v), x.1
+    /// @ 22)`, then we would have a resulting candidate of `((x.0 as Some).0 @ v, x.1 @ 22)` in the
+    /// branch corresponding to `Some`. To ensure we make progress, we always pick a test that
+    /// results in simplifying the first candidate.
+    ///
+    /// But there may also be candidates that the test doesn't
+    /// apply to. The classical example is wildcards:
+    ///
+    /// ```
+    /// # let (x, y, z) = (true, true, true);
+    /// match (x, y, z) {
+    ///     (true , _    , true ) => true,  // (0)
+    ///     (false, false, _    ) => false, // (1)
+    ///     (_    , true , _    ) => true,  // (2)
+    ///     (true , _    , false) => false, // (3)
+    /// }
+    /// # ;
+    /// ```
+    ///
+    /// Here, the traditional "decision tree" method would generate 2 separate code-paths for the 2
+    /// possible values of `x`. This would however duplicate some candidates, which would need to be
+    /// lowered several times.
     ///
     /// In some cases, this duplication can create an exponential amount of
     /// code. This is most easily seen by noticing that this method terminates
@@ -1632,136 +1719,74 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
     /// the variables that does not match any of the literals. Therefore,
     /// compilation would take an exponential amount of time in some cases.
     ///
-    /// That kind of exponential worst-case might not occur in practice, but
-    /// our simplistic treatment of constants and guards would make it occur
-    /// in very common situations - for example [#29740]:
+    /// In rustc, we opt instead for the "backtracking automaton" approach. This guarantees we never
+    /// duplicate a candidate (except in the presence of or-patterns). In fact this guarantee is
+    /// ensured by the fact that we carry around `&mut Candidate`s which can't be duplicated.
     ///
-    /// ```ignore (illustrative)
-    /// match x {
-    ///     "foo" if foo_guard => ...,
-    ///     "bar" if bar_guard => ...,
-    ///     "baz" if baz_guard => ...,
-    ///     ...
-    /// }
+    /// To make this work, whenever we decide to perform a test, if we encounter a candidate that
+    /// could match in more than one branch of the test, we stop. We generate code for the test and
+    /// for the candidates in its branches; the remaining candidates will be tested if the
+    /// candidates in the branches fail to match.
+    ///
+    /// For example, if we test on `x` in the following:
     /// ```
-    ///
-    /// [#29740]: https://github.com/rust-lang/rust/issues/29740
-    ///
-    /// Here we first test the match-pair `x @ "foo"`, which is an [`Eq` test].
-    ///
-    /// [`Eq` test]: TestKind::Eq
-    ///
-    /// It might seem that we would end up with 2 disjoint candidate
-    /// sets, consisting of the first candidate or the other two, but our
-    /// algorithm doesn't reason about `"foo"` being distinct from the other
-    /// constants; it considers the latter arms to potentially match after
-    /// both outcomes, which obviously leads to an exponential number
-    /// of tests.
-    ///
-    /// To avoid these kinds of problems, our algorithm tries to ensure
-    /// the amount of generated tests is linear. When we do a k-way test,
-    /// we return an additional "unmatched" set alongside the obvious `k`
-    /// sets. When we encounter a candidate that would be present in more
-    /// than one of the sets, we put it and all candidates below it into the
-    /// "unmatched" set. This ensures these `k+1` sets are disjoint.
-    ///
-    /// After we perform our test, we branch into the appropriate candidate
-    /// set and recurse with `match_candidates`. These sub-matches are
-    /// obviously non-exhaustive - as we discarded our otherwise set - so
-    /// we set their continuation to do `match_candidates` on the
-    /// "unmatched" set (which is again non-exhaustive).
-    ///
-    /// If you apply this to the above test, you basically wind up
-    /// with an if-else-if chain, testing each candidate in turn,
-    /// which is precisely what we want.
-    ///
-    /// In addition to avoiding exponential-time blowups, this algorithm
-    /// also has the nice property that each guard and arm is only generated
-    /// once.
+    /// # fn foo((x, y, z): (bool, bool, bool)) -> u32 {
+    /// match (x, y, z) {
+    ///     (true , _    , true ) => 0,
+    ///     (false, false, _    ) => 1,
+    ///     (_    , true , _    ) => 2,
+    ///     (true , _    , false) => 3,
+    /// }
+    /// # }
+    /// ```
+    /// this function generates code that looks more of less like:
+    /// ```
+    /// # fn foo((x, y, z): (bool, bool, bool)) -> u32 {
+    /// if x {
+    ///     match (y, z) {
+    ///         (_, true) => return 0,
+    ///         _ => {} // continue matching
+    ///     }
+    /// } else {
+    ///     match (y, z) {
+    ///         (false, _) => return 1,
+    ///         _ => {} // continue matching
+    ///     }
+    /// }
+    /// // the block here is `remainder_start`
+    /// match (x, y, z) {
+    ///     (_    , true , _    ) => 2,
+    ///     (true , _    , false) => 3,
+    ///     _ => unreachable!(),
+    /// }
+    /// # }
+    /// ```
     fn test_candidates<'pat, 'b, 'c>(
         &mut self,
         span: Span,
         scrutinee_span: Span,
-        mut candidates: &'b mut [&'c mut Candidate<'pat, 'tcx>],
+        candidates: &'b mut [&'c mut Candidate<'pat, 'tcx>],
         start_block: BasicBlock,
         otherwise_block: BasicBlock,
-        fake_borrows: &mut Option<FxIndexSet<Place<'tcx>>>,
     ) {
-        // extract the match-pair from the highest priority candidate
-        let match_pair = &candidates.first().unwrap().match_pairs[0];
-        let mut test = self.test(match_pair);
-        let match_place = match_pair.place.clone();
+        // Extract the match-pair from the highest priority candidate and build a test from it.
+        let (match_place, test) = self.pick_test(candidates);
 
-        // most of the time, the test to perform is simply a function
-        // of the main candidate; but for a test like SwitchInt, we
-        // may want to add cases based on the candidates that are
-        // available
-        match test.kind {
-            TestKind::SwitchInt { switch_ty: _, ref mut options } => {
-                for candidate in candidates.iter() {
-                    if !self.add_cases_to_switch(&match_place, candidate, options) {
-                        break;
-                    }
-                }
-            }
-            TestKind::Switch { adt_def: _, ref mut variants } => {
-                for candidate in candidates.iter() {
-                    if !self.add_variants_to_switch(&match_place, candidate, variants) {
-                        break;
-                    }
-                }
-            }
-            _ => {}
-        }
-
-        // Insert a Shallow borrow of any places that is switched on.
-        if let Some(fb) = fake_borrows
-            && let Some(resolved_place) = match_place.try_to_place(self)
-        {
-            fb.insert(resolved_place);
-        }
-
-        // perform the test, branching to one of N blocks. For each of
-        // those N possible outcomes, create a (initially empty)
-        // vector of candidates. Those are the candidates that still
-        // apply if the test has that particular outcome.
-        debug!("test_candidates: test={:?} match_pair={:?}", test, match_pair);
-        let mut target_candidates: Vec<Vec<&mut Candidate<'pat, 'tcx>>> = vec![];
-        target_candidates.resize_with(test.targets(), Default::default);
-
-        let total_candidate_count = candidates.len();
-
-        // Sort the candidates into the appropriate vector in
-        // `target_candidates`. Note that at some point we may
-        // encounter a candidate where the test is not relevant; at
-        // that point, we stop sorting.
-        while let Some(candidate) = candidates.first_mut() {
-            let Some(idx) = self.sort_candidate(&match_place, &test, candidate) else {
-                break;
-            };
-            let (candidate, rest) = candidates.split_first_mut().unwrap();
-            target_candidates[idx].push(candidate);
-            candidates = rest;
-        }
-        // at least the first candidate ought to be tested
-        assert!(
-            total_candidate_count > candidates.len(),
-            "{total_candidate_count}, {candidates:#?}"
-        );
-        debug!("tested_candidates: {}", total_candidate_count - candidates.len());
-        debug!("untested_candidates: {}", candidates.len());
+        // For each of the N possible test outcomes, build the vector of candidates that applies if
+        // the test has that particular outcome.
+        let (remaining_candidates, target_candidates) =
+            self.sort_candidates(&match_place, &test, candidates);
 
         // The block that we should branch to if none of the
         // `target_candidates` match.
-        let remainder_start = if !candidates.is_empty() {
+        let remainder_start = if !remaining_candidates.is_empty() {
             let remainder_start = self.cfg.start_new_block();
             self.match_candidates(
                 span,
                 scrutinee_span,
                 remainder_start,
                 otherwise_block,
-                candidates,
-                fake_borrows,
+                remaining_candidates,
             );
             remainder_start
         } else {
@@ -1783,7 +1808,6 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                         candidate_start,
                         remainder_start,
                         &mut *candidates,
-                        fake_borrows,
                     );
                     candidate_start
                 } else {

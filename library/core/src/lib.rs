@@ -106,6 +106,7 @@
 #![allow(incomplete_features)]
 #![warn(multiple_supertrait_upcastable)]
 #![allow(internal_features)]
+#![deny(ffi_unwind_calls)]
 // Do not check link redundancy on bootstraping phase
 #![allow(rustdoc::redundant_explicit_links)]
 //
@@ -201,6 +202,7 @@
 //
 // Language features:
 // tidy-alphabetical-start
+#![cfg_attr(bootstrap, feature(platform_intrinsics))]
 #![feature(abi_unadjusted)]
 #![feature(adt_const_params)]
 #![feature(allow_internal_unsafe)]
@@ -245,7 +247,6 @@
 #![feature(never_type)]
 #![feature(no_core)]
 #![feature(no_sanitize)]
-#![feature(platform_intrinsics)]
 #![feature(prelude_import)]
 #![feature(repr_simd)]
 #![feature(rustc_allow_const_fn_unstable)]

@@ -44,6 +44,15 @@
 //! * Sequentially consistent - sequentially consistent operations are
 //!   guaranteed to happen in order. This is the standard mode for working
 //!   with atomic types and is equivalent to Java's `volatile`.
+//!
+//! # Unwinding
+//!
+//! Rust intrinsics may, in general, unwind. If an intrinsic can never unwind, add the
+//! `#[rustc_nounwind]` attribute so that the compiler can make use of this fact.
+//!
+//! However, even for intrinsics that may unwind, rustc assumes that a Rust intrinsics will never
+//! initiate a foreign (non-Rust) unwind, and thus for panic=abort we can always assume that these
+//! intrinsics cannot unwind.
 
 #![unstable(
     feature = "core_intrinsics",
@@ -74,6 +83,9 @@ pub unsafe fn drop_in_place<T: ?Sized>(to_drop: *mut T) {
     // SAFETY: see `ptr::drop_in_place`
     unsafe { crate::ptr::drop_in_place(to_drop) }
 }
+
+#[cfg(bootstrap)]
+pub use self::r#try as catch_unwind;
 
 extern "rust-intrinsic" {
     // N.B., these intrinsics take raw pointers because they mutate aliased
@@ -689,6 +701,7 @@ extern "rust-intrinsic" {
     /// The stabilized version of this intrinsic is available on the
     /// [`atomic`] signed integer types via the `fetch_min` method by passing
     /// [`Ordering::AcqRel`] as the `order`. For example, [`AtomicI32::fetch_min`].
+    #[rustc_nounwind]
     pub fn atomic_min_acqrel<T: Copy>(dst: *mut T, src: T) -> T;
     /// Minimum with the current value using a signed comparison.
     ///
@@ -2382,16 +2395,24 @@ extern "rust-intrinsic" {
     #[rustc_nounwind]
     pub fn variant_count<T>() -> usize;
 
-    /// Rust's "try catch" construct which invokes the function pointer `try_fn`
-    /// with the data pointer `data`.
-    ///
-    /// The third argument is a function called if a panic occurs. This function
-    /// takes the data pointer and a pointer to the target-specific exception
-    /// object that was caught. For more information see the compiler's
-    /// source as well as std's catch implementation.
+    /// Rust's "try catch" construct for unwinding. Invokes the function pointer `try_fn` with the
+    /// data pointer `data`, and calls `catch_fn` if unwinding occurs while `try_fn` runs.
     ///
     /// `catch_fn` must not unwind.
+    ///
+    /// The third argument is a function called if an unwind occurs (both Rust unwinds and foreign
+    /// unwinds). This function takes the data pointer and a pointer to the target-specific
+    /// exception object that was caught. For more information, see the compiler's source as well as
+    /// std's `catch_unwind` implementation.
+    ///
+    /// The stable version of this intrinsic is `std::panic::catch_unwind`.
     #[rustc_nounwind]
+    #[cfg(not(bootstrap))]
+    pub fn catch_unwind(try_fn: fn(*mut u8), data: *mut u8, catch_fn: fn(*mut u8, *mut u8)) -> i32;
+
+    /// For bootstrap only, see `catch_unwind`.
+    #[rustc_nounwind]
+    #[cfg(bootstrap)]
     pub fn r#try(try_fn: fn(*mut u8), data: *mut u8, catch_fn: fn(*mut u8, *mut u8)) -> i32;
 
     /// Emits a `!nontemporal` store according to LLVM (see their docs).
@@ -2706,13 +2727,25 @@ pub const unsafe fn const_deallocate(_ptr: *mut u8, _size: usize, _align: usize)
 macro_rules! assert_unsafe_precondition {
     ($message:expr, ($($name:ident:$ty:ty = $arg:expr),*$(,)?) => $e:expr $(,)?) => {
         {
+            // #[cfg(bootstrap)] (this comment)
             // When the standard library is compiled with debug assertions, we want the check to inline for better performance.
             // This is important when working on the compiler, which is compiled with debug assertions locally.
             // When not compiled with debug assertions (so the precompiled std) we outline the check to minimize the compile
             // time impact when debug assertions are disabled.
-            // It is not clear whether that is the best solution, see #120848.
-            #[cfg_attr(debug_assertions, inline(always))]
-            #[cfg_attr(not(debug_assertions), inline(never))]
+            // The proper solution to this is the `#[rustc_no_mir_inline]` below, but we still want decent performance for cfg(bootstrap).
+            #[cfg_attr(all(debug_assertions, bootstrap), inline(always))]
+            #[cfg_attr(all(not(debug_assertions), bootstrap), inline(never))]
+
+            // This check is inlineable, but not by the MIR inliner.
+            // The reason for this is that the MIR inliner is in an exceptionally bad position
+            // to think about whether or not to inline this. In MIR, this call is gated behind `debug_assertions`,
+            // which will codegen to `false` in release builds. Inlining the check would be wasted work in that case and
+            // would be bad for compile times.
+            //
+            // LLVM on the other hand sees the constant branch, so if it's `false`, it can immediately delete it without
+            // inlining the check. If it's `true`, it can inline it and get significantly better performance.
+            #[cfg_attr(not(bootstrap), rustc_no_mir_inline)]
+            #[cfg_attr(not(bootstrap), inline)]
             #[rustc_nounwind]
             fn precondition_check($($name:$ty),*) {
                 if !$e {

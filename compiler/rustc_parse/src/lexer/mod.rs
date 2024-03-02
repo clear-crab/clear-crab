@@ -4,10 +4,10 @@ use crate::errors;
 use crate::lexer::unicode_chars::UNICODE_ARRAY;
 use crate::make_unclosed_delims_error;
 use rustc_ast::ast::{self, AttrStyle};
-use rustc_ast::token::{self, CommentKind, Delimiter, Token, TokenKind};
+use rustc_ast::token::{self, CommentKind, Delimiter, IdentIsRaw, Token, TokenKind};
 use rustc_ast::tokenstream::TokenStream;
 use rustc_ast::util::unicode::contains_text_flow_control_chars;
-use rustc_errors::{codes::*, Applicability, DiagCtxt, DiagnosticBuilder, StashKey};
+use rustc_errors::{codes::*, Applicability, Diag, DiagCtxt, StashKey};
 use rustc_lexer::unescape::{self, EscapeError, Mode};
 use rustc_lexer::{Base, DocStyle, RawStrError};
 use rustc_lexer::{Cursor, LiteralKind};
@@ -47,7 +47,7 @@ pub(crate) fn parse_token_trees<'sess, 'src>(
     mut src: &'src str,
     mut start_pos: BytePos,
     override_span: Option<Span>,
-) -> Result<TokenStream, Vec<DiagnosticBuilder<'sess>>> {
+) -> Result<TokenStream, Vec<Diag<'sess>>> {
     // Skip `#!`, if present.
     if let Some(shebang_len) = rustc_lexer::strip_shebang(src) {
         src = &src[shebang_len..];
@@ -181,7 +181,7 @@ impl<'sess, 'src> StringReader<'sess, 'src> {
                         self.dcx().emit_err(errors::CannotBeRawIdent { span, ident: sym });
                     }
                     self.sess.raw_identifier_spans.push(span);
-                    token::Ident(sym, true)
+                    token::Ident(sym, IdentIsRaw::Yes)
                 }
                 rustc_lexer::TokenKind::UnknownPrefix => {
                     self.report_unknown_prefix(start);
@@ -201,7 +201,7 @@ impl<'sess, 'src> StringReader<'sess, 'src> {
                     let span = self.mk_sp(start, self.pos);
                     self.sess.bad_unicode_identifiers.borrow_mut().entry(sym).or_default()
                         .push(span);
-                    token::Ident(sym, false)
+                    token::Ident(sym, IdentIsRaw::No)
                 }
                 // split up (raw) c string literals to an ident and a string literal when edition < 2021.
                 rustc_lexer::TokenKind::Literal {
@@ -339,7 +339,7 @@ impl<'sess, 'src> StringReader<'sess, 'src> {
         let sym = nfc_normalize(self.str_from(start));
         let span = self.mk_sp(start, self.pos);
         self.sess.symbol_gallery.insert(sym, span);
-        token::Ident(sym, false)
+        token::Ident(sym, IdentIsRaw::No)
     }
 
     /// Detect usages of Unicode codepoints changing the direction of the text on screen and loudly
@@ -501,9 +501,11 @@ impl<'sess, 'src> StringReader<'sess, 'src> {
                 (kind, self.symbol_from_to(start, end))
             }
             rustc_lexer::LiteralKind::Float { base, empty_exponent } => {
+                let mut kind = token::Float;
                 if empty_exponent {
                     let span = self.mk_sp(start, self.pos);
-                    self.dcx().emit_err(errors::EmptyExponentFloat { span });
+                    let guar = self.dcx().emit_err(errors::EmptyExponentFloat { span });
+                    kind = token::Err(guar);
                 }
                 let base = match base {
                     Base::Hexadecimal => Some("hexadecimal"),
@@ -513,9 +515,11 @@ impl<'sess, 'src> StringReader<'sess, 'src> {
                 };
                 if let Some(base) = base {
                     let span = self.mk_sp(start, end);
-                    self.dcx().emit_err(errors::FloatLiteralUnsupportedBase { span, base });
+                    let guar =
+                        self.dcx().emit_err(errors::FloatLiteralUnsupportedBase { span, base });
+                    kind = token::Err(guar)
                 }
-                (token::Float, self.symbol_from_to(start, end))
+                (kind, self.symbol_from_to(start, end))
             }
         }
     }

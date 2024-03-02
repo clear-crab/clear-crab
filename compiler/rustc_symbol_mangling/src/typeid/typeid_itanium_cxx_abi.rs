@@ -470,8 +470,10 @@ fn encode_ty<'tcx>(
         // (See https://rust-lang.github.io/unsafe-code-guidelines/layout/scalars.html#fixed-width-floating-point-types.)
         ty::Float(float_ty) => {
             typeid.push(match float_ty {
+                FloatTy::F16 => unimplemented!("f16_f128"),
                 FloatTy::F32 => 'f',
                 FloatTy::F64 => 'd',
+                FloatTy::F128 => unimplemented!("f16_f128"),
             });
         }
 
@@ -546,8 +548,20 @@ fn encode_ty<'tcx>(
             if let Some(cfi_encoding) = tcx.get_attr(def_id, sym::cfi_encoding) {
                 // Use user-defined CFI encoding for type
                 if let Some(value_str) = cfi_encoding.value_str() {
-                    if !value_str.to_string().trim().is_empty() {
-                        s.push_str(value_str.to_string().trim());
+                    let value_str = value_str.to_string();
+                    let str = value_str.trim();
+                    if !str.is_empty() {
+                        s.push_str(str);
+                        // Don't compress user-defined builtin types (see
+                        // https://itanium-cxx-abi.github.io/cxx-abi/abi.html#mangling-builtin and
+                        // https://itanium-cxx-abi.github.io/cxx-abi/abi.html#mangling-compression).
+                        let builtin_types = [
+                            "v", "w", "b", "c", "a", "h", "s", "t", "i", "j", "l", "m", "x", "y",
+                            "n", "o", "f", "d", "e", "g", "z",
+                        ];
+                        if !builtin_types.contains(&str) {
+                            compress(dict, DictKey::Ty(ty, TyQ::None), &mut s);
+                        }
                     } else {
                         #[allow(
                             rustc::diagnostic_outside_of_impl,
@@ -563,7 +577,6 @@ fn encode_ty<'tcx>(
                 } else {
                     bug!("encode_ty: invalid `cfi_encoding` for `{:?}`", ty.kind());
                 }
-                compress(dict, DictKey::Ty(ty, TyQ::None), &mut s);
             } else if options.contains(EncodeTyOptions::GENERALIZE_REPR_C) && adt_def.repr().c() {
                 // For cross-language LLVM CFI support, the encoding must be compatible at the FFI
                 // boundary. For instance:
@@ -1048,41 +1061,6 @@ pub fn typeid_for_fnabi<'tcx>(
 
     // Close the "F..E" pair
     typeid.push('E');
-
-    // Add encoding suffixes
-    if options.contains(EncodeTyOptions::NORMALIZE_INTEGERS) {
-        typeid.push_str(".normalized");
-    }
-
-    if options.contains(EncodeTyOptions::GENERALIZE_POINTERS) {
-        typeid.push_str(".generalized");
-    }
-
-    typeid
-}
-
-/// Returns a type metadata identifier for the specified FnSig using the Itanium C++ ABI with vendor
-/// extended type qualifiers and types for Rust types that are not used at the FFI boundary.
-pub fn typeid_for_fnsig<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    fn_sig: &FnSig<'tcx>,
-    options: TypeIdOptions,
-) -> String {
-    // A name is mangled by prefixing "_Z" to an encoding of its name, and in the case of functions
-    // its type.
-    let mut typeid = String::from("_Z");
-
-    // Clang uses the Itanium C++ ABI's virtual tables and RTTI typeinfo structure name as type
-    // metadata identifiers for function pointers. The typeinfo name encoding is a two-character
-    // code (i.e., 'TS') prefixed to the type encoding for the function.
-    typeid.push_str("TS");
-
-    // A dictionary of substitution candidates used for compression (see
-    // https://itanium-cxx-abi.github.io/cxx-abi/abi.html#mangling-compression).
-    let mut dict: FxHashMap<DictKey<'tcx>, usize> = FxHashMap::default();
-
-    // Encode the function signature
-    typeid.push_str(&encode_fnsig(tcx, fn_sig, &mut dict, options));
 
     // Add encoding suffixes
     if options.contains(EncodeTyOptions::NORMALIZE_INTEGERS) {

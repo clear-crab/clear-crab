@@ -28,17 +28,14 @@ pub type SIZE_T = usize;
 pub type WORD = u16;
 pub type CHAR = c_char;
 pub type ULONG = c_ulong;
-pub type ACCESS_MASK = DWORD;
 
 pub type LPCVOID = *const c_void;
-pub type LPHANDLE = *mut HANDLE;
 pub type LPOVERLAPPED = *mut OVERLAPPED;
 pub type LPSECURITY_ATTRIBUTES = *mut SECURITY_ATTRIBUTES;
 pub type LPVOID = *mut c_void;
 pub type LPWCH = *mut WCHAR;
 pub type LPWSTR = *mut WCHAR;
 
-pub type PLARGE_INTEGER = *mut c_longlong;
 pub type PSRWLOCK = *mut SRWLOCK;
 
 pub type socklen_t = c_int;
@@ -321,6 +318,21 @@ pub unsafe fn NtWriteFile(
 }
 }
 
+// Use raw-dylib to import ProcessPrng as we can't rely on there being an import library.
+cfg_if::cfg_if! {
+if #[cfg(not(target_vendor = "win7"))] {
+    #[cfg(target_arch = "x86")]
+    #[link(name = "bcryptprimitives", kind = "raw-dylib", import_name_type = "undecorated")]
+    extern "system" {
+        pub fn ProcessPrng(pbdata: *mut u8, cbdata: usize) -> BOOL;
+    }
+    #[cfg(not(target_arch = "x86"))]
+    #[link(name = "bcryptprimitives", kind = "raw-dylib")]
+    extern "system" {
+        pub fn ProcessPrng(pbdata: *mut u8, cbdata: usize) -> BOOL;
+    }
+}}
+
 // Functions that aren't available on every version of Windows that we support,
 // but we still use them and just provide some form of a fallback implementation.
 compat_fn_with_fallback! {
@@ -345,6 +357,19 @@ compat_fn_with_fallback! {
     }
 }
 
+#[cfg(not(target_vendor = "win7"))]
+#[link(name = "synchronization")]
+extern "system" {
+    pub fn WaitOnAddress(
+        address: *const c_void,
+        compareaddress: *const c_void,
+        addresssize: usize,
+        dwmilliseconds: u32,
+    ) -> BOOL;
+    pub fn WakeByAddressSingle(address: *const c_void);
+}
+
+#[cfg(target_vendor = "win7")]
 compat_fn_optional! {
     crate::sys::compat::load_synch_functions();
     pub fn WaitOnAddress(
@@ -356,30 +381,34 @@ compat_fn_optional! {
     pub fn WakeByAddressSingle(address: *const ::core::ffi::c_void);
 }
 
+#[cfg(any(target_vendor = "win7", target_vendor = "uwp"))]
 compat_fn_with_fallback! {
     pub static NTDLL: &CStr = c"ntdll";
 
+    #[cfg(target_vendor = "win7")]
     pub fn NtCreateKeyedEvent(
-        KeyedEventHandle: LPHANDLE,
-        DesiredAccess: ACCESS_MASK,
+        KeyedEventHandle: *mut HANDLE,
+        DesiredAccess: DWORD,
         ObjectAttributes: LPVOID,
         Flags: ULONG
     ) -> NTSTATUS {
         panic!("keyed events not available")
     }
+    #[cfg(target_vendor = "win7")]
     pub fn NtReleaseKeyedEvent(
         EventHandle: HANDLE,
         Key: LPVOID,
         Alertable: BOOLEAN,
-        Timeout: PLARGE_INTEGER
+        Timeout: *mut c_longlong
     ) -> NTSTATUS {
         panic!("keyed events not available")
     }
+    #[cfg(target_vendor = "win7")]
     pub fn NtWaitForKeyedEvent(
         EventHandle: HANDLE,
         Key: LPVOID,
         Alertable: BOOLEAN,
-        Timeout: PLARGE_INTEGER
+        Timeout: *mut c_longlong
     ) -> NTSTATUS {
         panic!("keyed events not available")
     }

@@ -716,7 +716,7 @@ use std::fmt;
 
 use crate::constructor::{Constructor, ConstructorSet, IntRange};
 use crate::pat::{DeconstructedPat, PatId, PatOrWild, WitnessPat};
-use crate::{Captures, MatchArm, TypeCx};
+use crate::{Captures, MatchArm, PrivateUninhabitedField, TypeCx};
 
 use self::ValidityConstraint::*;
 
@@ -817,6 +817,9 @@ impl fmt::Display for ValidityConstraint {
 struct PlaceInfo<Cx: TypeCx> {
     /// The type of the place.
     ty: Cx::Ty,
+    /// Whether the place is a private uninhabited field. If so we skip this field during analysis
+    /// so that we don't observe its emptiness.
+    private_uninhabited: bool,
     /// Whether the place is known to contain valid data.
     validity: ValidityConstraint,
     /// Whether the place is the scrutinee itself or a subplace of it.
@@ -833,8 +836,9 @@ impl<Cx: TypeCx> PlaceInfo<Cx> {
     ) -> impl Iterator<Item = Self> + ExactSizeIterator + Captures<'a> {
         let ctor_sub_tys = cx.ctor_sub_tys(ctor, &self.ty);
         let ctor_sub_validity = self.validity.specialize(ctor);
-        ctor_sub_tys.map(move |ty| PlaceInfo {
+        ctor_sub_tys.map(move |(ty, PrivateUninhabitedField(private_uninhabited))| PlaceInfo {
             ty,
+            private_uninhabited,
             validity: ctor_sub_validity,
             is_scrutinee: false,
         })
@@ -856,6 +860,11 @@ impl<Cx: TypeCx> PlaceInfo<Cx> {
     where
         Cx: 'a,
     {
+        if self.private_uninhabited {
+            // Skip the whole column
+            return Ok((smallvec![Constructor::PrivateUninhabited], vec![]));
+        }
+
         let ctors_for_ty = cx.ctors_for_ty(&self.ty)?;
 
         // We treat match scrutinees of type `!` or `EmptyEnum` differently.
@@ -914,7 +923,12 @@ impl<Cx: TypeCx> PlaceInfo<Cx> {
 
 impl<Cx: TypeCx> Clone for PlaceInfo<Cx> {
     fn clone(&self) -> Self {
-        Self { ty: self.ty.clone(), validity: self.validity, is_scrutinee: self.is_scrutinee }
+        Self {
+            ty: self.ty.clone(),
+            private_uninhabited: self.private_uninhabited,
+            validity: self.validity,
+            is_scrutinee: self.is_scrutinee,
+        }
     }
 }
 
@@ -1121,7 +1135,12 @@ impl<'p, Cx: TypeCx> Matrix<'p, Cx> {
         scrut_ty: Cx::Ty,
         scrut_validity: ValidityConstraint,
     ) -> Self {
-        let place_info = PlaceInfo { ty: scrut_ty, validity: scrut_validity, is_scrutinee: true };
+        let place_info = PlaceInfo {
+            ty: scrut_ty,
+            private_uninhabited: false,
+            validity: scrut_validity,
+            is_scrutinee: true,
+        };
         let mut matrix = Matrix {
             rows: Vec::with_capacity(arms.len()),
             place_info: smallvec![place_info],
@@ -1188,6 +1207,25 @@ impl<'p, Cx: TypeCx> Matrix<'p, Cx> {
             }
         }
         Ok(matrix)
+    }
+
+    /// Recover row usefulness and intersection information from a processed specialized matrix.
+    /// `specialized` must come from `self.specialize_constructor`.
+    fn unspecialize(&mut self, specialized: Self) {
+        for child_row in specialized.rows() {
+            let parent_row_id = child_row.parent_row;
+            let parent_row = &mut self.rows[parent_row_id];
+            // A parent row is useful if any of its children is.
+            parent_row.useful |= child_row.useful;
+            for child_intersection in child_row.intersects.iter() {
+                // Convert the intersecting ids into ids for the parent matrix.
+                let parent_intersection = specialized.rows[child_intersection].parent_row;
+                // Note: self-intersection can happen with or-patterns.
+                if parent_intersection != parent_row_id {
+                    parent_row.intersects.insert(parent_intersection);
+                }
+            }
+        }
     }
 }
 
@@ -1558,21 +1596,6 @@ fn compute_exhaustiveness_and_usefulness<'a, 'p, Cx: TypeCx>(
         // Accumulate the found witnesses.
         ret.extend(witnesses);
 
-        for child_row in spec_matrix.rows() {
-            let parent_row_id = child_row.parent_row;
-            let parent_row = &mut matrix.rows[parent_row_id];
-            // A parent row is useful if any of its children is.
-            parent_row.useful |= child_row.useful;
-            for child_intersection in child_row.intersects.iter() {
-                // Convert the intersecting ids into ids for the parent matrix.
-                let parent_intersection = spec_matrix.rows[child_intersection].parent_row;
-                // Note: self-intersection can happen with or-patterns.
-                if parent_intersection != parent_row_id {
-                    parent_row.intersects.insert(parent_intersection);
-                }
-            }
-        }
-
         // Detect ranges that overlap on their endpoints.
         if let Constructor::IntRange(overlap_range) = ctor {
             if overlap_range.is_singleton()
@@ -1582,6 +1605,8 @@ fn compute_exhaustiveness_and_usefulness<'a, 'p, Cx: TypeCx>(
                 collect_overlapping_range_endpoints(mcx, overlap_range, matrix, &spec_matrix);
             }
         }
+
+        matrix.unspecialize(spec_matrix);
     }
 
     // Record usefulness in the patterns.

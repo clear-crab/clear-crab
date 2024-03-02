@@ -398,10 +398,13 @@ fn copy_self_contained_objects(
         let srcdir = builder
             .wasi_root(target)
             .unwrap_or_else(|| {
-                panic!("Target {:?} does not have a \"wasi-root\" key", target.triple)
+                panic!(
+                    "Target {:?} does not have a \"wasi-root\" key in Config.toml",
+                    target.triple
+                )
             })
             .join("lib")
-            .join(target.to_string().replace("-preview1", ""));
+            .join(target.to_string().replace("-preview1", "").replace("p2", ""));
         for &obj in &["libc.a", "crt1-command.o", "crt1-reactor.o"] {
             copy_and_stamp(
                 builder,
@@ -727,7 +730,7 @@ fn apple_darwin_sign_file(file_path: &Path) {
     assert!(status.success());
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StartupObjects {
     pub compiler: Compiler,
     pub target: TargetSelection,
@@ -1491,7 +1494,7 @@ pub fn compiler_file(
     PathBuf::from(out.trim())
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Sysroot {
     pub compiler: Compiler,
     /// See [`Std::force_recompile`].
@@ -1653,7 +1656,7 @@ impl Step for Sysroot {
     }
 }
 
-#[derive(Debug, Copy, PartialOrd, Ord, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialOrd, Ord, Clone, PartialEq, Eq, Hash)]
 pub struct Assemble {
     /// The compiler which we will produce in this step. Assemble itself will
     /// take care of ensuring that the necessary prerequisites to do so exist,

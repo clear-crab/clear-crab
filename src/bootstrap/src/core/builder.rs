@@ -642,22 +642,22 @@ impl<'a> ShouldRun<'a> {
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum Kind {
-    #[clap(alias = "b")]
+    #[value(alias = "b")]
     Build,
-    #[clap(alias = "c")]
+    #[value(alias = "c")]
     Check,
     Clippy,
     Fix,
     Format,
-    #[clap(alias = "t")]
+    #[value(alias = "t")]
     Test,
     Bench,
-    #[clap(alias = "d")]
+    #[value(alias = "d")]
     Doc,
     Clean,
     Dist,
     Install,
-    #[clap(alias = "r")]
+    #[value(alias = "r")]
     Run,
     Setup,
     Suggest,
@@ -1069,7 +1069,7 @@ impl<'a> Builder<'a> {
     /// Returns the libdir where the standard library and other artifacts are
     /// found for a compiler's sysroot.
     pub fn sysroot_libdir(&self, compiler: Compiler, target: TargetSelection) -> Interned<PathBuf> {
-        #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+        #[derive(Debug, Clone, Hash, PartialEq, Eq)]
         struct Libdir {
             compiler: Compiler,
             target: TargetSelection,
