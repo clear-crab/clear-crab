@@ -1920,22 +1920,28 @@ pub struct FnSig {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 #[derive(Encodable, Decodable, HashStable_Generic)]
 pub enum FloatTy {
+    F16,
     F32,
     F64,
+    F128,
 }
 
 impl FloatTy {
     pub fn name_str(self) -> &'static str {
         match self {
+            FloatTy::F16 => "f16",
             FloatTy::F32 => "f32",
             FloatTy::F64 => "f64",
+            FloatTy::F128 => "f128",
         }
     }
 
     pub fn name(self) -> Symbol {
         match self {
+            FloatTy::F16 => sym::f16,
             FloatTy::F32 => sym::f32,
             FloatTy::F64 => sym::f64,
+            FloatTy::F128 => sym::f128,
         }
     }
 }
@@ -2296,6 +2302,9 @@ pub enum InlineAsmOperand {
     Sym {
         sym: InlineAsmSym,
     },
+    Label {
+        block: P<Block>,
+    },
 }
 
 impl InlineAsmOperand {
@@ -2305,7 +2314,7 @@ impl InlineAsmOperand {
             | Self::Out { reg, .. }
             | Self::InOut { reg, .. }
             | Self::SplitInOut { reg, .. } => Some(reg),
-            Self::Const { .. } | Self::Sym { .. } => None,
+            Self::Const { .. } | Self::Sym { .. } | Self::Label { .. } => None,
         }
     }
 }

@@ -22,6 +22,13 @@ use rand::RngCore;
 
 use crate::*;
 
+/// Indicates which kind of access is being performed.
+#[derive(Copy, Clone, Hash, PartialEq, Eq, Debug)]
+pub enum AccessKind {
+    Read,
+    Write,
+}
+
 // This mapping should match `decode_error_kind` in
 // <https://github.com/rust-lang/rust/blob/master/library/std/src/sys/pal/unix/mod.rs>.
 const UNIX_IO_ERROR_TABLE: &[(&str, std::io::ErrorKind)] = {
@@ -374,7 +381,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
         f: ty::Instance<'tcx>,
         caller_abi: Abi,
         args: &[Immediate<Provenance>],
-        dest: Option<&PlaceTy<'tcx, Provenance>>,
+        dest: Option<&MPlaceTy<'tcx, Provenance>>,
         stack_pop: StackPopCleanup,
     ) -> InterpResult<'tcx> {
         let this = self.eval_context_mut();

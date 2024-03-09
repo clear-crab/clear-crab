@@ -54,9 +54,9 @@
 //@ revisions: aarch64_unknown_none_softfloat
 //@ [aarch64_unknown_none_softfloat] compile-flags: --target aarch64-unknown-none-softfloat
 //@ [aarch64_unknown_none_softfloat] needs-llvm-components: aarch64
-//@ revisions: aarch64_unknown_nto_qnx_710
-//@ [aarch64_unknown_nto_qnx_710] compile-flags: --target aarch64-unknown-nto-qnx710
-//@ [aarch64_unknown_nto_qnx_710] needs-llvm-components: aarch64
+//@ revisions: aarch64_unknown_nto_qnx710
+//@ [aarch64_unknown_nto_qnx710] compile-flags: --target aarch64-unknown-nto-qnx710
+//@ [aarch64_unknown_nto_qnx710] needs-llvm-components: aarch64
 //@ revisions: aarch64_unknown_openbsd
 //@ [aarch64_unknown_openbsd] compile-flags: --target aarch64-unknown-openbsd
 //@ [aarch64_unknown_openbsd] needs-llvm-components: aarch64
@@ -234,6 +234,9 @@
 //@ revisions: loongarch64_unknown_linux_gnu
 //@ [loongarch64_unknown_linux_gnu] compile-flags: --target loongarch64-unknown-linux-gnu
 //@ [loongarch64_unknown_linux_gnu] needs-llvm-components: loongarch
+//@ revisions: loongarch64_unknown_linux_musl
+//@ [loongarch64_unknown_linux_musl] compile-flags: --target loongarch64-unknown-linux-musl
+//@ [loongarch64_unknown_linux_musl] needs-llvm-components: loongarch
 //@ revisions: loongarch64_unknown_none
 //@ [loongarch64_unknown_none] compile-flags: --target loongarch64-unknown-none
 //@ [loongarch64_unknown_none] needs-llvm-components: loongarch
@@ -486,6 +489,9 @@
 //@ revisions: wasm32_wasi
 //@ [wasm32_wasi] compile-flags: --target wasm32-wasi
 //@ [wasm32_wasi] needs-llvm-components: webassembly
+//@ revisions: wasm32_wasip1
+//@ [wasm32_wasip1] compile-flags: --target wasm32-wasip1
+//@ [wasm32_wasip1] needs-llvm-components: webassembly
 //@ revisions: wasm32_wasi_preview1_threads
 //@ [wasm32_wasi_preview1_threads] compile-flags: --target wasm32-wasi-preview1-threads
 //@ [wasm32_wasi_preview1_threads] needs-llvm-components: webassembly

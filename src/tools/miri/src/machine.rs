@@ -8,7 +8,6 @@ use std::fmt;
 use std::path::Path;
 use std::process;
 
-use either::Either;
 use rand::rngs::StdRng;
 use rand::Rng;
 use rand::SeedableRng;
@@ -113,6 +112,8 @@ pub enum MiriMemoryKind {
     C,
     /// Windows `HeapAlloc` memory.
     WinHeap,
+    /// Windows "local" memory (to be freed with `LocalFree`)
+    WinLocal,
     /// Memory for args, errno, and other parts of the machine-managed environment.
     /// This memory may leak.
     Machine,
@@ -144,7 +145,7 @@ impl MayLeak for MiriMemoryKind {
     fn may_leak(self) -> bool {
         use self::MiriMemoryKind::*;
         match self {
-            Rust | Miri | C | WinHeap | Runtime => false,
+            Rust | Miri | C | WinHeap | WinLocal | Runtime => false,
             Machine | Global | ExternStatic | Tls | Mmap => true,
         }
     }
@@ -156,7 +157,7 @@ impl MiriMemoryKind {
         use self::MiriMemoryKind::*;
         match self {
             // Heap allocations are fine since the `Allocation` is created immediately.
-            Rust | Miri | C | WinHeap | Mmap => true,
+            Rust | Miri | C | WinHeap | WinLocal | Mmap => true,
             // Everything else is unclear, let's not show potentially confusing spans.
             Machine | Global | ExternStatic | Tls | Runtime => false,
         }
@@ -171,6 +172,7 @@ impl fmt::Display for MiriMemoryKind {
             Miri => write!(f, "Miri bare-metal heap"),
             C => write!(f, "C heap"),
             WinHeap => write!(f, "Windows heap"),
+            WinLocal => write!(f, "Windows local memory"),
             Machine => write!(f, "machine-managed memory"),
             Runtime => write!(f, "language runtime memory"),
             Global => write!(f, "global (static or const)"),
@@ -512,6 +514,8 @@ pub struct MiriMachine<'mir, 'tcx> {
     /// The allocation IDs to report when they are being allocated
     /// (helps for debugging memory leaks and use after free bugs).
     tracked_alloc_ids: FxHashSet<AllocId>,
+    /// For the tracked alloc ids, also report read/write accesses.
+    track_alloc_accesses: bool,
 
     /// Controls whether alignment of memory accesses is being checked.
     pub(crate) check_alignment: AlignmentCheck,
@@ -654,6 +658,7 @@ impl<'mir, 'tcx> MiriMachine<'mir, 'tcx> {
             extern_statics: FxHashMap::default(),
             rng: RefCell::new(rng),
             tracked_alloc_ids: config.tracked_alloc_ids.clone(),
+            track_alloc_accesses: config.track_alloc_accesses,
             check_alignment: config.check_alignment,
             cmpxchg_weak_failure_rate: config.cmpxchg_weak_failure_rate,
             mute_stdout_stderr: config.mute_stdout_stderr,
@@ -793,6 +798,7 @@ impl VisitProvenance for MiriMachine<'_, '_> {
             local_crates: _,
             rng: _,
             tracked_alloc_ids: _,
+            track_alloc_accesses: _,
             check_alignment: _,
             cmpxchg_weak_failure_rate: _,
             mute_stdout_stderr: _,
@@ -943,7 +949,7 @@ impl<'mir, 'tcx> Machine<'mir, 'tcx> for MiriMachine<'mir, 'tcx> {
         instance: ty::Instance<'tcx>,
         abi: Abi,
         args: &[FnArg<'tcx, Provenance>],
-        dest: &PlaceTy<'tcx, Provenance>,
+        dest: &MPlaceTy<'tcx, Provenance>,
         ret: Option<mir::BasicBlock>,
         unwind: mir::UnwindAction,
     ) -> InterpResult<'tcx, Option<(&'mir mir::Body<'tcx>, ty::Instance<'tcx>)>> {
@@ -955,7 +961,7 @@ impl<'mir, 'tcx> Machine<'mir, 'tcx> for MiriMachine<'mir, 'tcx> {
             // to run extra MIR), and Ok(Some(body)) if we found MIR to run for the
             // foreign function
             // Any needed call to `goto_block` will be performed by `emulate_foreign_item`.
-            let args = ecx.copy_fn_args(args)?; // FIXME: Should `InPlace` arguments be reset to uninit?
+            let args = ecx.copy_fn_args(args); // FIXME: Should `InPlace` arguments be reset to uninit?
             let link_name = ecx.item_link_name(instance.def_id());
             return ecx.emulate_foreign_item(link_name, abi, &args, dest, ret, unwind);
         }
@@ -970,11 +976,11 @@ impl<'mir, 'tcx> Machine<'mir, 'tcx> for MiriMachine<'mir, 'tcx> {
         fn_val: DynSym,
         abi: Abi,
         args: &[FnArg<'tcx, Provenance>],
-        dest: &PlaceTy<'tcx, Provenance>,
+        dest: &MPlaceTy<'tcx, Provenance>,
         ret: Option<mir::BasicBlock>,
         unwind: mir::UnwindAction,
     ) -> InterpResult<'tcx> {
-        let args = ecx.copy_fn_args(args)?; // FIXME: Should `InPlace` arguments be reset to uninit?
+        let args = ecx.copy_fn_args(args); // FIXME: Should `InPlace` arguments be reset to uninit?
         ecx.emulate_dyn_sym(fn_val, abi, &args, dest, ret, unwind)
     }
 
@@ -983,7 +989,7 @@ impl<'mir, 'tcx> Machine<'mir, 'tcx> for MiriMachine<'mir, 'tcx> {
         ecx: &mut MiriInterpCx<'mir, 'tcx>,
         instance: ty::Instance<'tcx>,
         args: &[OpTy<'tcx, Provenance>],
-        dest: &PlaceTy<'tcx, Provenance>,
+        dest: &MPlaceTy<'tcx, Provenance>,
         ret: Option<mir::BasicBlock>,
         unwind: mir::UnwindAction,
     ) -> InterpResult<'tcx> {
@@ -1235,6 +1241,10 @@ impl<'mir, 'tcx> Machine<'mir, 'tcx> for MiriMachine<'mir, 'tcx> {
         (alloc_id, prov_extra): (AllocId, Self::ProvenanceExtra),
         range: AllocRange,
     ) -> InterpResult<'tcx> {
+        if machine.track_alloc_accesses && machine.tracked_alloc_ids.contains(&alloc_id) {
+            machine
+                .emit_diagnostic(NonHaltingDiagnostic::AccessedAlloc(alloc_id, AccessKind::Read));
+        }
         if let Some(data_race) = &alloc_extra.data_race {
             data_race.read(alloc_id, range, machine)?;
         }
@@ -1255,6 +1265,10 @@ impl<'mir, 'tcx> Machine<'mir, 'tcx> for MiriMachine<'mir, 'tcx> {
         (alloc_id, prov_extra): (AllocId, Self::ProvenanceExtra),
         range: AllocRange,
     ) -> InterpResult<'tcx> {
+        if machine.track_alloc_accesses && machine.tracked_alloc_ids.contains(&alloc_id) {
+            machine
+                .emit_diagnostic(NonHaltingDiagnostic::AccessedAlloc(alloc_id, AccessKind::Write));
+        }
         if let Some(data_race) = &mut alloc_extra.data_race {
             data_race.write(alloc_id, range, machine)?;
         }
@@ -1319,18 +1333,12 @@ impl<'mir, 'tcx> Machine<'mir, 'tcx> for MiriMachine<'mir, 'tcx> {
 
     fn protect_in_place_function_argument(
         ecx: &mut InterpCx<'mir, 'tcx, Self>,
-        place: &PlaceTy<'tcx, Provenance>,
+        place: &MPlaceTy<'tcx, Provenance>,
     ) -> InterpResult<'tcx> {
         // If we have a borrow tracker, we also have it set up protection so that all reads *and
         // writes* during this call are insta-UB.
         let protected_place = if ecx.machine.borrow_tracker.is_some() {
-            // Have to do `to_op` first because a `Place::Local` doesn't imply the local doesn't have an address.
-            if let Either::Left(place) = ecx.place_to_op(place)?.as_mplace_or_imm() {
-                ecx.protect_place(&place)?.into()
-            } else {
-                // Locals that don't have their address taken are as protected as they can ever be.
-                place.clone()
-            }
+            ecx.protect_place(&place)?.into()
         } else {
             // No borrow tracker.
             place.clone()

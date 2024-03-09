@@ -574,6 +574,8 @@ pub const fn null_mut<T: ?Sized + Thin>() -> *mut T {
 
 /// Creates a pointer with the given address and no provenance.
 ///
+/// This is equivalent to `ptr::null().with_addr(addr)`.
+///
 /// Without provenance, this pointer is not associated with any actual allocation. Such a
 /// no-provenance pointer may be used for zero-sized memory accesses (if suitably aligned), but
 /// non-zero-sized memory accesses with a no-provenance pointer are UB. No-provenance pointers are
@@ -615,6 +617,8 @@ pub const fn dangling<T>() -> *const T {
 }
 
 /// Creates a pointer with the given address and no provenance.
+///
+/// This is equivalent to `ptr::null_mut().with_addr(addr)`.
 ///
 /// Without provenance, this pointer is not associated with any actual allocation. Such a
 /// no-provenance pointer may be used for zero-sized memory accesses (if suitably aligned), but
@@ -792,6 +796,17 @@ pub const fn from_mut<T: ?Sized>(r: &mut T) -> *mut T {
 /// let slice = ptr::slice_from_raw_parts(raw_pointer, 3);
 /// assert_eq!(unsafe { &*slice }[2], 7);
 /// ```
+///
+/// You must ensure that the pointer is valid and not null before dereferencing
+/// the raw slice. A slice reference must never have a null pointer, even if it's empty.
+///
+/// ```rust,should_panic
+/// use std::ptr;
+/// let danger: *const [u8] = ptr::slice_from_raw_parts(ptr::null(), 0);
+/// unsafe {
+///     danger.as_ref().expect("references must not be null");
+/// }
+/// ```
 #[inline]
 #[stable(feature = "slice_from_raw_parts", since = "1.42.0")]
 #[rustc_const_stable(feature = "const_slice_from_raw_parts", since = "1.64.0")]
@@ -801,10 +816,12 @@ pub const fn slice_from_raw_parts<T>(data: *const T, len: usize) -> *const [T] {
     from_raw_parts(data.cast(), len)
 }
 
+/// Forms a raw mutable slice from a pointer and a length.
+///
+/// The `len` argument is the number of **elements**, not the number of bytes.
+///
 /// Performs the same functionality as [`slice_from_raw_parts`], except that a
 /// raw mutable slice is returned, as opposed to a raw immutable slice.
-///
-/// See the documentation of [`slice_from_raw_parts`] for more details.
 ///
 /// This function is safe, but actually using the return value is unsafe.
 /// See the documentation of [`slice::from_raw_parts_mut`] for slice safety requirements.
@@ -825,6 +842,17 @@ pub const fn slice_from_raw_parts<T>(data: *const T, len: usize) -> *const [T] {
 /// };
 ///
 /// assert_eq!(unsafe { &*slice }[2], 99);
+/// ```
+///
+/// You must ensure that the pointer is valid and not null before dereferencing
+/// the raw slice. A slice reference must never have a null pointer, even if it's empty.
+///
+/// ```rust,should_panic
+/// use std::ptr;
+/// let danger: *mut [u8] = ptr::slice_from_raw_parts_mut(ptr::null_mut(), 0);
+/// unsafe {
+///     danger.as_mut().expect("references must not be null");
+/// }
 /// ```
 #[inline]
 #[stable(feature = "slice_from_raw_parts", since = "1.42.0")]
@@ -991,6 +1019,7 @@ pub const unsafe fn swap_nonoverlapping<T>(x: *mut T, y: *mut T, count: usize) {
         };
     }
 
+    #[cfg_attr(not(bootstrap), allow(unused_unsafe))] // on bootstrap bump, remove unsafe block
     // SAFETY: the caller must guarantee that `x` and `y` are
     // valid for writes and properly aligned.
     unsafe {
@@ -2071,11 +2100,16 @@ impl<F: FnPtr> fmt::Debug for F {
 /// as all other references. This macro can create a raw pointer *without* creating
 /// a reference first.
 ///
-/// The `expr` in `addr_of!(expr)` is evaluated as a place expression, but never loads
-/// from the place or requires the place to be dereferenceable. This means that
-/// `addr_of!(*ptr)` is defined behavior even if `ptr` is null, dangling, or misaligned.
-/// Note however that `addr_of!((*ptr).field)` still requires the projection to
-/// `field` to be in-bounds, using the same rules as [`offset`].
+/// See [`addr_of_mut`] for how to create a pointer to uninitialized data.
+/// Doing that with `addr_of` would not make much sense since one could only
+/// read the data, and that would be Undefined Behavior.
+///
+/// # Safety
+///
+/// The `expr` in `addr_of!(expr)` is evaluated as a place expression, but never loads from the
+/// place or requires the place to be dereferenceable. This means that `addr_of!((*ptr).field)`
+/// still requires the projection to `field` to be in-bounds, using the same rules as [`offset`].
+/// However, `addr_of!(*ptr)` is defined behavior even if `ptr` is null, dangling, or misaligned.
 ///
 /// Note that `Deref`/`Index` coercions (and their mutable counterparts) are applied inside
 /// `addr_of!` like everywhere else, in which case a reference is created to call `Deref::deref` or
@@ -2085,6 +2119,8 @@ impl<F: FnPtr> fmt::Debug for F {
 /// [`offset`]: pointer::offset
 ///
 /// # Example
+///
+/// **Correct usage: Creating a pointer to unaligned data**
 ///
 /// ```
 /// use std::ptr;
@@ -2101,9 +2137,27 @@ impl<F: FnPtr> fmt::Debug for F {
 /// assert_eq!(unsafe { raw_f2.read_unaligned() }, 2);
 /// ```
 ///
-/// See [`addr_of_mut`] for how to create a pointer to uninitialized data.
-/// Doing that with `addr_of` would not make much sense since one could only
-/// read the data, and that would be Undefined Behavior.
+/// **Incorrect usage: Out-of-bounds fields projection**
+///
+/// ```rust,no_run
+/// use std::ptr;
+///
+/// #[repr(C)]
+/// struct MyStruct {
+///     field1: i32,
+///     field2: i32,
+/// }
+///
+/// let ptr: *const MyStruct = ptr::null();
+/// let fieldptr = unsafe { ptr::addr_of!((*ptr).field2) }; // Undefined Behavior ⚠️
+/// ```
+///
+/// The field projection `.field2` would offset the pointer by 4 bytes,
+/// but the pointer is not in-bounds of an allocation for 4 bytes,
+/// so this offset is Undefined Behavior.
+/// See the [`offset`] docs for a full list of requirements for inbounds pointer arithmetic; the
+/// same requirements apply to field projections, even inside `addr_of!`. (In particular, it makes
+/// no difference whether the pointer is null or dangling.)
 #[stable(feature = "raw_ref_macros", since = "1.51.0")]
 #[rustc_macro_transparency = "semitransparent"]
 #[allow_internal_unstable(raw_ref_op)]
@@ -2120,11 +2174,12 @@ pub macro addr_of($place:expr) {
 /// as all other references. This macro can create a raw pointer *without* creating
 /// a reference first.
 ///
-/// The `expr` in `addr_of_mut!(expr)` is evaluated as a place expression, but never loads
-/// from the place or requires the place to be dereferenceable. This means that
-/// `addr_of_mut!(*ptr)` is defined behavior even if `ptr` is null, dangling, or misaligned.
-/// Note however that `addr_of_mut!((*ptr).field)` still requires the projection to
-/// `field` to be in-bounds, using the same rules as [`offset`].
+/// # Safety
+///
+/// The `expr` in `addr_of_mut!(expr)` is evaluated as a place expression, but never loads from the
+/// place or requires the place to be dereferenceable. This means that `addr_of_mut!((*ptr).field)`
+/// still requires the projection to `field` to be in-bounds, using the same rules as [`offset`].
+/// However, `addr_of_mut!(*ptr)` is defined behavior even if `ptr` is null, dangling, or misaligned.
 ///
 /// Note that `Deref`/`Index` coercions (and their mutable counterparts) are applied inside
 /// `addr_of_mut!` like everywhere else, in which case a reference is created to call `Deref::deref`
@@ -2135,7 +2190,7 @@ pub macro addr_of($place:expr) {
 ///
 /// # Examples
 ///
-/// **Creating a pointer to unaligned data:**
+/// **Correct usage: Creating a pointer to unaligned data**
 ///
 /// ```
 /// use std::ptr;
@@ -2153,7 +2208,7 @@ pub macro addr_of($place:expr) {
 /// assert_eq!({packed.f2}, 42); // `{...}` forces copying the field instead of creating a reference.
 /// ```
 ///
-/// **Creating a pointer to uninitialized data:**
+/// **Correct usage: Creating a pointer to uninitialized data**
 ///
 /// ```rust
 /// use std::{ptr, mem::MaybeUninit};
@@ -2169,6 +2224,28 @@ pub macro addr_of($place:expr) {
 /// unsafe { f1_ptr.write(true); }
 /// let init = unsafe { uninit.assume_init() };
 /// ```
+///
+/// **Incorrect usage: Out-of-bounds fields projection**
+///
+/// ```rust,no_run
+/// use std::ptr;
+///
+/// #[repr(C)]
+/// struct MyStruct {
+///     field1: i32,
+///     field2: i32,
+/// }
+///
+/// let ptr: *mut MyStruct = ptr::null_mut();
+/// let fieldptr = unsafe { ptr::addr_of_mut!((*ptr).field2) }; // Undefined Behavior ⚠️
+/// ```
+///
+/// The field projection `.field2` would offset the pointer by 4 bytes,
+/// but the pointer is not in-bounds of an allocation for 4 bytes,
+/// so this offset is Undefined Behavior.
+/// See the [`offset`] docs for a full list of requirements for inbounds pointer arithmetic; the
+/// same requirements apply to field projections, even inside `addr_of_mut!`. (In particular, it
+/// makes no difference whether the pointer is null or dangling.)
 #[stable(feature = "raw_ref_macros", since = "1.51.0")]
 #[rustc_macro_transparency = "semitransparent"]
 #[allow_internal_unstable(raw_ref_op)]

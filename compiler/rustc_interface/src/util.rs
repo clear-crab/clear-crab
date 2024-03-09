@@ -9,7 +9,7 @@ use rustc_parse::validate_attr;
 use rustc_session as session;
 use rustc_session::config::{self, Cfg, CrateType, OutFileName, OutputFilenames, OutputTypes};
 use rustc_session::filesearch::sysroot_candidates;
-use rustc_session::lint::{self, BuiltinLintDiagnostics, LintBuffer};
+use rustc_session::lint::{self, BuiltinLintDiag, LintBuffer};
 use rustc_session::{filesearch, output, Session};
 use rustc_span::edit_distance::find_best_match_for_name;
 use rustc_span::edition::Edition;
@@ -101,10 +101,11 @@ pub(crate) fn run_in_thread_pool_with_globals<F: FnOnce() -> R + Send, R: Send>(
     threads: usize,
     f: F,
 ) -> R {
-    use rustc_data_structures::{jobserver, sync::FromDyn};
+    use rustc_data_structures::{defer, jobserver, sync::FromDyn};
     use rustc_middle::ty::tls;
     use rustc_query_impl::QueryCtxt;
-    use rustc_query_system::query::{deadlock, QueryContext};
+    use rustc_query_system::query::{break_query_cycles, QueryContext};
+    use std::process;
 
     let registry = sync::Registry::new(std::num::NonZero::new(threads).unwrap());
 
@@ -128,7 +129,19 @@ pub(crate) fn run_in_thread_pool_with_globals<F: FnOnce() -> R + Send, R: Send>(
             let query_map =
                 FromDyn::from(tls::with(|tcx| QueryCtxt::new(tcx).collect_active_jobs()));
             let registry = rayon_core::Registry::current();
-            thread::spawn(move || deadlock(query_map.into_inner(), &registry));
+            thread::Builder::new()
+                .name("rustc query cycle handler".to_string())
+                .spawn(move || {
+                    let on_panic = defer(|| {
+                        eprintln!("query cycle handler thread panicked, aborting process");
+                        // We need to abort here as we failed to resolve the deadlock,
+                        // otherwise the compiler could just hang,
+                        process::abort();
+                    });
+                    break_query_cycles(query_map.into_inner(), &registry);
+                    on_panic.disable();
+                })
+                .unwrap();
         });
     if let Some(size) = get_stack_size() {
         builder = builder.stack_size(size);
@@ -160,6 +173,7 @@ pub(crate) fn run_in_thread_pool_with_globals<F: FnOnce() -> R + Send, R: Send>(
     })
 }
 
+#[allow(rustc::untranslatable_diagnostic)] // FIXME: make this translatable
 fn load_backend_from_dylib(early_dcx: &EarlyDiagCtxt, path: &Path) -> MakeBackendFn {
     match unsafe { load_symbol_from_dylib::<MakeBackendFn>(path, "__rustc_codegen_backend") } {
         Ok(backend_sym) => backend_sym,
@@ -227,6 +241,7 @@ fn get_rustc_path_inner(bin_path: &str) -> Option<PathBuf> {
     })
 }
 
+#[allow(rustc::untranslatable_diagnostic)] // FIXME: make this translatable
 fn get_codegen_sysroot(
     early_dcx: &EarlyDiagCtxt,
     maybe_sysroot: &Option<PathBuf>,
@@ -319,6 +334,7 @@ fn get_codegen_sysroot(
     }
 }
 
+#[allow(rustc::untranslatable_diagnostic)] // FIXME: make this translatable
 pub(crate) fn check_attr_crate_type(
     sess: &Session,
     attrs: &[ast::Attribute],
@@ -345,7 +361,7 @@ pub(crate) fn check_attr_crate_type(
                             ast::CRATE_NODE_ID,
                             span,
                             "invalid `crate_type` value",
-                            BuiltinLintDiagnostics::UnknownCrateTypes(
+                            BuiltinLintDiag::UnknownCrateTypes(
                                 span,
                                 "did you mean".to_string(),
                                 format!("\"{candidate}\""),
@@ -369,7 +385,7 @@ pub(crate) fn check_attr_crate_type(
                 // by the time that runs the macro is expanded, and it doesn't
                 // give an error.
                 validate_attr::emit_fatal_malformed_builtin_attribute(
-                    &sess.parse_sess,
+                    &sess.psess,
                     a,
                     sym::crate_type,
                 );

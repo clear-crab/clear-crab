@@ -23,7 +23,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
         &mut self,
         instance: ty::Instance<'tcx>,
         args: &[OpTy<'tcx, Provenance>],
-        dest: &PlaceTy<'tcx, Provenance>,
+        dest: &MPlaceTy<'tcx, Provenance>,
         ret: Option<mir::BasicBlock>,
         _unwind: mir::UnwindAction,
     ) -> InterpResult<'tcx> {
@@ -61,7 +61,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
         // The rest jumps to `ret` immediately.
         this.emulate_intrinsic_by_name(intrinsic_name, instance.args, args, dest)?;
 
-        trace!("{:?}", this.dump_place(dest));
+        trace!("{:?}", this.dump_place(&dest.clone().into()));
         this.go_to_block(ret);
         Ok(())
     }
@@ -72,7 +72,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
         intrinsic_name: &str,
         generic_args: ty::GenericArgsRef<'tcx>,
         args: &[OpTy<'tcx, Provenance>],
-        dest: &PlaceTy<'tcx, Provenance>,
+        dest: &MPlaceTy<'tcx, Provenance>,
     ) -> InterpResult<'tcx> {
         let this = self.eval_context_mut();
 
@@ -129,6 +129,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
                 this.write_bytes_ptr(ptr, iter::repeat(val_byte).take(byte_count.bytes_usize()))?;
             }
 
+            // Memory model / provenance manipulation
             "ptr_mask" => {
                 let [ptr, mask] = check_arg_count(args)?;
 
@@ -138,6 +139,18 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriInterpCxExt<'mir, 'tcx> {
                 let masked_addr = Size::from_bytes(ptr.addr().bytes() & mask);
 
                 this.write_pointer(Pointer::new(ptr.provenance, masked_addr), dest)?;
+            }
+            "retag_box_to_raw" => {
+                let [ptr] = check_arg_count(args)?;
+                let alloc_ty = generic_args[1].expect_ty();
+
+                let val = this.read_immediate(ptr)?;
+                let new_val = if this.machine.borrow_tracker.is_some() {
+                    this.retag_box_to_raw(&val, alloc_ty)?
+                } else {
+                    val
+                };
+                this.write_immediate(*new_val, dest)?;
             }
 
             // We want to return either `true` or `false` at random, or else something like
