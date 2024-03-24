@@ -10,6 +10,7 @@ use rustc_hir::lang_items::LangItem;
 use rustc_index::bit_set::FiniteBitSet;
 use rustc_macros::HashStable;
 use rustc_middle::ty::normalize_erasing_regions::NormalizationError;
+use rustc_span::def_id::LOCAL_CRATE;
 use rustc_span::Symbol;
 
 use std::assert_matches::assert_matches;
@@ -90,15 +91,19 @@ pub enum InstanceDef<'tcx> {
     /// and dispatch to the `FnMut::call_mut` instance for the closure.
     ClosureOnceShim { call_once: DefId, track_caller: bool },
 
-    /// `<[FnMut/Fn coroutine-closure] as FnOnce>::call_once` or
-    /// `<[Fn coroutine-closure] as FnMut>::call_mut`.
+    /// `<[FnMut/Fn coroutine-closure] as FnOnce>::call_once`
     ///
     /// The body generated here differs significantly from the `ClosureOnceShim`,
     /// since we need to generate a distinct coroutine type that will move the
     /// closure's upvars *out* of the closure.
     ConstructCoroutineInClosureShim {
         coroutine_closure_def_id: DefId,
-        target_kind: ty::ClosureKind,
+        // Whether the generated MIR body takes the coroutine by-ref. This is
+        // because the signature of `<{async fn} as FnMut>::call_mut` is:
+        // `fn(&mut self, args: A) -> <Self as FnOnce>::Output`, that is to say
+        // that it returns the `FnOnce`-flavored coroutine but takes the closure
+        // by mut ref (and similarly for `Fn::call`).
+        receiver_by_ref: bool,
     },
 
     /// `<[coroutine] as Future>::poll`, but for coroutines produced when `AsyncFnOnce`
@@ -107,7 +112,7 @@ pub enum InstanceDef<'tcx> {
     ///
     /// This will select the body that is produced by the `ByMoveBody` transform, and thus
     /// take and use all of its upvars by-move rather than by-ref.
-    CoroutineKindShim { coroutine_def_id: DefId, target_kind: ty::ClosureKind },
+    CoroutineKindShim { coroutine_def_id: DefId },
 
     /// Compiler-generated accessor for thread locals which returns a reference to the thread local
     /// the `DefId` defines. This is used to export thread locals from dylibs on platforms lacking
@@ -168,6 +173,11 @@ impl<'tcx> Instance<'tcx> {
         // If this a non-generic instance, it cannot be a shared monomorphization.
         self.args.non_erasable_generics(tcx, self.def_id()).next()?;
 
+        // compiler_builtins cannot use upstream monomorphizations.
+        if tcx.is_compiler_builtins(LOCAL_CRATE) {
+            return None;
+        }
+
         match self.def {
             InstanceDef::Item(def) => tcx
                 .upstream_monomorphizations_for(def)
@@ -192,9 +202,9 @@ impl<'tcx> InstanceDef<'tcx> {
             | InstanceDef::ClosureOnceShim { call_once: def_id, track_caller: _ }
             | ty::InstanceDef::ConstructCoroutineInClosureShim {
                 coroutine_closure_def_id: def_id,
-                target_kind: _,
+                receiver_by_ref: _,
             }
-            | ty::InstanceDef::CoroutineKindShim { coroutine_def_id: def_id, target_kind: _ }
+            | ty::InstanceDef::CoroutineKindShim { coroutine_def_id: def_id }
             | InstanceDef::DropGlue(def_id, _)
             | InstanceDef::CloneShim(def_id, _)
             | InstanceDef::FnPtrAddrShim(def_id, _) => def_id,
@@ -651,10 +661,7 @@ impl<'tcx> Instance<'tcx> {
                 Some(Instance { def: ty::InstanceDef::Item(coroutine_def_id), args })
             } else {
                 Some(Instance {
-                    def: ty::InstanceDef::CoroutineKindShim {
-                        coroutine_def_id,
-                        target_kind: args.as_coroutine().kind_ty().to_opt_closure_kind().unwrap(),
-                    },
+                    def: ty::InstanceDef::CoroutineKindShim { coroutine_def_id },
                     args,
                 })
             }

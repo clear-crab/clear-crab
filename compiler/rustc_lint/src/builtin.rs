@@ -726,7 +726,7 @@ fn type_implements_negative_copy_modulo_regions<'tcx>(
     param_env: ty::ParamEnv<'tcx>,
 ) -> bool {
     let trait_ref = ty::TraitRef::new(tcx, tcx.require_lang_item(hir::LangItem::Copy, None), [ty]);
-    let pred = ty::TraitPredicate { trait_ref, polarity: ty::ImplPolarity::Negative };
+    let pred = ty::TraitPredicate { trait_ref, polarity: ty::PredicatePolarity::Negative };
     let obligation = traits::Obligation {
         cause: traits::ObligationCause::dummy(),
         param_env,
@@ -2468,6 +2468,8 @@ impl<'tcx> LateLintPass<'tcx> for InvalidValue {
             ty: Ty<'tcx>,
             init: InitKind,
         ) -> Option<InitError> {
+            let ty = cx.tcx.try_normalize_erasing_regions(cx.param_env, ty).unwrap_or(ty);
+
             use rustc_type_ir::TyKind::*;
             match ty.kind() {
                 // Primitive types that don't like 0 as a value.
@@ -2475,7 +2477,7 @@ impl<'tcx> LateLintPass<'tcx> for InvalidValue {
                 Adt(..) if ty.is_box() => Some("`Box` must be non-null".into()),
                 FnPtr(..) => Some("function pointers must be non-null".into()),
                 Never => Some("the `!` type has no valid value".into()),
-                RawPtr(tm) if matches!(tm.ty.kind(), Dynamic(..)) =>
+                RawPtr(ty, _) if matches!(ty.kind(), Dynamic(..)) =>
                 // raw ptr to dyn Trait
                 {
                     Some("the vtable of a wide raw pointer must be non-null".into())
@@ -2491,7 +2493,7 @@ impl<'tcx> LateLintPass<'tcx> for InvalidValue {
                     Some("integers must be initialized".into())
                 }
                 Float(_) if init == InitKind::Uninit => Some("floats must be initialized".into()),
-                RawPtr(_) if init == InitKind::Uninit => {
+                RawPtr(_, _) if init == InitKind::Uninit => {
                     Some("raw pointers must be initialized".into())
                 }
                 // Recurse and checks for some compound types. (but not unions)

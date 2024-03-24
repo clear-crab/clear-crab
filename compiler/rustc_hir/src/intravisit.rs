@@ -320,7 +320,7 @@ pub trait Visitor<'v>: Sized {
     fn visit_foreign_item(&mut self, i: &'v ForeignItem<'v>) -> Self::Result {
         walk_foreign_item(self, i)
     }
-    fn visit_local(&mut self, l: &'v Local<'v>) -> Self::Result {
+    fn visit_local(&mut self, l: &'v LetStmt<'v>) -> Self::Result {
         walk_local(self, l)
     }
     fn visit_block(&mut self, b: &'v Block<'v>) -> Self::Result {
@@ -606,7 +606,7 @@ pub fn walk_foreign_item<'v, V: Visitor<'v>>(
     V::Result::output()
 }
 
-pub fn walk_local<'v, V: Visitor<'v>>(visitor: &mut V, local: &'v Local<'v>) -> V::Result {
+pub fn walk_local<'v, V: Visitor<'v>>(visitor: &mut V, local: &'v LetStmt<'v>) -> V::Result {
     // Intentionally visiting the expr first - the initialization expr
     // dominates the local's definition.
     visit_opt!(visitor, visit_expr, local.init);
@@ -660,7 +660,9 @@ pub fn walk_pat<'v, V: Visitor<'v>>(visitor: &mut V, pattern: &'v Pat<'v>) -> V:
         PatKind::Tuple(tuple_elements, _) => {
             walk_list!(visitor, visit_pat, tuple_elements);
         }
-        PatKind::Box(ref subpattern) | PatKind::Ref(ref subpattern, _) => {
+        PatKind::Box(ref subpattern)
+        | PatKind::Deref(ref subpattern)
+        | PatKind::Ref(ref subpattern, _) => {
             try_visit!(visitor.visit_pat(subpattern));
         }
         PatKind::Binding(_, _hir_id, ident, ref optional_subpattern) => {
@@ -753,7 +755,7 @@ pub fn walk_expr<'v, V: Visitor<'v>>(visitor: &mut V, expression: &'v Expr<'v>) 
         ExprKind::DropTemps(ref subexpression) => {
             try_visit!(visitor.visit_expr(subexpression));
         }
-        ExprKind::Let(Let { span: _, pat, ty, init, is_recovered: _ }) => {
+        ExprKind::Let(LetExpr { span: _, pat, ty, init, is_recovered: _ }) => {
             // match the visit order in walk_local
             try_visit!(visitor.visit_expr(init));
             try_visit!(visitor.visit_pat(pat));
@@ -899,7 +901,7 @@ pub fn walk_generic_param<'v, V: Visitor<'v>>(
         GenericParamKind::Const { ref ty, ref default, is_host_effect: _ } => {
             try_visit!(visitor.visit_ty(ty));
             if let Some(ref default) = default {
-                visitor.visit_const_param_default(param.hir_id, default);
+                try_visit!(visitor.visit_const_param_default(param.hir_id, default));
             }
         }
     }

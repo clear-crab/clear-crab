@@ -247,7 +247,7 @@ impl<'p, 'tcx: 'p> RustcPatCtxt<'p, 'tcx> {
                 _ => bug!("bad slice pattern {:?} {:?}", ctor, ty),
             },
             Bool(..) | IntRange(..) | F32Range(..) | F64Range(..) | Str(..) | Opaque(..)
-            | NonExhaustive | Hidden | Missing | PrivateUninhabited | Wildcard => &[],
+            | Never | NonExhaustive | Hidden | Missing | PrivateUninhabited | Wildcard => &[],
             Or => {
                 bug!("called `Fields::wildcards` on an `Or` ctor")
             }
@@ -275,7 +275,7 @@ impl<'p, 'tcx: 'p> RustcPatCtxt<'p, 'tcx> {
             Ref => 1,
             Slice(slice) => slice.arity(),
             Bool(..) | IntRange(..) | F32Range(..) | F64Range(..) | Str(..) | Opaque(..)
-            | NonExhaustive | Hidden | Missing | PrivateUninhabited | Wildcard => 0,
+            | Never | NonExhaustive | Hidden | Missing | PrivateUninhabited | Wildcard => 0,
             Or => bug!("The `Or` constructor doesn't have a fixed arity"),
         }
     }
@@ -398,7 +398,7 @@ impl<'p, 'tcx: 'p> RustcPatCtxt<'p, 'tcx> {
             ty::Float(_)
             | ty::Str
             | ty::Foreign(_)
-            | ty::RawPtr(_)
+            | ty::RawPtr(_, _)
             | ty::FnDef(_, _)
             | ty::FnPtr(_)
             | ty::Dynamic(_, _, _)
@@ -461,6 +461,12 @@ impl<'p, 'tcx: 'p> RustcPatCtxt<'p, 'tcx> {
                     ty::Ref(..) => Ref,
                     _ => bug!("pattern has unexpected type: pat: {:?}, ty: {:?}", pat, ty),
                 };
+            }
+            PatKind::DerefPattern { .. } => {
+                // FIXME(deref_patterns): At least detect that `box _` is irrefutable.
+                fields = vec![];
+                arity = 0;
+                ctor = Opaque(OpaqueId::new());
             }
             PatKind::Leaf { subpatterns } | PatKind::Variant { subpatterns, .. } => {
                 match ty.kind() {
@@ -824,7 +830,8 @@ impl<'p, 'tcx: 'p> RustcPatCtxt<'p, 'tcx> {
                 }
             }
             &Str(value) => PatKind::Constant { value },
-            Wildcard | NonExhaustive | Hidden | PrivateUninhabited => PatKind::Wild,
+            Never if self.tcx.features().never_patterns => PatKind::Never,
+            Never | Wildcard | NonExhaustive | Hidden | PrivateUninhabited => PatKind::Wild,
             Missing { .. } => bug!(
                 "trying to convert a `Missing` constructor into a `Pat`; this is probably a bug,
                 `Missing` should have been processed in `apply_constructors`"
@@ -873,13 +880,14 @@ impl<'p, 'tcx: 'p> PatCx for RustcPatCtxt<'p, 'tcx> {
 
     fn write_variant_name(
         f: &mut fmt::Formatter<'_>,
-        pat: &crate::pat::DeconstructedPat<Self>,
+        ctor: &crate::constructor::Constructor<Self>,
+        ty: &Self::Ty,
     ) -> fmt::Result {
-        if let ty::Adt(adt, _) = pat.ty().kind() {
+        if let ty::Adt(adt, _) = ty.kind() {
             if adt.is_box() {
                 write!(f, "Box")?
             } else {
-                let variant = adt.variant(Self::variant_index_for_adt(pat.ctor(), *adt));
+                let variant = adt.variant(Self::variant_index_for_adt(ctor, *adt));
                 write!(f, "{}", variant.name)?;
             }
         }

@@ -660,7 +660,7 @@ impl<'a> Parser<'a> {
                     // Add `>` to the list of expected tokens.
                     self.check(&token::Gt);
                     // Handle `,` to `;` substitution
-                    let mut err = self.unexpected::<()>().unwrap_err();
+                    let mut err = self.unexpected().unwrap_err();
                     self.bump();
                     err.span_suggestion_verbose(
                         self.prev_token.span.until(self.token.span),
@@ -731,8 +731,6 @@ impl<'a> Parser<'a> {
                             && matches!(args.output, ast::FnRetTy::Default(..))
                         {
                             self.psess.gated_spans.gate(sym::return_type_notation, span);
-                        } else {
-                            self.psess.gated_spans.gate(sym::associated_type_bounds, span);
                         }
                     }
                     let constraint =

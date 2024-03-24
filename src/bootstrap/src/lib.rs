@@ -50,7 +50,9 @@ mod utils;
 pub use core::builder::PathSet;
 pub use core::config::flags::Subcommand;
 pub use core::config::Config;
-pub use utils::change_tracker::{find_recent_config_change_ids, CONFIG_CHANGE_HISTORY};
+pub use utils::change_tracker::{
+    find_recent_config_change_ids, human_readable_changes, CONFIG_CHANGE_HISTORY,
+};
 
 const LLVM_TOOLS: &[&str] = &[
     "llvm-cov",      // used to generate coverage report
@@ -1007,15 +1009,23 @@ impl Build {
         let result = if !output.status.success() {
             if print_error {
                 println!(
-                    "\n\ncommand did not execute successfully: {:?}\n\
-                    expected success, got: {}\n\n\
-                    stdout ----\n{}\n\
-                    stderr ----\n{}\n\n",
-                    command.command,
+                    "\n\nCommand did not execute successfully.\
+                    \nExpected success, got: {}",
                     output.status,
-                    String::from_utf8_lossy(&output.stdout),
-                    String::from_utf8_lossy(&output.stderr)
                 );
+
+                if !self.is_verbose() {
+                    println!("Add `-v` to see more details.\n");
+                }
+
+                self.verbose(|| {
+                    println!(
+                        "\nSTDOUT ----\n{}\n\
+                        STDERR ----\n{}\n",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    )
+                });
             }
             Err(())
         } else {
@@ -1387,6 +1397,13 @@ impl Build {
         if let Some(path) = finder.maybe_have("wasmtime") {
             if let Ok(mut path) = path.into_os_string().into_string() {
                 path.push_str(" run -C cache=n --dir .");
+                // Make sure that tests have access to RUSTC_BOOTSTRAP. This (for example) is
+                // required for libtest to work on beta/stable channels.
+                //
+                // NB: with Wasmtime 20 this can change to `-S inherit-env` to
+                // inherit the entire environment rather than just this single
+                // environment variable.
+                path.push_str(" --env RUSTC_BOOTSTRAP");
                 return Some(path);
             }
         }
@@ -1646,16 +1663,19 @@ impl Build {
         paths
     }
 
-    /// Copies a file from `src` to `dst`
-    pub fn copy(&self, src: &Path, dst: &Path) {
-        self.copy_internal(src, dst, false);
+    /// Links a file from `src` to `dst`.
+    /// Attempts to use hard links if possible, falling back to copying.
+    /// You can neither rely on this being a copy nor it being a link,
+    /// so do not write to dst.
+    pub fn copy_link(&self, src: &Path, dst: &Path) {
+        self.copy_link_internal(src, dst, false);
     }
 
-    fn copy_internal(&self, src: &Path, dst: &Path, dereference_symlinks: bool) {
+    fn copy_link_internal(&self, src: &Path, dst: &Path, dereference_symlinks: bool) {
         if self.config.dry_run() {
             return;
         }
-        self.verbose_than(1, || println!("Copy {src:?} to {dst:?}"));
+        self.verbose_than(1, || println!("Copy/Link {src:?} to {dst:?}"));
         if src == dst {
             return;
         }
@@ -1686,9 +1706,10 @@ impl Build {
         }
     }
 
-    /// Copies the `src` directory recursively to `dst`. Both are assumed to exist
+    /// Links the `src` directory recursively to `dst`. Both are assumed to exist
     /// when this function is called.
-    pub fn cp_r(&self, src: &Path, dst: &Path) {
+    /// Will attempt to use hard links if possible and fall back to copying.
+    pub fn cp_link_r(&self, src: &Path, dst: &Path) {
         if self.config.dry_run() {
             return;
         }
@@ -1698,24 +1719,31 @@ impl Build {
             let dst = dst.join(name);
             if t!(f.file_type()).is_dir() {
                 t!(fs::create_dir_all(&dst));
-                self.cp_r(&path, &dst);
+                self.cp_link_r(&path, &dst);
             } else {
-                let _ = fs::remove_file(&dst);
-                self.copy(&path, &dst);
+                self.copy_link(&path, &dst);
             }
         }
     }
 
     /// Copies the `src` directory recursively to `dst`. Both are assumed to exist
-    /// when this function is called. Unwanted files or directories can be skipped
+    /// when this function is called.
+    /// Will attempt to use hard links if possible and fall back to copying.
+    /// Unwanted files or directories can be skipped
     /// by returning `false` from the filter function.
-    pub fn cp_filtered(&self, src: &Path, dst: &Path, filter: &dyn Fn(&Path) -> bool) {
+    pub fn cp_link_filtered(&self, src: &Path, dst: &Path, filter: &dyn Fn(&Path) -> bool) {
         // Immediately recurse with an empty relative path
-        self.recurse_(src, dst, Path::new(""), filter)
+        self.cp_link_filtered_recurse(src, dst, Path::new(""), filter)
     }
 
     // Inner function does the actual work
-    fn recurse_(&self, src: &Path, dst: &Path, relative: &Path, filter: &dyn Fn(&Path) -> bool) {
+    fn cp_link_filtered_recurse(
+        &self,
+        src: &Path,
+        dst: &Path,
+        relative: &Path,
+        filter: &dyn Fn(&Path) -> bool,
+    ) {
         for f in self.read_dir(src) {
             let path = f.path();
             let name = path.file_name().unwrap();
@@ -1726,19 +1754,19 @@ impl Build {
                 if t!(f.file_type()).is_dir() {
                     let _ = fs::remove_dir_all(&dst);
                     self.create_dir(&dst);
-                    self.recurse_(&path, &dst, &relative, filter);
+                    self.cp_link_filtered_recurse(&path, &dst, &relative, filter);
                 } else {
                     let _ = fs::remove_file(&dst);
-                    self.copy(&path, &dst);
+                    self.copy_link(&path, &dst);
                 }
             }
         }
     }
 
-    fn copy_to_folder(&self, src: &Path, dest_folder: &Path) {
+    fn copy_link_to_folder(&self, src: &Path, dest_folder: &Path) {
         let file_name = src.file_name().unwrap();
         let dest = dest_folder.join(file_name);
-        self.copy(src, &dest);
+        self.copy_link(src, &dest);
     }
 
     fn install(&self, src: &Path, dstdir: &Path, perms: u32) {
@@ -1751,7 +1779,7 @@ impl Build {
         if !src.exists() {
             panic!("ERROR: File \"{}\" not found!", src.display());
         }
-        self.copy_internal(src, &dst, true);
+        self.copy_link_internal(src, &dst, true);
         chmod(&dst, perms);
     }
 

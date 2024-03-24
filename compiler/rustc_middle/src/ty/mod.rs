@@ -280,23 +280,43 @@ pub enum ImplPolarity {
     Reservation,
 }
 
-impl ImplPolarity {
-    /// Flips polarity by turning `Positive` into `Negative` and `Negative` into `Positive`.
-    pub fn flip(&self) -> Option<ImplPolarity> {
-        match self {
-            ImplPolarity::Positive => Some(ImplPolarity::Negative),
-            ImplPolarity::Negative => Some(ImplPolarity::Positive),
-            ImplPolarity::Reservation => None,
-        }
-    }
-}
-
 impl fmt::Display for ImplPolarity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Positive => f.write_str("positive"),
             Self::Negative => f.write_str("negative"),
             Self::Reservation => f.write_str("reservation"),
+        }
+    }
+}
+
+/// Polarity for a trait predicate. May either be negative or positive.
+/// Distinguished from [`ImplPolarity`] since we never compute goals with
+/// "reservation" level.
+#[derive(Copy, Clone, PartialEq, Eq, Hash, TyEncodable, TyDecodable, HashStable, Debug)]
+#[derive(TypeFoldable, TypeVisitable)]
+pub enum PredicatePolarity {
+    /// `Type: Trait`
+    Positive,
+    /// `Type: !Trait`
+    Negative,
+}
+
+impl PredicatePolarity {
+    /// Flips polarity by turning `Positive` into `Negative` and `Negative` into `Positive`.
+    pub fn flip(&self) -> PredicatePolarity {
+        match self {
+            PredicatePolarity::Positive => PredicatePolarity::Negative,
+            PredicatePolarity::Negative => PredicatePolarity::Positive,
+        }
+    }
+}
+
+impl fmt::Display for PredicatePolarity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Positive => f.write_str("positive"),
+            Self::Negative => f.write_str("negative"),
         }
     }
 }
@@ -1752,9 +1772,8 @@ impl<'tcx> TyCtxt<'tcx> {
         let filter_fn = move |a: &&ast::Attribute| a.has_name(attr);
         if let Some(did) = did.as_local() {
             self.hir().attrs(self.local_def_id_to_hir_id(did)).iter().filter(filter_fn)
-        } else if cfg!(debug_assertions) && rustc_feature::is_builtin_only_local(attr) {
-            bug!("tried to access the `only_local` attribute `{}` from an extern crate", attr);
         } else {
+            debug_assert!(rustc_feature::encode_cross_crate(attr));
             self.item_attrs(did).iter().filter(filter_fn)
         }
     }
@@ -1786,12 +1805,7 @@ impl<'tcx> TyCtxt<'tcx> {
 
     /// Determines whether an item is annotated with an attribute.
     pub fn has_attr(self, did: impl Into<DefId>, attr: Symbol) -> bool {
-        let did: DefId = did.into();
-        if cfg!(debug_assertions) && !did.is_local() && rustc_feature::is_builtin_only_local(attr) {
-            bug!("tried to access the `only_local` attribute `{}` from an extern crate", attr);
-        } else {
-            self.get_attrs(did, attr).next().is_some()
-        }
+        self.get_attrs(did, attr).next().is_some()
     }
 
     /// Returns `true` if this is an `auto trait`.

@@ -82,21 +82,21 @@ fn disable_error_reporting<F: FnOnce() -> R, R>(f: F) -> R {
 }
 
 /// The platform-specific library name
-pub fn get_lib_name(lib: &str, dylib: bool) -> String {
-    // In some casess (e.g. MUSL), we build a static
-    // library, rather than a dynamic library.
-    // In this case, the only path we can pass
-    // with '--extern-meta' is the '.lib' file
-    if !dylib {
-        return format!("lib{}.rlib", lib);
-    }
-
-    if cfg!(windows) {
-        format!("{}.dll", lib)
-    } else if cfg!(target_os = "macos") {
-        format!("lib{}.dylib", lib)
-    } else {
-        format!("lib{}.so", lib)
+fn get_lib_name(lib: &str, aux_type: AuxType) -> Option<String> {
+    match aux_type {
+        AuxType::Bin => None,
+        // In some cases (e.g. MUSL), we build a static
+        // library, rather than a dynamic library.
+        // In this case, the only path we can pass
+        // with '--extern-meta' is the '.rlib' file
+        AuxType::Lib => Some(format!("lib{}.rlib", lib)),
+        AuxType::Dylib => Some(if cfg!(windows) {
+            format!("{}.dll", lib)
+        } else if cfg!(target_os = "macos") {
+            format!("lib{}.dylib", lib)
+        } else {
+            format!("lib{}.so", lib)
+        }),
     }
 }
 
@@ -196,6 +196,11 @@ pub fn compute_stamp_hash(config: &Config) -> String {
     }
 
     format!("{:x}", hash.finish())
+}
+
+fn remove_and_create_dir_all(path: &Path) {
+    let _ = fs::remove_dir_all(path);
+    fs::create_dir_all(path).unwrap();
 }
 
 #[derive(Copy, Clone)]
@@ -998,8 +1003,7 @@ impl<'test> TestCx<'test> {
         let mut rustc = Command::new(&self.config.rustc_path);
 
         let out_dir = self.output_base_name().with_extension("pretty-out");
-        let _ = fs::remove_dir_all(&out_dir);
-        create_dir_all(&out_dir).unwrap();
+        remove_and_create_dir_all(&out_dir);
 
         let target = if self.props.force_host { &*self.config.host } else { &*self.config.target };
 
@@ -1466,49 +1470,16 @@ impl<'test> TestCx<'test> {
         // Switch LLDB into "Rust mode"
         let rust_src_root =
             self.config.find_rust_src_root().expect("Could not find Rust source root");
-        let rust_pp_module_rel_path = Path::new("./src/etc/lldb_lookup.py");
-        let rust_pp_module_abs_path =
-            rust_src_root.join(rust_pp_module_rel_path).to_str().unwrap().to_owned();
+        let rust_pp_module_rel_path = Path::new("./src/etc");
+        let rust_pp_module_abs_path = rust_src_root.join(rust_pp_module_rel_path);
 
-        let rust_type_regexes = vec![
-            "^(alloc::([a-z_]+::)+)String$",
-            "^&(mut )?str$",
-            "^&(mut )?\\[.+\\]$",
-            "^(std::ffi::([a-z_]+::)+)OsString$",
-            "^(alloc::([a-z_]+::)+)Vec<.+>$",
-            "^(alloc::([a-z_]+::)+)VecDeque<.+>$",
-            "^(alloc::([a-z_]+::)+)BTreeSet<.+>$",
-            "^(alloc::([a-z_]+::)+)BTreeMap<.+>$",
-            "^(std::collections::([a-z_]+::)+)HashMap<.+>$",
-            "^(std::collections::([a-z_]+::)+)HashSet<.+>$",
-            "^(alloc::([a-z_]+::)+)Rc<.+>$",
-            "^(alloc::([a-z_]+::)+)Arc<.+>$",
-            "^(core::([a-z_]+::)+)Cell<.+>$",
-            "^(core::([a-z_]+::)+)Ref<.+>$",
-            "^(core::([a-z_]+::)+)RefMut<.+>$",
-            "^(core::([a-z_]+::)+)RefCell<.+>$",
-            "^core::num::([a-z_]+::)*NonZero.+$",
-        ];
-
-        // In newer versions of lldb, persistent results (the `$N =` part at the start of
-        // expressions you have evaluated that let you re-use the result) aren't printed, but lots
-        // of rustc's debuginfo tests rely on these, so re-enable this.
-        // See <https://reviews.llvm.org/rG385496385476fc9735da5fa4acabc34654e8b30d>.
-        script_str.push_str("command unalias print\n");
-        script_str.push_str("command alias print expr --\n");
-        script_str.push_str("command unalias p\n");
-        script_str.push_str("command alias p expr --\n");
-
-        script_str
-            .push_str(&format!("command script import {}\n", &rust_pp_module_abs_path[..])[..]);
-        script_str.push_str("type synthetic add -l lldb_lookup.synthetic_lookup -x '.*' ");
-        script_str.push_str("--category Rust\n");
-        for type_regex in rust_type_regexes {
-            script_str.push_str("type summary add -F lldb_lookup.summary_lookup  -e -x -h ");
-            script_str.push_str(&format!("'{}' ", type_regex));
-            script_str.push_str("--category Rust\n");
-        }
-        script_str.push_str("type category enable Rust\n");
+        script_str.push_str(&format!(
+            "command script import {}/lldb_lookup.py\n",
+            rust_pp_module_abs_path.to_str().unwrap()
+        ));
+        File::open(rust_pp_module_abs_path.join("lldb_commands"))
+            .and_then(|mut file| file.read_to_string(&mut script_str))
+            .expect("Failed to read lldb_commands");
 
         // Set breakpoints on every line that contains the string "#break"
         let source_file_name = self.testpaths.file.file_name().unwrap().to_string_lossy();
@@ -2127,8 +2098,12 @@ impl<'test> TestCx<'test> {
         let aux_dir = self.aux_output_dir_name();
 
         if !self.props.aux_builds.is_empty() {
-            let _ = fs::remove_dir_all(&aux_dir);
-            create_dir_all(&aux_dir).unwrap();
+            remove_and_create_dir_all(&aux_dir);
+        }
+
+        if !self.props.aux_bins.is_empty() {
+            let aux_bin_dir = self.aux_bin_output_dir_name();
+            remove_and_create_dir_all(&aux_bin_dir);
         }
 
         aux_dir
@@ -2136,14 +2111,25 @@ impl<'test> TestCx<'test> {
 
     fn build_all_auxiliary(&self, of: &TestPaths, aux_dir: &Path, rustc: &mut Command) {
         for rel_ab in &self.props.aux_builds {
-            self.build_auxiliary(of, rel_ab, &aux_dir);
+            self.build_auxiliary(of, rel_ab, &aux_dir, false /* is_bin */);
+        }
+
+        for rel_ab in &self.props.aux_bins {
+            self.build_auxiliary(of, rel_ab, &aux_dir, true /* is_bin */);
         }
 
         for (aux_name, aux_path) in &self.props.aux_crates {
-            let is_dylib = self.build_auxiliary(of, &aux_path, &aux_dir);
+            let aux_type = self.build_auxiliary(of, &aux_path, &aux_dir, false /* is_bin */);
             let lib_name =
-                get_lib_name(&aux_path.trim_end_matches(".rs").replace('-', "_"), is_dylib);
-            rustc.arg("--extern").arg(format!("{}={}/{}", aux_name, aux_dir.display(), lib_name));
+                get_lib_name(&aux_path.trim_end_matches(".rs").replace('-', "_"), aux_type);
+            if let Some(lib_name) = lib_name {
+                rustc.arg("--extern").arg(format!(
+                    "{}={}/{}",
+                    aux_name,
+                    aux_dir.display(),
+                    lib_name
+                ));
+            }
         }
     }
 
@@ -2162,12 +2148,23 @@ impl<'test> TestCx<'test> {
     }
 
     /// Builds an aux dependency.
-    ///
-    /// Returns whether or not it is a dylib.
-    fn build_auxiliary(&self, of: &TestPaths, source_path: &str, aux_dir: &Path) -> bool {
+    fn build_auxiliary(
+        &self,
+        of: &TestPaths,
+        source_path: &str,
+        aux_dir: &Path,
+        is_bin: bool,
+    ) -> AuxType {
         let aux_testpaths = self.compute_aux_test_paths(of, source_path);
         let aux_props = self.props.from_aux_file(&aux_testpaths.file, self.revision, self.config);
-        let aux_output = TargetLocation::ThisDirectory(aux_dir.to_path_buf());
+        let mut aux_dir = aux_dir.to_path_buf();
+        if is_bin {
+            // On unix, the binary of `auxiliary/foo.rs` will be named
+            // `auxiliary/foo` which clashes with the _dir_ `auxiliary/foo`, so
+            // put bins in a `bin` subfolder.
+            aux_dir.push("bin");
+        }
+        let aux_output = TargetLocation::ThisDirectory(aux_dir.clone());
         let aux_cx = TestCx {
             config: self.config,
             props: &aux_props,
@@ -2185,15 +2182,17 @@ impl<'test> TestCx<'test> {
             LinkToAux::No,
             Vec::new(),
         );
-        aux_cx.build_all_auxiliary(of, aux_dir, &mut aux_rustc);
+        aux_cx.build_all_auxiliary(of, &aux_dir, &mut aux_rustc);
 
         for key in &aux_props.unset_rustc_env {
             aux_rustc.env_remove(key);
         }
         aux_rustc.envs(aux_props.rustc_env.clone());
 
-        let (dylib, crate_type) = if aux_props.no_prefer_dynamic {
-            (true, None)
+        let (aux_type, crate_type) = if is_bin {
+            (AuxType::Bin, Some("bin"))
+        } else if aux_props.no_prefer_dynamic {
+            (AuxType::Dylib, None)
         } else if self.config.target.contains("emscripten")
             || (self.config.target.contains("musl")
                 && !aux_props.force_host
@@ -2218,9 +2217,9 @@ impl<'test> TestCx<'test> {
             // Coverage tests want static linking by default so that coverage
             // mappings in auxiliary libraries can be merged into the final
             // executable.
-            (false, Some("lib"))
+            (AuxType::Lib, Some("lib"))
         } else {
-            (true, Some("dylib"))
+            (AuxType::Dylib, Some("dylib"))
         };
 
         if let Some(crate_type) = crate_type {
@@ -2244,7 +2243,7 @@ impl<'test> TestCx<'test> {
                 &auxres,
             );
         }
-        dylib
+        aux_type
     }
 
     fn read2_abbreviated(&self, child: Child) -> (Output, Truncated) {
@@ -2472,8 +2471,7 @@ impl<'test> TestCx<'test> {
                 }
 
                 let mir_dump_dir = self.get_mir_dump_dir();
-                let _ = fs::remove_dir_all(&mir_dump_dir);
-                create_dir_all(mir_dump_dir.as_path()).unwrap();
+                remove_and_create_dir_all(&mir_dump_dir);
                 let mut dir_opt = "-Zdump-mir-dir=".to_string();
                 dir_opt.push_str(mir_dump_dir.to_str().unwrap());
                 debug!("dir_opt: {:?}", dir_opt);
@@ -2708,6 +2706,12 @@ impl<'test> TestCx<'test> {
         self.output_base_dir()
             .join("auxiliary")
             .with_extra_extension(self.config.mode.aux_dir_disambiguator())
+    }
+
+    /// Gets the directory where auxiliary binaries are written.
+    /// E.g., `/.../testname.revision.mode/auxiliary/bin`.
+    fn aux_bin_output_dir_name(&self) -> PathBuf {
+        self.aux_output_dir_name().join("bin")
     }
 
     /// Generates a unique name for the test, such as `testname.revision.mode`.
@@ -2948,8 +2952,7 @@ impl<'test> TestCx<'test> {
         assert!(self.revision.is_none(), "revisions not relevant here");
 
         let out_dir = self.output_base_dir();
-        let _ = fs::remove_dir_all(&out_dir);
-        create_dir_all(&out_dir).unwrap();
+        remove_and_create_dir_all(&out_dir);
 
         let proc_res = self.document(&out_dir);
         if !proc_res.status.success() {
@@ -2983,9 +2986,7 @@ impl<'test> TestCx<'test> {
         let suffix =
             self.safe_revision().map_or("nightly".into(), |path| path.to_owned() + "-nightly");
         let compare_dir = output_base_dir(self.config, self.testpaths, Some(&suffix));
-        // Don't give an error if the directory didn't already exist
-        let _ = fs::remove_dir_all(&compare_dir);
-        create_dir_all(&compare_dir).unwrap();
+        remove_and_create_dir_all(&compare_dir);
 
         // We need to create a new struct for the lifetimes on `config` to work.
         let new_rustdoc = TestCx {
@@ -3134,8 +3135,7 @@ impl<'test> TestCx<'test> {
         assert!(self.revision.is_none(), "revisions not relevant here");
 
         let out_dir = self.output_base_dir();
-        let _ = fs::remove_dir_all(&out_dir);
-        create_dir_all(&out_dir).unwrap();
+        remove_and_create_dir_all(&out_dir);
 
         let proc_res = self.document(&out_dir);
         if !proc_res.status.success() {
@@ -3767,36 +3767,42 @@ impl<'test> TestCx<'test> {
         debug!(?support_lib_deps);
         debug!(?support_lib_deps_deps);
 
-        let res = self.cmd2procres(
-            Command::new(&self.config.rustc_path)
-                .arg("-o")
-                .arg(&recipe_bin)
-                .arg(format!(
-                    "-Ldependency={}",
-                    &support_lib_path.parent().unwrap().to_string_lossy()
-                ))
-                .arg(format!("-Ldependency={}", &support_lib_deps.to_string_lossy()))
-                .arg(format!("-Ldependency={}", &support_lib_deps_deps.to_string_lossy()))
-                .arg("--extern")
-                .arg(format!("run_make_support={}", &support_lib_path.to_string_lossy()))
-                .arg(&self.testpaths.file.join("rmake.rs"))
-                .env("TARGET", &self.config.target)
-                .env("PYTHON", &self.config.python)
-                .env("S", &src_root)
-                .env("RUST_BUILD_STAGE", &self.config.stage_id)
-                .env("RUSTC", cwd.join(&self.config.rustc_path))
-                .env("TMPDIR", &tmpdir)
-                .env("LD_LIB_PATH_ENVVAR", dylib_env_var())
-                .env("HOST_RPATH_DIR", cwd.join(&self.config.compile_lib_path))
-                .env("TARGET_RPATH_DIR", cwd.join(&self.config.run_lib_path))
-                .env("LLVM_COMPONENTS", &self.config.llvm_components)
-                // We for sure don't want these tests to run in parallel, so make
-                // sure they don't have access to these vars if we run via `make`
-                // at the top level
-                .env_remove("MAKEFLAGS")
-                .env_remove("MFLAGS")
-                .env_remove("CARGO_MAKEFLAGS"),
-        );
+        let mut cmd = Command::new(&self.config.rustc_path);
+        cmd.arg("-o")
+            .arg(&recipe_bin)
+            .arg(format!("-Ldependency={}", &support_lib_path.parent().unwrap().to_string_lossy()))
+            .arg(format!("-Ldependency={}", &support_lib_deps.to_string_lossy()))
+            .arg(format!("-Ldependency={}", &support_lib_deps_deps.to_string_lossy()))
+            .arg("--extern")
+            .arg(format!("run_make_support={}", &support_lib_path.to_string_lossy()))
+            .arg(&self.testpaths.file.join("rmake.rs"))
+            .env("TARGET", &self.config.target)
+            .env("PYTHON", &self.config.python)
+            .env("S", &src_root)
+            .env("RUST_BUILD_STAGE", &self.config.stage_id)
+            .env("RUSTC", cwd.join(&self.config.rustc_path))
+            .env("TMPDIR", &tmpdir)
+            .env("LD_LIB_PATH_ENVVAR", dylib_env_var())
+            .env("HOST_RPATH_DIR", cwd.join(&self.config.compile_lib_path))
+            .env("TARGET_RPATH_DIR", cwd.join(&self.config.run_lib_path))
+            .env("LLVM_COMPONENTS", &self.config.llvm_components)
+            // We for sure don't want these tests to run in parallel, so make
+            // sure they don't have access to these vars if we run via `make`
+            // at the top level
+            .env_remove("MAKEFLAGS")
+            .env_remove("MFLAGS")
+            .env_remove("CARGO_MAKEFLAGS");
+
+        if std::env::var_os("COMPILETEST_FORCE_STAGE0").is_some() {
+            let mut stage0_sysroot = build_root.clone();
+            stage0_sysroot.push("stage0-sysroot");
+            debug!(?stage0_sysroot);
+            debug!(exists = stage0_sysroot.exists());
+
+            cmd.arg("--sysroot").arg(&stage0_sysroot);
+        }
+
+        let res = self.cmd2procres(&mut cmd);
         if !res.status.success() {
             self.fatal_proc_rec("run-make test failed: could not build `rmake.rs` recipe", &res);
         }
@@ -3973,6 +3979,10 @@ impl<'test> TestCx<'test> {
         }
     }
 
+    fn force_color_svg(&self) -> bool {
+        self.props.compile_flags.iter().any(|s| s.contains("--color=always"))
+    }
+
     fn load_compare_outputs(
         &self,
         proc_res: &ProcRes,
@@ -3980,10 +3990,9 @@ impl<'test> TestCx<'test> {
         explicit_format: bool,
     ) -> usize {
         let stderr_bits = format!("{}bit.stderr", self.config.get_pointer_width());
-        let force_color_svg = self.props.compile_flags.iter().any(|s| s.contains("--color=always"));
         let (stderr_kind, stdout_kind) = match output_kind {
             TestOutput::Compile => (
-                if force_color_svg {
+                if self.force_color_svg() {
                     if self.config.target.contains("windows") {
                         // We single out Windows here because some of the CLI coloring is
                         // specifically changed for Windows.
@@ -4030,7 +4039,7 @@ impl<'test> TestCx<'test> {
             _ => {}
         };
 
-        let stderr = if force_color_svg {
+        let stderr = if self.force_color_svg() {
             anstyle_svg::Term::new().render_svg(&proc_res.stderr)
         } else if explicit_format {
             proc_res.stderr.clone()
@@ -4643,7 +4652,13 @@ impl<'test> TestCx<'test> {
     }
 
     fn compare_output(&self, kind: &str, actual: &str, expected: &str) -> usize {
-        if actual == expected {
+        let are_different = match (self.force_color_svg(), expected.find('\n'), actual.find('\n')) {
+            // FIXME: We ignore the first line of SVG files
+            // because the width parameter is non-deterministic.
+            (true, Some(nl_e), Some(nl_a)) => expected[nl_e..] != actual[nl_a..],
+            _ => expected != actual,
+        };
+        if !are_different {
             return 0;
         }
 
@@ -4852,4 +4867,10 @@ enum AllowUnused {
 enum LinkToAux {
     Yes,
     No,
+}
+
+enum AuxType {
+    Bin,
+    Lib,
+    Dylib,
 }

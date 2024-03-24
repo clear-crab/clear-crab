@@ -56,7 +56,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         let mut candidates = SelectionCandidateSet { vec: Vec::new(), ambiguous: false };
 
         // Negative trait predicates have different rules than positive trait predicates.
-        if obligation.polarity() == ty::ImplPolarity::Negative {
+        if obligation.polarity() == ty::PredicatePolarity::Negative {
             self.assemble_candidates_for_trait_alias(obligation, &mut candidates);
             self.assemble_candidates_from_impls(obligation, &mut candidates);
             self.assemble_candidates_from_caller_bounds(stack, &mut candidates)?;
@@ -118,6 +118,8 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                     self.assemble_future_candidates(obligation, &mut candidates);
                 } else if lang_items.iterator_trait() == Some(def_id) {
                     self.assemble_iterator_candidates(obligation, &mut candidates);
+                } else if lang_items.fused_iterator_trait() == Some(def_id) {
+                    self.assemble_fused_iterator_candidates(obligation, &mut candidates);
                 } else if lang_items.async_iterator_trait() == Some(def_id) {
                     self.assemble_async_iterator_candidates(obligation, &mut candidates);
                 } else if lang_items.async_fn_kind_helper() == Some(def_id) {
@@ -302,14 +304,31 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         candidates: &mut SelectionCandidateSet<'tcx>,
     ) {
         let self_ty = obligation.self_ty().skip_binder();
-        if let ty::Coroutine(did, ..) = self_ty.kind() {
-            // gen constructs get lowered to a special kind of coroutine that
-            // should directly `impl Iterator`.
-            if self.tcx().coroutine_is_gen(*did) {
-                debug!(?self_ty, ?obligation, "assemble_iterator_candidates",);
+        // gen constructs get lowered to a special kind of coroutine that
+        // should directly `impl Iterator`.
+        if let ty::Coroutine(did, ..) = self_ty.kind()
+            && self.tcx().coroutine_is_gen(*did)
+        {
+            debug!(?self_ty, ?obligation, "assemble_iterator_candidates",);
 
-                candidates.vec.push(IteratorCandidate);
-            }
+            candidates.vec.push(IteratorCandidate);
+        }
+    }
+
+    fn assemble_fused_iterator_candidates(
+        &mut self,
+        obligation: &PolyTraitObligation<'tcx>,
+        candidates: &mut SelectionCandidateSet<'tcx>,
+    ) {
+        let self_ty = obligation.self_ty().skip_binder();
+        // gen constructs get lowered to a special kind of coroutine that
+        // should directly `impl FusedIterator`.
+        if let ty::Coroutine(did, ..) = self_ty.kind()
+            && self.tcx().coroutine_is_gen(*did)
+        {
+            debug!(?self_ty, ?obligation, "assemble_fused_iterator_candidates",);
+
+            candidates.vec.push(BuiltinCandidate { has_nested: false });
         }
     }
 
@@ -652,7 +671,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 | ty::Str
                 | ty::Array(_, _)
                 | ty::Slice(_)
-                | ty::RawPtr(_)
+                | ty::RawPtr(_, _)
                 | ty::Ref(_, _, _)
                 | ty::Closure(..)
                 | ty::CoroutineClosure(..)
@@ -786,7 +805,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 | ty::Array(_, _)
                 | ty::Slice(_)
                 | ty::Adt(..)
-                | ty::RawPtr(_)
+                | ty::RawPtr(_, _)
                 | ty::Ref(..)
                 | ty::FnDef(..)
                 | ty::FnPtr(_)
@@ -1167,7 +1186,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             | ty::Infer(ty::IntVar(_))
             | ty::Infer(ty::FloatVar(_))
             | ty::Str
-            | ty::RawPtr(_)
+            | ty::RawPtr(_, _)
             | ty::Ref(..)
             | ty::FnDef(..)
             | ty::FnPtr(_)
@@ -1248,7 +1267,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             | ty::Str
             | ty::Array(_, _)
             | ty::Slice(_)
-            | ty::RawPtr(_)
+            | ty::RawPtr(_, _)
             | ty::Ref(_, _, _)
             | ty::FnDef(_, _)
             | ty::FnPtr(_)
@@ -1311,7 +1330,7 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             | ty::Str
             | ty::Array(..)
             | ty::Slice(_)
-            | ty::RawPtr(_)
+            | ty::RawPtr(_, _)
             | ty::Ref(..)
             | ty::FnDef(..)
             | ty::Placeholder(..)

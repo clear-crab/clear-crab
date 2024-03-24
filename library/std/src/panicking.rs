@@ -272,7 +272,7 @@ fn default_hook(info: &PanicInfo<'_>) {
                 drop(backtrace::print(err, crate::backtrace_rs::PrintFmt::Full))
             }
             Some(BacktraceStyle::Off) => {
-                if FIRST_PANIC.swap(false, Ordering::SeqCst) {
+                if FIRST_PANIC.swap(false, Ordering::Relaxed) {
                     let _ = writeln!(
                         err,
                         "note: run with `RUST_BACKTRACE=1` environment variable to display a \
@@ -746,7 +746,13 @@ fn rust_panic_with_hook(
             panic_count::MustAbort::PanicInHook => {
                 // Don't try to print the message in this case
                 // - perhaps that is causing the recursive panics.
-                rtprintpanic!("thread panicked while processing panic. aborting.\n");
+                let panicinfo = PanicInfo::internal_constructor(
+                    None,     // no message
+                    location, // but we want to show the location!
+                    can_unwind,
+                    force_no_backtrace,
+                );
+                rtprintpanic!("{panicinfo}\nthread panicked while processing panic. aborting.\n");
             }
             panic_count::MustAbort::AlwaysAbort => {
                 // Unfortunately, this does not print a backtrace, because creating

@@ -390,8 +390,6 @@ parse_invalid_dyn_keyword = invalid `dyn` keyword
 parse_invalid_expression_in_let_else = a `{$operator}` expression cannot be directly assigned in `let...else`
 parse_invalid_identifier_with_leading_number = identifiers cannot start with a number
 
-parse_invalid_interpolated_expression = invalid interpolated expression
-
 parse_invalid_literal_suffix_on_tuple_index = suffixes on a tuple index are invalid
     .label = invalid suffix `{$suffix}`
     .tuple_exception_line_1 = `{$suffix}` is *temporarily* accepted on tuple index fields as it was incorrectly accepted on stable for a few releases
@@ -570,7 +568,7 @@ parse_more_than_one_char = character literal may only contain one codepoint
     .remove_non = consider removing the non-printing characters
     .use_double_quotes = if you meant to write a {$is_byte ->
         [true] byte string
-        *[false] `str`
+        *[false] string
         } literal, use double quotes
 
 parse_multiple_skipped_lines = multiple lines skipped by escaped newline
@@ -835,6 +833,7 @@ parse_unknown_prefix = prefix `{$prefix}` is unknown
     .label = unknown prefix
     .note =  prefixed identifiers and literals are reserved since Rust 2021
     .suggestion_br = use `br` for a raw byte string
+    .suggestion_str = if you meant to write a string literal, use double quotes
     .suggestion_whitespace = consider inserting whitespace here
 
 parse_unknown_start_of_token = unknown start of token: {$escaped}

@@ -117,11 +117,7 @@ pub const fn panic_nounwind_fmt(fmt: fmt::Arguments<'_>, force_no_backtrace: boo
         panic_fmt(fmt);
     }
 
-    #[cfg_attr(not(bootstrap), allow(unused_unsafe))] // on bootstrap bump, remove unsafe block
-    // SAFETY: const panic does not care about unwinding
-    unsafe {
-        super::intrinsics::const_eval_select((fmt, force_no_backtrace), comptime, runtime);
-    }
+    super::intrinsics::const_eval_select((fmt, force_no_backtrace), comptime, runtime);
 }
 
 // Next we define a bunch of higher-level wrappers that all bottom out in the two core functions
@@ -136,11 +132,11 @@ pub const fn panic_nounwind_fmt(fmt: fmt::Arguments<'_>, force_no_backtrace: boo
 #[rustc_const_unstable(feature = "panic_internals", issue = "none")]
 #[lang = "panic"] // needed by codegen for panic on overflow and other `Assert` MIR terminators
 pub const fn panic(expr: &'static str) -> ! {
-    // Use Arguments::new_v1 instead of format_args!("{expr}") to potentially
+    // Use Arguments::new_const instead of format_args!("{expr}") to potentially
     // reduce size overhead. The format_args! macro uses str's Display trait to
     // write expr, which calls Formatter::pad, which must accommodate string
     // truncation and padding (even though none is used here). Using
-    // Arguments::new_v1 may allow the compiler to omit Formatter::pad from the
+    // Arguments::new_const may allow the compiler to omit Formatter::pad from the
     // output binary, saving up to a few kilobytes.
     panic_fmt(fmt::Arguments::new_const(&[expr]));
 }

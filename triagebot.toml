@@ -499,6 +499,10 @@ of `ObligationCtxt`.
 """
 cc = ["@lcnr", "@compiler-errors"]
 
+[mentions."compiler/rustc_hir_analysis/src/hir_ty_lowering"]
+message = "HIR ty lowering was modified"
+cc = ["@fmease"]
+
 [mentions."compiler/rustc_error_codes/src/lib.rs"]
 message = "Some changes occurred in diagnostic error codes"
 cc = ["@GuillaumeGomez"]
@@ -514,6 +518,9 @@ cc = ["@Nadrieril"]
 [mentions."compiler/rustc_pattern_analysis"]
 message = "Some changes occurred in exhaustiveness checking"
 cc = ["@Nadrieril"]
+
+[mentions."compiler/rustc_lint/src/context/diagnostics/check_cfg.rs"]
+cc = ["@Urgau"]
 
 [mentions."library/core/src/intrinsics/simd.rs"]
 message = """
@@ -548,6 +555,10 @@ cc = ["@GuillaumeGomez"]
 message = "Some changes occurred in GUI tests."
 cc = ["@GuillaumeGomez"]
 
+[mentions."tests/run-make/"]
+message = "Some changes occurred in run-make tests."
+cc = ["@jieyouxu"]
+
 [mentions."src/librustdoc/html/static/css/themes/ayu.css"]
 message = "A change occurred in the Ayu theme."
 cc = ["@Cldfire"]
@@ -571,9 +582,16 @@ cc = ["@ehuss"]
 [mentions."src/tools/clippy"]
 cc = ["@rust-lang/clippy"]
 
+[mentions."src/tools/compiletest"]
+cc = ["@jieyouxu"]
+
 [mentions."src/tools/miri"]
 message = "The Miri subtree was changed"
 cc = ["@rust-lang/miri"]
+
+[mentions."src/tools/run-make-support"]
+message = "The run-make-support library was changed"
+cc = ["@jieyouxu"]
 
 [mentions."src/tools/rust-analyzer"]
 message = """
@@ -605,7 +623,7 @@ cc = ["@davidtwco", "@compiler-errors", "@TaKO8Ki"]
 
 [mentions."compiler/stable_mir"]
 message = "This PR changes Stable MIR"
-cc = ["@oli-obk", "@celinval", "@spastorino", "@ouz-a"]
+cc = ["@oli-obk", "@celinval", "@ouz-a"]
 
 [mentions."compiler/rustc_target/src/spec"]
 message = """
@@ -688,6 +706,9 @@ cc = ["@rust-lang/project-exploit-mitigations", "@rcvalle"]
 [mentions."src/doc/unstable-book/src/language-features/no-sanitize.md"]
 cc = ["@rust-lang/project-exploit-mitigations", "@rcvalle"]
 
+[mentions."src/doc/unstable-book/src/compiler-flags/check-cfg.md"]
+cc = ["@Urgau"]
+
 [mentions."tests/codegen/sanitizer"]
 cc = ["@rust-lang/project-exploit-mitigations", "@rcvalle"]
 
@@ -705,6 +726,33 @@ cc = ["@rust-lang/project-exploit-mitigations", "@rcvalle"]
 
 [mentions."tests/ui/stack-protector"]
 cc = ["@rust-lang/project-exploit-mitigations", "@rcvalle"]
+
+[mentions."tests/ui/check-cfg"]
+cc = ["@Urgau"]
+
+[mentions."compiler/rustc_middle/src/mir/coverage.rs"]
+message = "Some changes occurred in coverage instrumentation."
+cc = ["@Zalathar"]
+
+[mentions."compiler/rustc_mir_build/src/build/coverageinfo.rs"]
+message = "Some changes occurred in coverage instrumentation."
+cc = ["@Zalathar"]
+
+[mentions."compiler/rustc_mir_transform/src/coverage"]
+message = "Some changes occurred in coverage instrumentation."
+cc = ["@Zalathar"]
+
+[mentions."compiler/rustc_codegen_llvm/src/coverageinfo"]
+message = "Some changes occurred in coverage instrumentation."
+cc = ["@Zalathar"]
+
+[mentions."compiler/rustc_codegen_ssa/src/mir/coverageinfo.rs"]
+message = "Some changes occurred in coverage instrumentation."
+cc = ["@Zalathar"]
+
+[mentions."tests/coverage"]
+message = "Some changes occurred in coverage tests."
+cc = ["@Zalathar"]
 
 [assign]
 warn_non_default_branch = true
@@ -785,6 +833,7 @@ parser = [
     "@estebank",
     "@nnethercote",
     "@petrochenkov",
+    "@spastorino",
 ]
 lexer = [
     "@nnethercote",
@@ -793,6 +842,7 @@ lexer = [
 ]
 arena = [
     "@nnethercote",
+    "@spastorino",
 ]
 mir = [
     "@davidtwco",

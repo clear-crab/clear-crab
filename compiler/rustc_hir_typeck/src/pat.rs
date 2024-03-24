@@ -18,8 +18,7 @@ use rustc_span::edit_distance::find_best_match_for_name;
 use rustc_span::hygiene::DesugaringKind;
 use rustc_span::source_map::Spanned;
 use rustc_span::symbol::{kw, sym, Ident};
-use rustc_span::Span;
-use rustc_span::{BytePos, DUMMY_SP};
+use rustc_span::{BytePos, Span, DUMMY_SP};
 use rustc_target::abi::FieldIdx;
 use rustc_trait_selection::traits::{ObligationCause, Pattern};
 use ty::VariantDef;
@@ -83,6 +82,9 @@ struct PatInfo<'tcx, 'a> {
     binding_mode: BindingMode,
     top_info: TopInfo<'tcx>,
     decl_origin: Option<DeclOrigin<'a>>,
+
+    /// The depth of current pattern
+    current_depth: u32,
 }
 
 impl<'tcx> FnCtxt<'_, 'tcx> {
@@ -152,7 +154,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         decl_origin: Option<DeclOrigin<'tcx>>,
     ) {
         let info = TopInfo { expected, origin_expr, span };
-        let pat_info = PatInfo { binding_mode: INITIAL_BM, top_info: info, decl_origin };
+        let pat_info =
+            PatInfo { binding_mode: INITIAL_BM, top_info: info, decl_origin, current_depth: 0 };
         self.check_pat(pat, expected, pat_info);
     }
 
@@ -163,7 +166,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     /// Conversely, inside this module, `check_pat_top` should never be used.
     #[instrument(level = "debug", skip(self, pat_info))]
     fn check_pat(&self, pat: &'tcx Pat<'tcx>, expected: Ty<'tcx>, pat_info: PatInfo<'tcx, '_>) {
-        let PatInfo { binding_mode: def_bm, top_info: ti, .. } = pat_info;
+        let PatInfo { binding_mode: def_bm, top_info: ti, current_depth, .. } = pat_info;
+
         let path_res = match &pat.kind {
             PatKind::Path(qpath) => Some(
                 self.resolve_ty_and_res_fully_qualified_call(qpath, pat.hir_id, pat.span, None),
@@ -172,8 +176,12 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         };
         let adjust_mode = self.calc_adjust_mode(pat, path_res.map(|(res, ..)| res));
         let (expected, def_bm) = self.calc_default_binding_mode(pat, expected, def_bm, adjust_mode);
-        let pat_info =
-            PatInfo { binding_mode: def_bm, top_info: ti, decl_origin: pat_info.decl_origin };
+        let pat_info = PatInfo {
+            binding_mode: def_bm,
+            top_info: ti,
+            decl_origin: pat_info.decl_origin,
+            current_depth: current_depth + 1,
+        };
 
         let ty = match pat.kind {
             PatKind::Wild | PatKind::Err(_) => expected,
@@ -203,6 +211,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 self.check_pat_tuple(pat.span, elements, ddpos, expected, pat_info)
             }
             PatKind::Box(inner) => self.check_pat_box(pat.span, inner, expected, pat_info),
+            PatKind::Deref(inner) => self.check_pat_deref(pat.span, inner, expected, pat_info),
             PatKind::Ref(inner, mutbl) => self.check_pat_ref(pat, inner, mutbl, expected, pat_info),
             PatKind::Slice(before, slice, after) => {
                 self.check_pat_slice(pat.span, before, slice, after, expected, pat_info)
@@ -286,6 +295,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             | PatKind::TupleStruct(..)
             | PatKind::Tuple(..)
             | PatKind::Box(_)
+            | PatKind::Deref(_)
             | PatKind::Range(..)
             | PatKind::Slice(..) => AdjustMode::Peel,
             // A never pattern behaves somewhat like a literal or unit variant.
@@ -734,7 +744,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
                 let ident_kind = match binding_parent {
                     hir::Node::Param(_) => "parameter",
-                    hir::Node::Local(_) => "variable",
+                    hir::Node::LetStmt(_) => "variable",
                     hir::Node::Arm(_) => "binding",
 
                     // Provide diagnostics only if the parent pattern is struct-like,
@@ -751,6 +761,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         | PatKind::Binding(..)
                         | PatKind::Path(..)
                         | PatKind::Box(..)
+                        | PatKind::Deref(_)
                         | PatKind::Ref(..)
                         | PatKind::Lit(..)
                         | PatKind::Range(..)
@@ -1046,14 +1057,14 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         expected: Ty<'tcx>,
         pat_info: PatInfo<'tcx, '_>,
     ) -> Ty<'tcx> {
-        let PatInfo { binding_mode: def_bm, top_info: ti, decl_origin } = pat_info;
+        let PatInfo { binding_mode: def_bm, top_info: ti, decl_origin, current_depth } = pat_info;
         let tcx = self.tcx;
         let on_error = |e| {
             for pat in subpats {
                 self.check_pat(
                     pat,
                     Ty::new_error(tcx, e),
-                    PatInfo { binding_mode: def_bm, top_info: ti, decl_origin },
+                    PatInfo { binding_mode: def_bm, top_info: ti, decl_origin, current_depth },
                 );
             }
         };
@@ -1120,7 +1131,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 self.check_pat(
                     subpat,
                     field_ty,
-                    PatInfo { binding_mode: def_bm, top_info: ti, decl_origin },
+                    PatInfo { binding_mode: def_bm, top_info: ti, decl_origin, current_depth },
                 );
 
                 self.tcx.check_stability(
@@ -1966,6 +1977,28 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         box_ty
     }
 
+    fn check_pat_deref(
+        &self,
+        span: Span,
+        inner: &'tcx Pat<'tcx>,
+        expected: Ty<'tcx>,
+        pat_info: PatInfo<'tcx, '_>,
+    ) -> Ty<'tcx> {
+        let tcx = self.tcx;
+        // FIXME(deref_patterns): use `DerefPure` for soundness
+        // FIXME(deref_patterns): use `DerefMut` when required
+        // <expected as Deref>::Target
+        let ty = Ty::new_projection(
+            tcx,
+            tcx.require_lang_item(hir::LangItem::DerefTarget, Some(span)),
+            [expected],
+        );
+        let ty = self.normalize(span, ty);
+        let ty = self.try_structurally_resolve_type(span, ty);
+        self.check_pat(inner, ty, pat_info);
+        expected
+    }
+
     // Precondition: Pat is Ref(inner)
     fn check_pat_ref(
         &self,
@@ -2024,8 +2057,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     /// Create a reference type with a fresh region variable.
     fn new_ref_ty(&self, span: Span, mutbl: hir::Mutability, ty: Ty<'tcx>) -> Ty<'tcx> {
         let region = self.next_region_var(infer::PatternRegion(span));
-        let mt = ty::TypeAndMut { ty, mutbl };
-        Ty::new_ref(self.tcx, region, mt)
+        Ty::new_ref(self.tcx, region, ty, mutbl)
     }
 
     fn try_resolve_slice_ty_to_array_ty(
@@ -2134,7 +2166,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             // The expected type must be an array or slice, but was neither, so error.
             _ => {
                 let guar = expected.error_reported().err().unwrap_or_else(|| {
-                    self.error_expected_array_or_slice(span, expected, pat_info.top_info)
+                    self.error_expected_array_or_slice(span, expected, pat_info)
                 });
                 let err = Ty::new_error(self.tcx, guar);
                 (err, Some(err), err)
@@ -2169,7 +2201,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         len: ty::Const<'tcx>,
         min_len: u64,
     ) -> (Option<Ty<'tcx>>, Ty<'tcx>) {
-        let len = match len.eval(self.tcx, self.param_env, None) {
+        let len = match len.eval(self.tcx, self.param_env, span) {
             Ok(val) => val
                 .try_to_scalar()
                 .and_then(|scalar| scalar.try_to_int().ok())
@@ -2273,8 +2305,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         &self,
         span: Span,
         expected_ty: Ty<'tcx>,
-        ti: TopInfo<'tcx>,
+        pat_info: PatInfo<'tcx, '_>,
     ) -> ErrorGuaranteed {
+        let PatInfo { top_info: ti, current_depth, .. } = pat_info;
+
         let mut err = struct_span_code_err!(
             self.dcx(),
             span,
@@ -2292,9 +2326,10 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             && let Some(_) = ti.origin_expr
             && let Ok(snippet) = self.tcx.sess.source_map().span_to_snippet(span)
         {
-            let ty = self.resolve_vars_if_possible(ti.expected);
-            let is_slice_or_array_or_vector = self.is_slice_or_array_or_vector(ty);
-            match is_slice_or_array_or_vector.1.kind() {
+            let resolved_ty = self.resolve_vars_if_possible(ti.expected);
+            let (is_slice_or_array_or_vector, resolved_ty) =
+                self.is_slice_or_array_or_vector(resolved_ty);
+            match resolved_ty.kind() {
                 ty::Adt(adt_def, _)
                     if self.tcx.is_diagnostic_item(sym::Option, adt_def.did())
                         || self.tcx.is_diagnostic_item(sym::Result, adt_def.did()) =>
@@ -2309,7 +2344,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 }
                 _ => (),
             }
-            if is_slice_or_array_or_vector.0 {
+
+            let is_top_level = current_depth <= 1;
+            if is_slice_or_array_or_vector && is_top_level {
                 err.span_suggestion(
                     span,
                     "consider slicing here",

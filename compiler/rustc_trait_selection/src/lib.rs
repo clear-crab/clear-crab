@@ -17,7 +17,7 @@
 #![allow(rustc::diagnostic_outside_of_impl)]
 #![allow(rustc::untranslatable_diagnostic)]
 #![feature(assert_matches)]
-#![feature(associated_type_bounds)]
+#![cfg_attr(bootstrap, feature(associated_type_bounds))]
 #![feature(associated_type_defaults)]
 #![feature(box_patterns)]
 #![feature(control_flow_enum)]
@@ -26,7 +26,6 @@
 #![feature(option_take_if)]
 #![feature(never_type)]
 #![feature(type_alias_impl_trait)]
-#![cfg_attr(bootstrap, feature(min_specialization))]
 #![recursion_limit = "512"] // For rustdoc
 
 #[macro_use]

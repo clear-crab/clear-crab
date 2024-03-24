@@ -291,12 +291,16 @@ fn default_body_is_unstable(
         reason: reason_str,
     });
 
+    let inject_span = item_did
+        .as_local()
+        .and_then(|id| tcx.crate_level_attribute_injection_span(tcx.local_def_id_to_hir_id(id)));
     rustc_session::parse::add_feature_diagnostics_for_issue(
         &mut err,
         &tcx.sess,
         feature,
         rustc_feature::GateIssue::Library(issue),
         false,
+        inject_span,
     );
 
     err.emit();
@@ -427,7 +431,7 @@ fn fn_sig_suggestion<'tcx>(
 
     let asyncness = if tcx.asyncness(assoc.def_id).is_async() {
         output = if let ty::Alias(_, alias_ty) = *output.kind() {
-            tcx.explicit_item_bounds(alias_ty.def_id)
+            tcx.explicit_item_super_predicates(alias_ty.def_id)
                 .iter_instantiated_copied(tcx, alias_ty.args)
                 .find_map(|(bound, _)| bound.as_projection_clause()?.no_bound_vars()?.term.ty())
                 .unwrap_or_else(|| {

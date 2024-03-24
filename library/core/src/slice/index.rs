@@ -1,10 +1,10 @@
 //! Indexing implementations for `[T]`.
 
-use crate::intrinsics::assert_unsafe_precondition;
 use crate::intrinsics::const_eval_select;
 use crate::intrinsics::unchecked_sub;
 use crate::ops;
 use crate::ptr;
+use crate::ub_checks::assert_unsafe_precondition;
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<T, I> ops::Index<I> for [T]
@@ -35,15 +35,7 @@ where
 #[track_caller]
 #[rustc_const_unstable(feature = "const_slice_index", issue = "none")]
 const fn slice_start_index_len_fail(index: usize, len: usize) -> ! {
-    #[cfg_attr(not(bootstrap), allow(unused_unsafe))] // on bootstrap bump, remove unsafe block
-    // SAFETY: we are just panicking here
-    unsafe {
-        const_eval_select(
-            (index, len),
-            slice_start_index_len_fail_ct,
-            slice_start_index_len_fail_rt,
-        )
-    }
+    const_eval_select((index, len), slice_start_index_len_fail_ct, slice_start_index_len_fail_rt)
 }
 
 // FIXME const-hack
@@ -64,11 +56,7 @@ const fn slice_start_index_len_fail_ct(_: usize, _: usize) -> ! {
 #[track_caller]
 #[rustc_const_unstable(feature = "const_slice_index", issue = "none")]
 const fn slice_end_index_len_fail(index: usize, len: usize) -> ! {
-    #[cfg_attr(not(bootstrap), allow(unused_unsafe))] // on bootstrap bump, remove unsafe block
-    // SAFETY: we are just panicking here
-    unsafe {
-        const_eval_select((index, len), slice_end_index_len_fail_ct, slice_end_index_len_fail_rt)
-    }
+    const_eval_select((index, len), slice_end_index_len_fail_ct, slice_end_index_len_fail_rt)
 }
 
 // FIXME const-hack
@@ -89,11 +77,7 @@ const fn slice_end_index_len_fail_ct(_: usize, _: usize) -> ! {
 #[track_caller]
 #[rustc_const_unstable(feature = "const_slice_index", issue = "none")]
 const fn slice_index_order_fail(index: usize, end: usize) -> ! {
-    #[cfg_attr(not(bootstrap), allow(unused_unsafe))] // on bootstrap bump, remove unsafe block
-    // SAFETY: we are just panicking here
-    unsafe {
-        const_eval_select((index, end), slice_index_order_fail_ct, slice_index_order_fail_rt)
-    }
+    const_eval_select((index, end), slice_index_order_fail_ct, slice_index_order_fail_rt)
 }
 
 // FIXME const-hack

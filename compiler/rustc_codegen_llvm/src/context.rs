@@ -27,9 +27,7 @@ use rustc_session::config::{CrateType, DebugInfo, PAuthKey, PacRet};
 use rustc_session::Session;
 use rustc_span::source_map::Spanned;
 use rustc_span::Span;
-use rustc_target::abi::{
-    call::FnAbi, HasDataLayout, PointeeInfo, Size, TargetDataLayout, VariantIdx,
-};
+use rustc_target::abi::{call::FnAbi, HasDataLayout, TargetDataLayout, VariantIdx};
 use rustc_target::spec::{HasTargetSpec, RelocModel, Target, TlsModel};
 use smallvec::SmallVec;
 
@@ -83,7 +81,6 @@ pub struct CodegenCx<'ll, 'tcx> {
     /// Mapping of scalar types to llvm types.
     pub scalar_lltypes: RefCell<FxHashMap<Ty<'tcx>, &'ll Type>>,
 
-    pub pointee_infos: RefCell<FxHashMap<(Ty<'tcx>, Size), Option<PointeeInfo>>>,
     pub isize_ty: &'ll Type,
 
     pub coverage_cx: Option<coverageinfo::CrateCoverageContext<'ll, 'tcx>>,
@@ -126,17 +123,6 @@ pub unsafe fn create_module<'ll>(
 
     let mut target_data_layout = sess.target.data_layout.to_string();
     let llvm_version = llvm_util::get_version();
-    if llvm_version < (17, 0, 0) {
-        if sess.target.arch.starts_with("powerpc") {
-            // LLVM 17 specifies function pointer alignment for ppc:
-            // https://reviews.llvm.org/D147016
-            target_data_layout = target_data_layout
-                .replace("-Fn32", "")
-                .replace("-Fi32", "")
-                .replace("-Fn64", "")
-                .replace("-Fi64", "");
-        }
-    }
     if llvm_version < (18, 0, 0) {
         if sess.target.arch == "x86" || sess.target.arch == "x86_64" {
             // LLVM 18 adjusts i128 to be 128-bit aligned on x86 variants.
@@ -326,6 +312,7 @@ pub unsafe fn create_module<'ll>(
     //
     // On the wasm targets it will get hooked up to the "producer" sections
     // `processed-by` information.
+    #[allow(clippy::option_env_unwrap)]
     let rustc_producer =
         format!("rustc version {}", option_env!("CFG_VERSION").expect("CFG_VERSION"));
     let name_metadata = llvm::LLVMMDStringInContext(
@@ -460,7 +447,6 @@ impl<'ll, 'tcx> CodegenCx<'ll, 'tcx> {
             compiler_used_statics: RefCell::new(Vec::new()),
             type_lowering: Default::default(),
             scalar_lltypes: Default::default(),
-            pointee_infos: Default::default(),
             isize_ty,
             coverage_cx,
             dbg_cx,

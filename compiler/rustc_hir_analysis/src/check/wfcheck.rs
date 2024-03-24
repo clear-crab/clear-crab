@@ -196,7 +196,7 @@ fn check_well_formed(tcx: TyCtxt<'_>, def_id: hir::OwnerId) -> Result<(), ErrorG
         hir::OwnerNode::TraitItem(item) => check_trait_item(tcx, item),
         hir::OwnerNode::ImplItem(item) => check_impl_item(tcx, item),
         hir::OwnerNode::ForeignItem(item) => check_foreign_item(tcx, item),
-        hir::OwnerNode::AssocOpaqueTy(..) => unreachable!(),
+        hir::OwnerNode::Synthetic => unreachable!(),
     };
 
     if let Some(generics) = node.generics() {
@@ -272,7 +272,7 @@ fn check_item<'tcx>(tcx: TyCtxt<'tcx>, item: &'tcx hir::Item<'tcx>) -> Result<()
                 }
                 Some(ty::ImplPolarity::Negative) => {
                     let ast::ImplPolarity::Negative(span) = impl_.polarity else {
-                        bug!("impl_polarity query disagrees with impl's polarity in AST");
+                        bug!("impl_polarity query disagrees with impl's polarity in HIR");
                     };
                     // FIXME(#27579): what amount of WF checking do we need for neg impls?
                     if let hir::Defaultness::Default { .. } = impl_.defaultness {
@@ -954,7 +954,7 @@ fn check_param_wf(tcx: TyCtxt<'_>, param: &hir::GenericParam<'_>) -> Result<(), 
                         hir_ty.span,
                         "using function pointers as const generic parameters is forbidden",
                     ),
-                    ty::RawPtr(_) => tcx.dcx().struct_span_err(
+                    ty::RawPtr(_, _) => tcx.dcx().struct_span_err(
                         hir_ty.span,
                         "using raw pointers as const generic parameters is forbidden",
                     ),
@@ -999,9 +999,14 @@ fn check_param_wf(tcx: TyCtxt<'_>, param: &hir::GenericParam<'_>) -> Result<(), 
                     // Implments `ConstParamTy`, suggest adding the feature to enable.
                     Ok(..) => true,
                 };
-                if may_suggest_feature && tcx.sess.is_nightly_build() {
-                    diag.help(
-                        "add `#![feature(adt_const_params)]` to the crate attributes to enable more complex and user defined types",
+                if may_suggest_feature {
+                    tcx.disabled_nightly_features(
+                        &mut diag,
+                        Some(param.hir_id),
+                        [(
+                            " more complex and user defined types".to_string(),
+                            sym::adt_const_params,
+                        )],
                     );
                 }
 
@@ -1317,7 +1322,7 @@ fn check_impl<'tcx>(
                     trait_ref,
                 );
                 let trait_pred =
-                    ty::TraitPredicate { trait_ref, polarity: ty::ImplPolarity::Positive };
+                    ty::TraitPredicate { trait_ref, polarity: ty::PredicatePolarity::Positive };
                 let mut obligations = traits::wf::trait_obligations(
                     wfcx.infcx,
                     wfcx.param_env,
@@ -1861,7 +1866,7 @@ fn check_variances_for_type_defn<'tcx>(
             .iter()
             .filter_map(|predicate| match predicate {
                 hir::WherePredicate::BoundPredicate(predicate) => {
-                    match icx.to_ty(predicate.bounded_ty).kind() {
+                    match icx.lower_ty(predicate.bounded_ty).kind() {
                         ty::Param(data) => Some(Parameter(data.index)),
                         _ => None,
                     }

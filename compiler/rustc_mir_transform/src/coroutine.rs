@@ -570,11 +570,7 @@ impl<'tcx> MutVisitor<'tcx> for TransformVisitor<'tcx> {
 fn make_coroutine_state_argument_indirect<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
     let coroutine_ty = body.local_decls.raw[1].ty;
 
-    let ref_coroutine_ty = Ty::new_ref(
-        tcx,
-        tcx.lifetimes.re_erased,
-        ty::TypeAndMut { ty: coroutine_ty, mutbl: Mutability::Mut },
-    );
+    let ref_coroutine_ty = Ty::new_mut_ref(tcx, tcx.lifetimes.re_erased, coroutine_ty);
 
     // Replace the by value coroutine argument
     body.local_decls.raw[1].ty = ref_coroutine_ty;
@@ -1265,10 +1261,8 @@ fn create_coroutine_drop_shim<'tcx>(
     make_coroutine_state_argument_indirect(tcx, &mut body);
 
     // Change the coroutine argument from &mut to *mut
-    body.local_decls[SELF_ARG] = LocalDecl::with_source_info(
-        Ty::new_ptr(tcx, ty::TypeAndMut { ty: coroutine_ty, mutbl: hir::Mutability::Mut }),
-        source_info,
-    );
+    body.local_decls[SELF_ARG] =
+        LocalDecl::with_source_info(Ty::new_mut_ptr(tcx, coroutine_ty), source_info);
 
     // Make sure we remove dead blocks to remove
     // unrelated code from the resume part of the function
@@ -1964,15 +1958,21 @@ fn check_must_not_suspend_ty<'tcx>(
     debug!("Checking must_not_suspend for {}", ty);
 
     match *ty.kind() {
-        ty::Adt(..) if ty.is_box() => {
-            let boxed_ty = ty.boxed_ty();
-            let descr_pre = &format!("{}boxed ", data.descr_pre);
+        ty::Adt(_, args) if ty.is_box() => {
+            let boxed_ty = args.type_at(0);
+            let allocator_ty = args.type_at(1);
             check_must_not_suspend_ty(
                 tcx,
                 boxed_ty,
                 hir_id,
                 param_env,
-                SuspendCheckData { descr_pre, ..data },
+                SuspendCheckData { descr_pre: &format!("{}boxed ", data.descr_pre), ..data },
+            ) || check_must_not_suspend_ty(
+                tcx,
+                allocator_ty,
+                hir_id,
+                param_env,
+                SuspendCheckData { descr_pre: &format!("{}allocator ", data.descr_pre), ..data },
             )
         }
         ty::Adt(def, _) => check_must_not_suspend_def(tcx, def.did(), hir_id, data),

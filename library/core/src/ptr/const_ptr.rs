@@ -48,12 +48,8 @@ impl<T: ?Sized> *const T {
             }
         }
 
-        // on bootstrap bump, remove unsafe block
-        #[cfg_attr(not(bootstrap), allow(unused_unsafe))]
-        // SAFETY: The two versions are equivalent at runtime.
-        unsafe {
-            const_eval_select((self as *const u8,), const_impl, runtime_impl)
-        }
+        #[allow(unused_unsafe)]
+        const_eval_select((self as *const u8,), const_impl, runtime_impl)
     }
 
     /// Casts to a pointer of another type.
@@ -818,16 +814,11 @@ impl<T: ?Sized> *const T {
                 true
             }
 
-            #[cfg_attr(not(bootstrap), allow(unused_unsafe))]
-            // on bootstrap bump, remove unsafe block
-            // SAFETY: This function is only used to provide the same check that the const eval
-            // interpreter does at runtime.
-            unsafe {
-                intrinsics::const_eval_select((this, origin), comptime, runtime)
-            }
+            #[allow(unused_unsafe)]
+            intrinsics::const_eval_select((this, origin), comptime, runtime)
         }
 
-        assert_unsafe_precondition!(
+        ub_checks::assert_unsafe_precondition!(
             check_language_ub,
             "ptr::sub_ptr requires `self >= origin`",
             (
@@ -1648,11 +1639,7 @@ impl<T: ?Sized> *const T {
         // The cast to `()` is used to
         //   1. deal with fat pointers; and
         //   2. ensure that `align_offset` (in `const_impl`) doesn't actually try to compute an offset.
-        #[cfg_attr(not(bootstrap), allow(unused_unsafe))] // on bootstrap bump, remove unsafe block
-        // SAFETY: The two versions are equivalent at runtime.
-        unsafe {
-            const_eval_select((self.cast::<()>(), align), const_impl, runtime_impl)
-        }
+        const_eval_select((self.cast::<()>(), align), const_impl, runtime_impl)
     }
 }
 
@@ -1795,6 +1782,46 @@ impl<T> *const [T] {
             // SAFETY: the caller must uphold the safety contract for `as_uninit_slice`.
             Some(unsafe { slice::from_raw_parts(self as *const MaybeUninit<T>, self.len()) })
         }
+    }
+}
+
+impl<T, const N: usize> *const [T; N] {
+    /// Returns a raw pointer to the array's buffer.
+    ///
+    /// This is equivalent to casting `self` to `*const T`, but more type-safe.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// #![feature(array_ptr_get)]
+    /// use std::ptr;
+    ///
+    /// let arr: *const [i8; 3] = ptr::null();
+    /// assert_eq!(arr.as_ptr(), ptr::null());
+    /// ```
+    #[inline]
+    #[unstable(feature = "array_ptr_get", issue = "119834")]
+    #[rustc_const_unstable(feature = "array_ptr_get", issue = "119834")]
+    pub const fn as_ptr(self) -> *const T {
+        self as *const T
+    }
+
+    /// Returns a raw pointer to a slice containing the entire array.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #![feature(array_ptr_get, slice_ptr_len)]
+    ///
+    /// let arr: *const [i32; 3] = &[1, 2, 4] as *const [i32; 3];
+    /// let slice: *const [i32] = arr.as_slice();
+    /// assert_eq!(slice.len(), 3);
+    /// ```
+    #[inline]
+    #[unstable(feature = "array_ptr_get", issue = "119834")]
+    #[rustc_const_unstable(feature = "array_ptr_get", issue = "119834")]
+    pub const fn as_slice(self) -> *const [T] {
+        self
     }
 }
 

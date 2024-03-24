@@ -55,7 +55,7 @@ pub(super) fn index_hir<'hir>(
         OwnerNode::TraitItem(item) => collector.visit_trait_item(item),
         OwnerNode::ImplItem(item) => collector.visit_impl_item(item),
         OwnerNode::ForeignItem(item) => collector.visit_foreign_item(item),
-        OwnerNode::AssocOpaqueTy(..) => unreachable!(),
+        OwnerNode::Synthetic => unreachable!(),
     };
 
     for (local_id, node) in collector.nodes.iter_enumerated() {
@@ -302,8 +302,8 @@ impl<'a, 'hir> Visitor<'hir> for NodeCollector<'a, 'hir> {
         });
     }
 
-    fn visit_local(&mut self, l: &'hir Local<'hir>) {
-        self.insert(l.span, l.hir_id, Node::Local(l));
+    fn visit_local(&mut self, l: &'hir LetStmt<'hir>) {
+        self.insert(l.span, l.hir_id, Node::LetStmt(l));
         self.with_parent(l.hir_id, |this| {
             intravisit::walk_local(this, l);
         })

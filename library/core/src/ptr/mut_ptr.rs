@@ -48,11 +48,7 @@ impl<T: ?Sized> *mut T {
             }
         }
 
-        #[cfg_attr(not(bootstrap), allow(unused_unsafe))] // on bootstrap bump, remove unsafe block
-        // SAFETY: The two versions are equivalent at runtime.
-        unsafe {
-            const_eval_select((self as *mut u8,), const_impl, runtime_impl)
-        }
+        const_eval_select((self as *mut u8,), const_impl, runtime_impl)
     }
 
     /// Casts to a pointer of another type.
@@ -1906,11 +1902,7 @@ impl<T: ?Sized> *mut T {
         // The cast to `()` is used to
         //   1. deal with fat pointers; and
         //   2. ensure that `align_offset` (in `const_impl`) doesn't actually try to compute an offset.
-        #[cfg_attr(not(bootstrap), allow(unused_unsafe))] // on bootstrap bump, remove unsafe block
-        // SAFETY: The two versions are equivalent at runtime.
-        unsafe {
-            const_eval_select((self.cast::<()>(), align), const_impl, runtime_impl)
-        }
+        const_eval_select((self.cast::<()>(), align), const_impl, runtime_impl)
     }
 }
 
@@ -2206,6 +2198,49 @@ impl<T> *mut [T] {
             // SAFETY: the caller must uphold the safety contract for `as_uninit_slice_mut`.
             Some(unsafe { slice::from_raw_parts_mut(self as *mut MaybeUninit<T>, self.len()) })
         }
+    }
+}
+
+impl<T, const N: usize> *mut [T; N] {
+    /// Returns a raw pointer to the array's buffer.
+    ///
+    /// This is equivalent to casting `self` to `*mut T`, but more type-safe.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// #![feature(array_ptr_get)]
+    /// use std::ptr;
+    ///
+    /// let arr: *mut [i8; 3] = ptr::null_mut();
+    /// assert_eq!(arr.as_mut_ptr(), ptr::null_mut());
+    /// ```
+    #[inline]
+    #[unstable(feature = "array_ptr_get", issue = "119834")]
+    #[rustc_const_unstable(feature = "array_ptr_get", issue = "119834")]
+    pub const fn as_mut_ptr(self) -> *mut T {
+        self as *mut T
+    }
+
+    /// Returns a raw pointer to a mutable slice containing the entire array.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #![feature(array_ptr_get)]
+    ///
+    /// let mut arr = [1, 2, 5];
+    /// let ptr: *mut [i32; 3] = &mut arr;
+    /// unsafe {
+    ///     (&mut *ptr.as_mut_slice())[..2].copy_from_slice(&[3, 4]);
+    /// }
+    /// assert_eq!(arr, [3, 4, 5]);
+    /// ```
+    #[inline]
+    #[unstable(feature = "array_ptr_get", issue = "119834")]
+    #[rustc_const_unstable(feature = "array_ptr_get", issue = "119834")]
+    pub const fn as_mut_slice(self) -> *mut [T] {
+        self
     }
 }
 

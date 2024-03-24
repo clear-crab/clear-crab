@@ -1,10 +1,11 @@
-use crate::mir::pretty::{function_body, pretty_statement, pretty_terminator};
+use crate::mir::pretty::function_body;
 use crate::ty::{
     AdtDef, ClosureDef, Const, CoroutineDef, GenericArgs, Movability, Region, RigidTy, Ty, TyKind,
     VariantIdx,
 };
 use crate::{Error, Opaque, Span, Symbol};
 use std::io;
+
 /// The SMIR representation of a single function.
 #[derive(Clone, Debug)]
 pub struct Body {
@@ -90,28 +91,9 @@ impl Body {
         self.locals.iter().enumerate()
     }
 
-    pub fn dump<W: io::Write>(&self, w: &mut W) -> io::Result<()> {
-        writeln!(w, "{}", function_body(self))?;
-        self.blocks
-            .iter()
-            .enumerate()
-            .map(|(index, block)| -> io::Result<()> {
-                writeln!(w, "    bb{}: {{", index)?;
-                let _ = block
-                    .statements
-                    .iter()
-                    .map(|statement| -> io::Result<()> {
-                        writeln!(w, "{}", pretty_statement(&statement.kind))?;
-                        Ok(())
-                    })
-                    .collect::<Vec<_>>();
-                pretty_terminator(&block.terminator.kind, w)?;
-                writeln!(w, "").unwrap();
-                writeln!(w, "    }}").unwrap();
-                Ok(())
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(())
+    /// Emit the body using the provided name for the signature.
+    pub fn dump<W: io::Write>(&self, w: &mut W, fn_name: &str) -> io::Result<()> {
+        function_body(w, self, fn_name)
     }
 
     pub fn spread_arg(&self) -> Option<Local> {
@@ -639,7 +621,7 @@ impl Rvalue {
             Rvalue::NullaryOp(NullOp::SizeOf | NullOp::AlignOf | NullOp::OffsetOf(..), _) => {
                 Ok(Ty::usize_ty())
             }
-            Rvalue::NullaryOp(NullOp::UbCheck(_), _) => Ok(Ty::bool_ty()),
+            Rvalue::NullaryOp(NullOp::UbChecks, _) => Ok(Ty::bool_ty()),
             Rvalue::Aggregate(ak, ops) => match *ak {
                 AggregateKind::Array(ty) => Ty::try_new_array(ty, ops.len() as u64),
                 AggregateKind::Tuple => Ok(Ty::new_tuple(
@@ -674,7 +656,7 @@ pub enum Operand {
     Constant(Constant),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct Place {
     pub local: Local,
     /// projection out of a place (access a field, deref a pointer, etc)
@@ -1007,13 +989,7 @@ pub enum NullOp {
     /// Returns the offset of a field.
     OffsetOf(Vec<(VariantIdx, FieldIdx)>),
     /// cfg!(debug_assertions), but at codegen time
-    UbCheck(UbKind),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum UbKind {
-    LanguageUb,
-    LibraryUb,
+    UbChecks,
 }
 
 impl Operand {

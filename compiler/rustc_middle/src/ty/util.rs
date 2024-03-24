@@ -682,6 +682,9 @@ impl<'tcx> TyCtxt<'tcx> {
 
     /// Return the set of types that should be taken into account when checking
     /// trait bounds on a coroutine's internal state.
+    // FIXME(compiler-errors): We should remove this when the old solver goes away;
+    // and all other usages of this function should go through `bound_coroutine_hidden_types`
+    // instead.
     pub fn coroutine_hidden_types(
         self,
         def_id: DefId,
@@ -692,6 +695,33 @@ impl<'tcx> TyCtxt<'tcx> {
             .map_or_else(|| [].iter(), |l| l.field_tys.iter())
             .filter(|decl| !decl.ignore_for_traits)
             .map(|decl| ty::EarlyBinder::bind(decl.ty))
+    }
+
+    /// Return the set of types that should be taken into account when checking
+    /// trait bounds on a coroutine's internal state. This properly replaces
+    /// `ReErased` with new existential bound lifetimes.
+    pub fn bound_coroutine_hidden_types(
+        self,
+        def_id: DefId,
+    ) -> impl Iterator<Item = ty::EarlyBinder<ty::Binder<'tcx, Ty<'tcx>>>> {
+        let coroutine_layout = self.mir_coroutine_witnesses(def_id);
+        coroutine_layout
+            .as_ref()
+            .map_or_else(|| [].iter(), |l| l.field_tys.iter())
+            .filter(|decl| !decl.ignore_for_traits)
+            .map(move |decl| {
+                let mut vars = vec![];
+                let ty = self.fold_regions(decl.ty, |re, debruijn| {
+                    assert_eq!(re, self.lifetimes.re_erased);
+                    let var = ty::BoundVar::from_usize(vars.len());
+                    vars.push(ty::BoundVariableKind::Region(ty::BrAnon));
+                    ty::Region::new_bound(self, debruijn, ty::BoundRegion { var, kind: ty::BrAnon })
+                });
+                ty::EarlyBinder::bind(ty::Binder::bind_with_vars(
+                    ty,
+                    self.mk_bound_variable_kinds(&vars),
+                ))
+            })
     }
 
     /// Expands the given impl trait type, stopping if the type is recursive.
@@ -998,8 +1028,10 @@ impl<'tcx> OpaqueTypeExpander<'tcx> {
                 Some(expanded_ty) => *expanded_ty,
                 None => {
                     if matches!(self.inspect_coroutine_fields, InspectCoroutineFields::Yes) {
-                        for bty in self.tcx.coroutine_hidden_types(def_id) {
-                            let hidden_ty = bty.instantiate(self.tcx, args);
+                        for bty in self.tcx.bound_coroutine_hidden_types(def_id) {
+                            let hidden_ty = self.tcx.instantiate_bound_regions_with_erased(
+                                bty.instantiate(self.tcx, args),
+                            );
                             self.fold_ty(hidden_ty);
                         }
                     }
@@ -1205,7 +1237,7 @@ impl<'tcx> Ty<'tcx> {
             | ty::Str
             | ty::Never
             | ty::Ref(..)
-            | ty::RawPtr(_)
+            | ty::RawPtr(_, _)
             | ty::FnDef(..)
             | ty::Error(_)
             | ty::FnPtr(_) => true,
@@ -1245,7 +1277,7 @@ impl<'tcx> Ty<'tcx> {
             | ty::Str
             | ty::Never
             | ty::Ref(..)
-            | ty::RawPtr(_)
+            | ty::RawPtr(_, _)
             | ty::FnDef(..)
             | ty::Error(_)
             | ty::FnPtr(_) => true,
@@ -1369,7 +1401,7 @@ impl<'tcx> Ty<'tcx> {
             ty::Ref(..) | ty::Array(..) | ty::Slice(_) | ty::Tuple(..) => true,
 
             // Raw pointers use bitwise comparison.
-            ty::RawPtr(_) | ty::FnPtr(_) => true,
+            ty::RawPtr(_, _) | ty::FnPtr(_) => true,
 
             // Floating point numbers are not `Eq`.
             ty::Float(_) => false,
@@ -1462,7 +1494,7 @@ impl<'tcx> ExplicitSelf<'tcx> {
         match *self_arg_ty.kind() {
             _ if is_self_ty(self_arg_ty) => ByValue,
             ty::Ref(region, ty, mutbl) if is_self_ty(ty) => ByReference(region, mutbl),
-            ty::RawPtr(ty::TypeAndMut { ty, mutbl }) if is_self_ty(ty) => ByRawPointer(mutbl),
+            ty::RawPtr(ty, mutbl) if is_self_ty(ty) => ByRawPointer(mutbl),
             ty::Adt(def, _) if def.is_box() && is_self_ty(self_arg_ty.boxed_ty()) => ByBox,
             _ => Other,
         }
@@ -1487,7 +1519,7 @@ pub fn needs_drop_components<'tcx>(
         | ty::FnDef(..)
         | ty::FnPtr(_)
         | ty::Char
-        | ty::RawPtr(_)
+        | ty::RawPtr(_, _)
         | ty::Ref(..)
         | ty::Str => Ok(SmallVec::new()),
 
@@ -1542,7 +1574,7 @@ pub fn is_trivially_const_drop(ty: Ty<'_>) -> bool {
         | ty::Infer(ty::IntVar(_))
         | ty::Infer(ty::FloatVar(_))
         | ty::Str
-        | ty::RawPtr(_)
+        | ty::RawPtr(_, _)
         | ty::Ref(..)
         | ty::FnDef(..)
         | ty::FnPtr(_)
